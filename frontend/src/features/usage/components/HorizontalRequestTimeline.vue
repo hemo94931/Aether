@@ -310,6 +310,7 @@ import Skeleton from '@/components/ui/skeleton.vue'
 import Separator from '@/components/ui/separator.vue'
 import { ChevronLeft, ChevronRight, ExternalLink } from 'lucide-vue-next'
 import { requestTraceApi, type RequestTrace, type CandidateRecord } from '@/api/requestTrace'
+import { log } from '@/utils/logger'
 
 // 节点组类型
 interface NodeGroup {
@@ -552,11 +553,6 @@ const isCapabilityUsed = (cap: string): boolean => {
   return activeCapabilities.value.includes(cap)
 }
 
-// 检查某个能力是否被 Key 支持（保留以备后用）
-const _isCapabilitySupported = (cap: string): boolean => {
-  return keyCapabilities.value.includes(cap)
-}
-
 // 格式化能力标签显示
 const formatCapabilityLabel = (cap: string): string => {
   const labels: Record<string, string> = {
@@ -624,7 +620,7 @@ const loadTrace = async () => {
     trace.value = await requestTraceApi.getRequestTrace(props.requestId)
   } catch (err: any) {
     error.value = err.response?.data?.detail || err.message || '加载失败'
-    console.error('加载请求追踪失败:', err)
+    log.error('加载请求追踪失败:', err)
   } finally {
     loading.value = false
   }
@@ -713,19 +709,6 @@ const getStatusLabel = (status: string) => {
     skipped: '跳过'
   }
   return labels[status] || status
-}
-
-// 获取状态徽章样式（保留以备后用）
-const _getStatusBadgeVariant = (status: string): string => {
-  const variants: Record<string, string> = {
-    available: 'outline',
-    pending: 'secondary',
-    streaming: 'secondary',
-    success: 'success',
-    failed: 'destructive',
-    skipped: 'outline'
-  }
-  return variants[status] || 'default'
 }
 
 // 获取状态颜色类

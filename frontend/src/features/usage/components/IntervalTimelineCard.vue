@@ -60,6 +60,7 @@ import ScatterChart from '@/components/charts/ScatterChart.vue'
 import { cacheAnalysisApi, type IntervalTimelineResponse } from '@/api/cache'
 import { meApi } from '@/api/me'
 import type { ChartData, ChartOptions } from 'chart.js'
+import { log } from '@/utils/logger'
 
 const props = withDefaults(defineProps<{
   title: string
@@ -294,7 +295,7 @@ async function loadData() {
       })
     }
   } catch (error) {
-    console.error('加载请求间隔时间线失败:', error)
+    log.error('加载请求间隔时间线失败:', error)
     timelineData.value = null
   } finally {
     loading.value = false

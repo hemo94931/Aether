@@ -69,7 +69,6 @@
 
 <script setup lang="ts">
 import Card from '@/components/ui/card.vue'
-import Badge from '@/components/ui/badge.vue'
 import Table from '@/components/ui/table.vue'
 import TableHeader from '@/components/ui/table-header.vue'
 import TableBody from '@/components/ui/table-body.vue'

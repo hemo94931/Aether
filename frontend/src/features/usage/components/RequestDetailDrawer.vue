@@ -480,6 +480,7 @@ import Tabs from '@/components/ui/tabs.vue'
 import TabsContent from '@/components/ui/tabs-content.vue'
 import { Copy, Check, Maximize2, Minimize2, Columns2, RefreshCw, X, Monitor, Server } from 'lucide-vue-next'
 import { dashboardApi, type RequestDetail } from '@/api/dashboard'
+import { log } from '@/utils/logger'
 
 // 子组件
 import RequestHeadersContent from './RequestDetailDrawer/RequestHeadersContent.vue'
@@ -672,7 +673,7 @@ async function loadDetail(id: string) {
       }
     }
   } catch (err) {
-    console.error('Failed to load request detail:', err)
+    log.error('Failed to load request detail:', err)
     error.value = '加载请求详情失败'
   } finally {
     loading.value = false
