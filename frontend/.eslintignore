@@ -1,8 +1,0 @@
-dist
-node_modules
-*.d.ts
-vite.config.ts
-vitest.config.ts
-postcss.config.js
-tailwind.config.js
-components.json
