@@ -1,11 +1,21 @@
 <template>
-  <Dialog :modelValue="modelValue" @update:modelValue="handleClose" :zIndex="80">
+  <Dialog
+    :model-value="modelValue"
+    :z-index="80"
+    @update:model-value="handleClose"
+  >
     <template #header>
       <div class="border-b border-border px-6 py-4">
         <div class="flex items-center gap-3">
-          <component :is="icon" class="h-5 w-5 flex-shrink-0" :class="iconColorClass" />
+          <component
+            :is="icon"
+            class="h-5 w-5 flex-shrink-0"
+            :class="iconColorClass"
+          />
           <div class="flex-1 min-w-0">
-            <h3 class="text-lg font-semibold text-foreground leading-tight">{{ title }}</h3>
+            <h3 class="text-lg font-semibold text-foreground leading-tight">
+              {{ title }}
+            </h3>
           </div>
         </div>
       </div>
@@ -14,22 +24,26 @@
     <template #default>
       <!-- 描述 -->
       <div class="space-y-3">
-        <p v-for="(line, index) in descriptionLines" :key="index" :class="getLineClass(index)">
+        <p
+          v-for="(line, index) in descriptionLines"
+          :key="index"
+          :class="getLineClass(index)"
+        >
           {{ line }}
         </p>
       </div>
 
       <!-- 自定义内容插槽 -->
-      <slot></slot>
+      <slot />
     </template>
 
     <template #footer>
       <!-- 取消按钮 -->
       <Button
         variant="outline"
-        @click="handleCancel"
         :disabled="loading"
         class="h-10 px-5"
+        @click="handleCancel"
       >
         {{ cancelText }}
       </Button>
@@ -37,11 +51,14 @@
       <!-- 确认按钮 -->
       <Button
         :variant="confirmVariant"
-        @click="handleConfirm"
         :disabled="loading"
         class="h-10 px-5"
+        @click="handleConfirm"
       >
-        <Loader2 v-if="loading" class="animate-spin h-4 w-4 mr-2" />
+        <Loader2
+          v-if="loading"
+          class="animate-spin h-4 w-4 mr-2"
+        />
         {{ confirmText }}
       </Button>
     </template>

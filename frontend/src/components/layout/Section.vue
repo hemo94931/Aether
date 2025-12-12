@@ -1,13 +1,22 @@
 <template>
   <section :class="sectionClasses">
-    <div v-if="title || description || $slots.header" class="mb-6">
+    <div
+      v-if="title || description || $slots.header"
+      class="mb-6"
+    >
       <slot name="header">
         <div class="flex items-center justify-between">
           <div>
-            <h2 v-if="title" class="text-lg font-medium text-foreground">
+            <h2
+              v-if="title"
+              class="text-lg font-medium text-foreground"
+            >
               {{ title }}
             </h2>
-            <p v-if="description" class="mt-1 text-sm text-muted-foreground">
+            <p
+              v-if="description"
+              class="mt-1 text-sm text-muted-foreground"
+            >
               {{ description }}
             </p>
           </div>

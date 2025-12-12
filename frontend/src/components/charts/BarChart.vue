@@ -1,6 +1,6 @@
 <template>
   <div class="w-full h-full">
-    <canvas ref="chartRef"></canvas>
+    <canvas ref="chartRef" />
   </div>
 </template>
 
@@ -19,6 +19,11 @@ import {
   type ChartOptions
 } from 'chart.js'
 
+const props = withDefaults(defineProps<Props>(), {
+  height: 300,
+  stacked: true
+})
+
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -35,11 +40,6 @@ interface Props {
   height?: number
   stacked?: boolean
 }
-
-const props = withDefaults(defineProps<Props>(), {
-  height: 300,
-  stacked: true
-})
 
 const chartRef = ref<HTMLCanvasElement>()
 let chart: ChartJS<'bar'> | null = null

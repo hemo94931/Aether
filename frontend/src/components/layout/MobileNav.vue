@@ -4,7 +4,11 @@
       <!-- Logo头部 - 移动端优化 -->
       <div class="flex items-center gap-3 rounded-2xl bg-card/90 px-4 py-3 shadow-lg shadow-primary/20 ring-1 ring-border backdrop-blur">
         <div class="flex h-10 w-10 sm:h-12 sm:w-12 items-center justify-center rounded-2xl bg-background shadow-md shadow-primary/20 flex-shrink-0">
-          <img src="/aether_adaptive.svg" alt="Logo" class="h-8 w-8 sm:h-10 sm:w-10" />
+          <img
+            src="/aether_adaptive.svg"
+            alt="Logo"
+            class="h-8 w-8 sm:h-10 sm:w-10"
+          >
         </div>
         <!-- 文字部分 - 小屏隐藏 -->
         <div class="hidden sm:block">

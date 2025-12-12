@@ -5,34 +5,106 @@
     :class="{ 'scattering': isScattering, 'fading-out': isFadingOut }"
   >
     <!-- SVG Defs for the Gemini multi-color gradient -->
-    <svg class="absolute w-0 h-0 overflow-hidden" aria-hidden="true">
+    <svg
+      class="absolute w-0 h-0 overflow-hidden"
+      aria-hidden="true"
+    >
       <defs>
         <!-- Main Gemini gradient (blue base with color overlays) -->
-        <linearGradient id="gemini-base" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#1A73E8" />
-          <stop offset="50%" stop-color="#4285F4" />
-          <stop offset="100%" stop-color="#669DF6" />
+        <linearGradient
+          id="gemini-base"
+          x1="0%"
+          y1="0%"
+          x2="100%"
+          y2="100%"
+        >
+          <stop
+            offset="0%"
+            stop-color="#1A73E8"
+          />
+          <stop
+            offset="50%"
+            stop-color="#4285F4"
+          />
+          <stop
+            offset="100%"
+            stop-color="#669DF6"
+          />
         </linearGradient>
         <!-- Red accent overlay - from top -->
-        <linearGradient id="gemini-red-overlay" x1="50%" y1="0%" x2="50%" y2="50%">
-          <stop offset="0%" stop-color="#EA4335" />
-          <stop offset="100%" stop-color="#EA4335" stop-opacity="0" />
+        <linearGradient
+          id="gemini-red-overlay"
+          x1="50%"
+          y1="0%"
+          x2="50%"
+          y2="50%"
+        >
+          <stop
+            offset="0%"
+            stop-color="#EA4335"
+          />
+          <stop
+            offset="100%"
+            stop-color="#EA4335"
+            stop-opacity="0"
+          />
         </linearGradient>
         <!-- Yellow accent overlay - from left -->
-        <linearGradient id="gemini-yellow-overlay" x1="0%" y1="50%" x2="50%" y2="50%">
-          <stop offset="0%" stop-color="#FBBC04" />
-          <stop offset="100%" stop-color="#FBBC04" stop-opacity="0" />
+        <linearGradient
+          id="gemini-yellow-overlay"
+          x1="0%"
+          y1="50%"
+          x2="50%"
+          y2="50%"
+        >
+          <stop
+            offset="0%"
+            stop-color="#FBBC04"
+          />
+          <stop
+            offset="100%"
+            stop-color="#FBBC04"
+            stop-opacity="0"
+          />
         </linearGradient>
         <!-- Green accent overlay - from bottom -->
-        <linearGradient id="gemini-green-overlay" x1="50%" y1="100%" x2="50%" y2="50%">
-          <stop offset="0%" stop-color="#34A853" />
-          <stop offset="100%" stop-color="#34A853" stop-opacity="0" />
+        <linearGradient
+          id="gemini-green-overlay"
+          x1="50%"
+          y1="100%"
+          x2="50%"
+          y2="50%"
+        >
+          <stop
+            offset="0%"
+            stop-color="#34A853"
+          />
+          <stop
+            offset="100%"
+            stop-color="#34A853"
+            stop-opacity="0"
+          />
         </linearGradient>
         <!-- Glow filter -->
-        <filter id="star-glow" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation="2" result="blur" />
-          <feFlood flood-color="#4285F4" flood-opacity="0.3" />
-          <feComposite in2="blur" operator="in" />
+        <filter
+          id="star-glow"
+          x="-50%"
+          y="-50%"
+          width="200%"
+          height="200%"
+        >
+          <feGaussianBlur
+            stdDeviation="2"
+            result="blur"
+          />
+          <feFlood
+            flood-color="#4285F4"
+            flood-opacity="0.3"
+          />
+          <feComposite
+            in2="blur"
+            operator="in"
+          />
           <feMerge>
             <feMergeNode />
             <feMergeNode in="SourceGraphic" />
@@ -50,11 +122,26 @@
         :class="{ 'star-visible': star.visible && hasScattered }"
         :style="getStarStyle(star)"
       >
-        <svg viewBox="0 0 24 24" class="star-svg">
-          <path :d="starPath" fill="url(#gemini-base)" />
-          <path :d="starPath" fill="url(#gemini-red-overlay)" />
-          <path :d="starPath" fill="url(#gemini-yellow-overlay)" />
-          <path :d="starPath" fill="url(#gemini-green-overlay)" />
+        <svg
+          viewBox="0 0 24 24"
+          class="star-svg"
+        >
+          <path
+            :d="starPath"
+            fill="url(#gemini-base)"
+          />
+          <path
+            :d="starPath"
+            fill="url(#gemini-red-overlay)"
+          />
+          <path
+            :d="starPath"
+            fill="url(#gemini-yellow-overlay)"
+          />
+          <path
+            :d="starPath"
+            fill="url(#gemini-green-overlay)"
+          />
         </svg>
       </div>
     </div>
@@ -68,11 +155,27 @@
         :class="{ 'star-visible': star.visible && hasScattered }"
         :style="getStarStyle(star)"
       >
-        <svg viewBox="0 0 24 24" class="star-svg" style="filter: url(#star-glow)">
-          <path :d="starPath" fill="url(#gemini-base)" />
-          <path :d="starPath" fill="url(#gemini-red-overlay)" />
-          <path :d="starPath" fill="url(#gemini-yellow-overlay)" />
-          <path :d="starPath" fill="url(#gemini-green-overlay)" />
+        <svg
+          viewBox="0 0 24 24"
+          class="star-svg"
+          style="filter: url(#star-glow)"
+        >
+          <path
+            :d="starPath"
+            fill="url(#gemini-base)"
+          />
+          <path
+            :d="starPath"
+            fill="url(#gemini-red-overlay)"
+          />
+          <path
+            :d="starPath"
+            fill="url(#gemini-yellow-overlay)"
+          />
+          <path
+            :d="starPath"
+            fill="url(#gemini-green-overlay)"
+          />
         </svg>
       </div>
     </div>
@@ -86,11 +189,27 @@
         :class="{ 'star-visible': star.visible && hasScattered }"
         :style="getStarStyle(star)"
       >
-        <svg viewBox="0 0 24 24" class="star-svg" style="filter: url(#star-glow)">
-          <path :d="starPath" fill="url(#gemini-base)" />
-          <path :d="starPath" fill="url(#gemini-red-overlay)" />
-          <path :d="starPath" fill="url(#gemini-yellow-overlay)" />
-          <path :d="starPath" fill="url(#gemini-green-overlay)" />
+        <svg
+          viewBox="0 0 24 24"
+          class="star-svg"
+          style="filter: url(#star-glow)"
+        >
+          <path
+            :d="starPath"
+            fill="url(#gemini-base)"
+          />
+          <path
+            :d="starPath"
+            fill="url(#gemini-red-overlay)"
+          />
+          <path
+            :d="starPath"
+            fill="url(#gemini-yellow-overlay)"
+          />
+          <path
+            :d="starPath"
+            fill="url(#gemini-green-overlay)"
+          />
         </svg>
       </div>
     </div>

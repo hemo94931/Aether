@@ -7,8 +7,8 @@
     <svg 
       xmlns="http://www.w3.org/2000/svg" 
       viewBox="0 0 799.31 752.14"
+      class="transition-colors duration-500 ease-out"
       :class="[
-        'transition-colors duration-500 ease-out',
         logoClass
       ]"
     >
@@ -32,7 +32,7 @@ const props = withDefaults(defineProps<Props>(), {
   className: ''
 })
 
-const containerClass = props.size + ' ' + props.className
+const containerClass = `${props.size  } ${  props.className}`
 const logoClass = 'w-full h-full'
 </script>
 

@@ -1,6 +1,9 @@
 <template>
   <div :class="wrapperClass">
-    <pre><code :class="`language-${language}`" v-html="highlightedCode"></code></pre>
+    <pre><code
+:class="`language-${language}`"
+               v-html="highlightedCode"
+    /></pre>
   </div>
 </template>
 
@@ -12,6 +15,11 @@ import json from 'highlight.js/lib/languages/json'
 import ini from 'highlight.js/lib/languages/ini'
 import javascript from 'highlight.js/lib/languages/javascript'
 
+const props = defineProps<{
+  code: string
+  language: string
+  dense?: boolean
+}>()
 // 注册需要的语言
 hljs.registerLanguage('bash', bash)
 hljs.registerLanguage('sh', bash)
@@ -19,12 +27,6 @@ hljs.registerLanguage('json', json)
 hljs.registerLanguage('toml', ini)
 hljs.registerLanguage('ini', ini)
 hljs.registerLanguage('javascript', javascript)
-
-const props = defineProps<{
-  code: string
-  language: string
-  dense?: boolean
-}>()
 
 const wrapperClass = computed(() =>
   ['code-highlight', props.dense ? 'code-highlight--dense' : '']

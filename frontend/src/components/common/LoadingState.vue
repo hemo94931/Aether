@@ -1,22 +1,34 @@
 <template>
   <div :class="containerClasses">
     <div class="flex flex-col items-center gap-4">
-      <Skeleton v-if="variant === 'skeleton'" :class="skeletonClasses" />
+      <Skeleton
+        v-if="variant === 'skeleton'"
+        :class="skeletonClasses"
+      />
 
-      <div v-else-if="variant === 'spinner'" class="relative">
-        <div class="h-12 w-12 animate-spin rounded-full border-4 border-muted border-t-primary"></div>
+      <div
+        v-else-if="variant === 'spinner'"
+        class="relative"
+      >
+        <div class="h-12 w-12 animate-spin rounded-full border-4 border-muted border-t-primary" />
       </div>
 
-      <div v-else-if="variant === 'pulse'" class="flex gap-2">
+      <div
+        v-else-if="variant === 'pulse'"
+        class="flex gap-2"
+      >
         <div
           v-for="i in 3"
           :key="i"
           class="h-3 w-3 animate-pulse rounded-full bg-primary"
           :style="{ animationDelay: `${i * 150}ms` }"
-        ></div>
+        />
       </div>
 
-      <div v-if="message" class="text-sm text-muted-foreground">
+      <div
+        v-if="message"
+        class="text-sm text-muted-foreground"
+      >
         {{ message }}
       </div>
     </div>

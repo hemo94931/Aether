@@ -1,18 +1,26 @@
 <template>
   <div class="w-full h-full relative">
-    <canvas ref="chartRef"></canvas>
+    <canvas ref="chartRef" />
     <div
       v-if="crosshairStats"
       class="absolute top-2 right-2 bg-gray-800/90 text-gray-100 px-3 py-2 rounded-lg text-sm shadow-lg border border-gray-600"
     >
-      <div class="font-medium text-yellow-400">Y = {{ crosshairStats.yValue.toFixed(1) }} 分钟</div>
+      <div class="font-medium text-yellow-400">
+        Y = {{ crosshairStats.yValue.toFixed(1) }} 分钟
+      </div>
       <!-- 单个 dataset 时显示简单统计 -->
-      <div v-if="crosshairStats.datasets.length === 1" class="mt-1">
+      <div
+        v-if="crosshairStats.datasets.length === 1"
+        class="mt-1"
+      >
         <span class="text-green-400">{{ crosshairStats.datasets[0].belowCount }}</span> / {{ crosshairStats.datasets[0].totalCount }} 点在横线以下
         <span class="ml-2 text-blue-400">({{ crosshairStats.datasets[0].belowPercent.toFixed(1) }}%)</span>
       </div>
       <!-- 多个 dataset 时按模型分别显示 -->
-      <div v-else class="mt-1 space-y-0.5">
+      <div
+        v-else
+        class="mt-1 space-y-0.5"
+      >
         <div
           v-for="ds in crosshairStats.datasets"
           :key="ds.label"
@@ -55,6 +63,10 @@ import {
 } from 'chart.js'
 import 'chartjs-adapter-date-fns'
 
+const props = withDefaults(defineProps<Props>(), {
+  height: 300
+})
+
 ChartJS.register(
   LinearScale,
   PointElement,
@@ -86,10 +98,6 @@ interface CrosshairStats {
   totalCount: number
   totalBelowPercent: number
 }
-
-const props = withDefaults(defineProps<Props>(), {
-  height: 300
-})
 
 const chartRef = ref<HTMLCanvasElement>()
 let chart: ChartJS<'scatter'> | null = null
@@ -252,7 +260,7 @@ const defaultOptions: ChartOptions<'scatter'> = {
       ticks: {
         color: 'rgb(107, 114, 128)',
         // 自定义刻度值：在实际值 0, 2, 5, 10, 30, 60, 120 处显示
-        callback: function(this: Scale, tickValue: string | number) {
+        callback(this: Scale, tickValue: string | number) {
           const displayVal = Number(tickValue)
           const realVal = toRealValue(displayVal)
           // 只在特定的显示位置显示刻度
@@ -273,7 +281,7 @@ const defaultOptions: ChartOptions<'scatter'> = {
         text: '间隔 (分钟)',
         color: 'rgb(107, 114, 128)'
       },
-      afterBuildTicks: function(scale: Scale) {
+      afterBuildTicks(scale: Scale) {
         // 在特定实际值处设置刻度
         const targetTicks = [0, 2, 5, 10, 30, 60, 120]
         scale.ticks = targetTicks.map(val => ({

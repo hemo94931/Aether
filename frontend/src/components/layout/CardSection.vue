@@ -1,13 +1,22 @@
 <template>
   <Card :class="cardClasses">
-    <div v-if="title || description || $slots.header" :class="headerClasses">
+    <div
+      v-if="title || description || $slots.header"
+      :class="headerClasses"
+    >
       <slot name="header">
         <div class="flex items-center justify-between">
           <div>
-            <h3 v-if="title" class="text-lg font-medium leading-6 text-foreground">
+            <h3
+              v-if="title"
+              class="text-lg font-medium leading-6 text-foreground"
+            >
               {{ title }}
             </h3>
-            <p v-if="description" class="mt-1 text-sm text-muted-foreground">
+            <p
+              v-if="description"
+              class="mt-1 text-sm text-muted-foreground"
+            >
               {{ description }}
             </p>
           </div>
@@ -22,7 +31,10 @@
       <slot />
     </div>
 
-    <div v-if="$slots.footer" :class="footerClasses">
+    <div
+      v-if="$slots.footer"
+      :class="footerClasses"
+    >
       <slot name="footer" />
     </div>
   </Card>

@@ -1,355 +1,599 @@
 <template>
-    <Transition name="logo-fade">
-      <!-- Adaptive Aether logo using external SVG with CSS-based dark mode -->
-      <!-- Animation sequence: stroke outline -> fill color -> ripple breathing -->
-      <div
-        v-if="type === 'aether' && useAdaptive"
-        :key="`aether-adaptive-${animationKey}`"
-        class="aether-adaptive-container"
-        :style="{ '--anim-delay': `${animDelay}ms` }"
-      >
-        <!-- Definitions for gradient and glow -->
-        <svg style="position: absolute; width: 0; height: 0; overflow: hidden;" aria-hidden="true">
-          <defs>
-            <linearGradient id="adaptive-aether-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stop-color="#cc785c" />
-              <stop offset="50%" stop-color="#d4a27f" />
-              <stop offset="100%" stop-color="#cc785c" />
-            </linearGradient>
-            <filter id="adaptive-aether-glow" x="-50%" y="-50%" width="200%" height="200%">
-              <feGaussianBlur stdDeviation="3" result="coloredBlur" />
-              <feMerge>
-                <feMergeNode in="coloredBlur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
-        </svg>
-
-        <!-- Ripple layers - start after fill completes -->
-        <div class="adaptive-ripple r-1" :class="{ active: adaptiveFillComplete }">
-           <svg viewBox="0 0 799.31 752.14" class="adaptive-logo-img">
-             <path :d="adaptiveAetherPath" fill="none" stroke="url(#adaptive-aether-gradient)" stroke-width="2" vector-effect="non-scaling-stroke" />
-           </svg>
-        </div>
-        <div class="adaptive-ripple r-2" :class="{ active: adaptiveFillComplete }">
-          <svg viewBox="0 0 799.31 752.14" class="adaptive-logo-img">
-             <path :d="adaptiveAetherPath" fill="none" stroke="url(#adaptive-aether-gradient)" stroke-width="2" vector-effect="non-scaling-stroke" />
-           </svg>
-        </div>
-        <div class="adaptive-ripple r-3" :class="{ active: adaptiveFillComplete }">
-          <svg viewBox="0 0 799.31 752.14" class="adaptive-logo-img">
-             <path :d="adaptiveAetherPath" fill="none" stroke="url(#adaptive-aether-gradient)" stroke-width="2" vector-effect="non-scaling-stroke" />
-           </svg>
-        </div>
-
-        <!-- Phase 1: Stroke outline drawing (SVG overlay) -->
-        <svg
-          class="adaptive-stroke-overlay"
-          :class="{ 'stroke-complete': adaptiveStrokeComplete }"
-          viewBox="0 0 799.31 752.14"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path
-            class="adaptive-stroke-path"
-            :d="adaptiveAetherPath"
-            style="stroke: url(#adaptive-aether-gradient); filter: url(#adaptive-aether-glow);"
-          />
-        </svg>
-
-        <!-- Phase 2: Fill using SVG path -->
-        <div
-          class="adaptive-fill-layer"
-          :class="{ 'fill-active': adaptiveStrokeComplete, 'fill-complete': adaptiveFillComplete, 'breathing': adaptiveFillComplete }"
-        >
-          <svg viewBox="0 0 799.31 752.14" class="adaptive-fill-img">
-            <path :d="adaptiveAetherPath" fill="url(#adaptive-aether-gradient)" fill-rule="evenodd" />
-          </svg>
-        </div>
-      </div>
-
-<!-- Aether logo: single complex path with ripple effect -->
+  <Transition name="logo-fade">
+    <!-- Adaptive Aether logo using external SVG with CSS-based dark mode -->
+    <!-- Animation sequence: stroke outline -> fill color -> ripple breathing -->
+    <div
+      v-if="type === 'aether' && useAdaptive"
+      :key="`aether-adaptive-${animationKey}`"
+      class="aether-adaptive-container"
+      :style="{ '--anim-delay': `${animDelay}ms` }"
+    >
+      <!-- Definitions for gradient and glow -->
       <svg
-        v-else-if="type === 'aether'"
-        :key="`aether-${animationKey}`"
-        :viewBox="viewBox"
-        class="ripple-logo"
-        xmlns="http://www.w3.org/2000/svg"
-        :style="{ '--anim-delay': `${animDelay}ms` }"
+        style="position: absolute; width: 0; height: 0; overflow: hidden;"
+        aria-hidden="true"
       >
         <defs>
-          <path id="aether-path" :d="aetherPath" ref="aetherPathRef" />
-          <!-- Gradient for breathing glow effect -->
-          <linearGradient id="aether-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="#cc785c" />
-            <stop offset="50%" stop-color="#d4a27f" />
-            <stop offset="100%" stop-color="#cc785c" />
+          <linearGradient
+            id="adaptive-aether-gradient"
+            x1="0%"
+            y1="0%"
+            x2="100%"
+            y2="100%"
+          >
+            <stop
+              offset="0%"
+              stop-color="#cc785c"
+            />
+            <stop
+              offset="50%"
+              stop-color="#d4a27f"
+            />
+            <stop
+              offset="100%"
+              stop-color="#cc785c"
+            />
           </linearGradient>
-          <!-- Glow filter for breathing effect -->
-          <filter id="aether-glow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="4" result="coloredBlur" />
+          <filter
+            id="adaptive-aether-glow"
+            x="-50%"
+            y="-50%"
+            width="200%"
+            height="200%"
+          >
+            <feGaussianBlur
+              stdDeviation="3"
+              result="coloredBlur"
+            />
             <feMerge>
               <feMergeNode in="coloredBlur" />
               <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
         </defs>
-
-        <!-- Static mode: just show filled logo with fade-in animation -->
-        <template v-if="static">
-          <use
-            href="#aether-path"
-            class="static-fill"
-            :style="{ fill: strokeColor }"
-          />
-        </template>
-
-        <!-- Animated mode -->
-        <template v-else>
-          <!-- Main logo - with stroke drawing animation -->
-          <use
-            href="#aether-path"
-            class="fine-line stroke-draw aether-stroke"
-            :class="{ 'draw-complete': drawComplete, 'breathing': drawComplete && !disableRipple }"
-            :style="{ stroke: drawComplete ? 'url(#aether-gradient)' : strokeColor, '--path-length': aetherPathLength, transformOrigin: aetherCenter }"
-            :filter="drawComplete ? 'url(#aether-glow)' : 'none'"
-          />
-          <!-- Main logo - fill (fade in after draw) -->
-          <use
-            href="#aether-path"
-            class="aether-fill"
-            :class="{ 'fill-active': drawComplete, 'breathing': drawComplete && !disableRipple }"
-            :style="{ fill: strokeColor, transformOrigin: aetherCenter }"
-          />
-          <use
-            v-if="!disableRipple"
-            href="#aether-path"
-            class="fine-line ripple d-1"
-            :class="{ 'ripple-active': drawComplete }"
-            :style="{ stroke: strokeColor, transformOrigin: aetherCenter }"
-          />
-          <use
-            v-if="!disableRipple"
-            href="#aether-path"
-            class="fine-line ripple d-2"
-            :class="{ 'ripple-active': drawComplete }"
-            :style="{ stroke: strokeColor, transformOrigin: aetherCenter }"
-          />
-          <use
-            v-if="!disableRipple"
-            href="#aether-path"
-            class="fine-line ripple d-3"
-            :class="{ 'ripple-active': drawComplete }"
-            :style="{ stroke: strokeColor, transformOrigin: aetherCenter }"
-          />
-        </template>
       </svg>
-  
-      <!-- Standard single-path logos -->
-      <svg
-        v-else
-        :key="`${type}-${animationKey}`"
-        :viewBox="viewBox"
-        class="ripple-logo"
-        xmlns="http://www.w3.org/2000/svg"
-        :style="{ '--anim-delay': `${animDelay}ms` }"
-      >
-        <defs>
-          <path :id="pathId" :d="pathData" />
-          <!-- Gemini multi-layer gradients -->
-          <template v-if="type === 'gemini'">
-            <!-- Fill gradients -->
-            <linearGradient gradientUnits="userSpaceOnUse" :id="`${pathId}-fill-0`" x1="7" x2="11" y1="15.5" y2="12">
-              <stop stop-color="#08B962"></stop>
-              <stop offset="1" stop-color="#08B962" stop-opacity="0"></stop>
-            </linearGradient>
-            <linearGradient gradientUnits="userSpaceOnUse" :id="`${pathId}-fill-1`" x1="8" x2="11.5" y1="5.5" y2="11">
-              <stop stop-color="#F94543"></stop>
-              <stop offset="1" stop-color="#F94543" stop-opacity="0"></stop>
-            </linearGradient>
-            <linearGradient gradientUnits="userSpaceOnUse" :id="`${pathId}-fill-2`" x1="3.5" x2="17.5" y1="13.5" y2="12">
-              <stop stop-color="#FABC12"></stop>
-              <stop offset=".46" stop-color="#FABC12" stop-opacity="0"></stop>
-            </linearGradient>
-            <!-- Stroke gradient for outline - 4 directional gradients to match logo colors -->
-            <!-- Top point = red, Right point = blue, Bottom point = green, Left point = yellow -->
-            <linearGradient gradientUnits="userSpaceOnUse" :id="`${pathId}-stroke-v`" x1="12" x2="12" y1="1" y2="23">
-              <stop offset="0%" stop-color="#F94543" />
-              <stop offset="50%" stop-color="#3186FF" />
-              <stop offset="100%" stop-color="#08B962" />
-            </linearGradient>
-            <linearGradient gradientUnits="userSpaceOnUse" :id="`${pathId}-stroke-h`" x1="1" x2="23" y1="12" y2="12">
-              <stop offset="0%" stop-color="#FABC12" />
-              <stop offset="50%" stop-color="#3186FF" />
-              <stop offset="100%" stop-color="#3186FF" />
-            </linearGradient>
-            <!-- Mask for fill-inward animation (controlled by JS) -->
-            <mask :id="`${pathId}-fill-mask`">
-              <rect x="-4" y="-4" width="32" height="32" fill="white" />
-              <circle cx="12" cy="12" :r="geminiFillRadius" fill="black" />
-            </mask>
-          </template>
-        </defs>
 
-        <!-- OpenAI special rendering: stroke outline -> fill -> rotate + breathe -->
-        <template v-if="type === 'openai'">
-          <!-- Outer breathing wrapper (scale pulse) -->
+      <!-- Ripple layers - start after fill completes -->
+      <div
+        class="adaptive-ripple r-1"
+        :class="{ active: adaptiveFillComplete }"
+      >
+        <svg
+          viewBox="0 0 799.31 752.14"
+          class="adaptive-logo-img"
+        >
+          <path
+            :d="adaptiveAetherPath"
+            fill="none"
+            stroke="url(#adaptive-aether-gradient)"
+            stroke-width="2"
+            vector-effect="non-scaling-stroke"
+          />
+        </svg>
+      </div>
+      <div
+        class="adaptive-ripple r-2"
+        :class="{ active: adaptiveFillComplete }"
+      >
+        <svg
+          viewBox="0 0 799.31 752.14"
+          class="adaptive-logo-img"
+        >
+          <path
+            :d="adaptiveAetherPath"
+            fill="none"
+            stroke="url(#adaptive-aether-gradient)"
+            stroke-width="2"
+            vector-effect="non-scaling-stroke"
+          />
+        </svg>
+      </div>
+      <div
+        class="adaptive-ripple r-3"
+        :class="{ active: adaptiveFillComplete }"
+      >
+        <svg
+          viewBox="0 0 799.31 752.14"
+          class="adaptive-logo-img"
+        >
+          <path
+            :d="adaptiveAetherPath"
+            fill="none"
+            stroke="url(#adaptive-aether-gradient)"
+            stroke-width="2"
+            vector-effect="non-scaling-stroke"
+          />
+        </svg>
+      </div>
+
+      <!-- Phase 1: Stroke outline drawing (SVG overlay) -->
+      <svg
+        class="adaptive-stroke-overlay"
+        :class="{ 'stroke-complete': adaptiveStrokeComplete }"
+        viewBox="0 0 799.31 752.14"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <path
+          class="adaptive-stroke-path"
+          :d="adaptiveAetherPath"
+          style="stroke: url(#adaptive-aether-gradient); filter: url(#adaptive-aether-glow);"
+        />
+      </svg>
+
+      <!-- Phase 2: Fill using SVG path -->
+      <div
+        class="adaptive-fill-layer"
+        :class="{ 'fill-active': adaptiveStrokeComplete, 'fill-complete': adaptiveFillComplete, 'breathing': adaptiveFillComplete }"
+      >
+        <svg
+          viewBox="0 0 799.31 752.14"
+          class="adaptive-fill-img"
+        >
+          <path
+            :d="adaptiveAetherPath"
+            fill="url(#adaptive-aether-gradient)"
+            fill-rule="evenodd"
+          />
+        </svg>
+      </div>
+    </div>
+
+    <!-- Aether logo: single complex path with ripple effect -->
+    <svg
+      v-else-if="type === 'aether'"
+      :key="`aether-${animationKey}`"
+      :viewBox="viewBox"
+      class="ripple-logo"
+      xmlns="http://www.w3.org/2000/svg"
+      :style="{ '--anim-delay': `${animDelay}ms` }"
+    >
+      <defs>
+        <path
+          id="aether-path"
+          ref="aetherPathRef"
+          :d="aetherPath"
+        />
+        <!-- Gradient for breathing glow effect -->
+        <linearGradient
+          id="aether-gradient"
+          x1="0%"
+          y1="0%"
+          x2="100%"
+          y2="100%"
+        >
+          <stop
+            offset="0%"
+            stop-color="#cc785c"
+          />
+          <stop
+            offset="50%"
+            stop-color="#d4a27f"
+          />
+          <stop
+            offset="100%"
+            stop-color="#cc785c"
+          />
+        </linearGradient>
+        <!-- Glow filter for breathing effect -->
+        <filter
+          id="aether-glow"
+          x="-50%"
+          y="-50%"
+          width="200%"
+          height="200%"
+        >
+          <feGaussianBlur
+            stdDeviation="4"
+            result="coloredBlur"
+          />
+          <feMerge>
+            <feMergeNode in="coloredBlur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+
+      <!-- Static mode: just show filled logo with fade-in animation -->
+      <template v-if="static">
+        <use
+          href="#aether-path"
+          class="static-fill"
+          :style="{ fill: strokeColor }"
+        />
+      </template>
+
+      <!-- Animated mode -->
+      <template v-else>
+        <!-- Main logo - with stroke drawing animation -->
+        <use
+          href="#aether-path"
+          class="fine-line stroke-draw aether-stroke"
+          :class="{ 'draw-complete': drawComplete, 'breathing': drawComplete && !disableRipple }"
+          :style="{ stroke: drawComplete ? 'url(#aether-gradient)' : strokeColor, '--path-length': aetherPathLength, transformOrigin: aetherCenter }"
+          :filter="drawComplete ? 'url(#aether-glow)' : 'none'"
+        />
+        <!-- Main logo - fill (fade in after draw) -->
+        <use
+          href="#aether-path"
+          class="aether-fill"
+          :class="{ 'fill-active': drawComplete, 'breathing': drawComplete && !disableRipple }"
+          :style="{ fill: strokeColor, transformOrigin: aetherCenter }"
+        />
+        <use
+          v-if="!disableRipple"
+          href="#aether-path"
+          class="fine-line ripple d-1"
+          :class="{ 'ripple-active': drawComplete }"
+          :style="{ stroke: strokeColor, transformOrigin: aetherCenter }"
+        />
+        <use
+          v-if="!disableRipple"
+          href="#aether-path"
+          class="fine-line ripple d-2"
+          :class="{ 'ripple-active': drawComplete }"
+          :style="{ stroke: strokeColor, transformOrigin: aetherCenter }"
+        />
+        <use
+          v-if="!disableRipple"
+          href="#aether-path"
+          class="fine-line ripple d-3"
+          :class="{ 'ripple-active': drawComplete }"
+          :style="{ stroke: strokeColor, transformOrigin: aetherCenter }"
+        />
+      </template>
+    </svg>
+  
+    <!-- Standard single-path logos -->
+    <svg
+      v-else
+      :key="`${type}-${animationKey}`"
+      :viewBox="viewBox"
+      class="ripple-logo"
+      xmlns="http://www.w3.org/2000/svg"
+      :style="{ '--anim-delay': `${animDelay}ms` }"
+    >
+      <defs>
+        <path
+          :id="pathId"
+          :d="pathData"
+        />
+        <!-- Gemini multi-layer gradients -->
+        <template v-if="type === 'gemini'">
+          <!-- Fill gradients -->
+          <linearGradient
+            :id="`${pathId}-fill-0`"
+            gradientUnits="userSpaceOnUse"
+            x1="7"
+            x2="11"
+            y1="15.5"
+            y2="12"
+          >
+            <stop stop-color="#08B962" />
+            <stop
+              offset="1"
+              stop-color="#08B962"
+              stop-opacity="0"
+            />
+          </linearGradient>
+          <linearGradient
+            :id="`${pathId}-fill-1`"
+            gradientUnits="userSpaceOnUse"
+            x1="8"
+            x2="11.5"
+            y1="5.5"
+            y2="11"
+          >
+            <stop stop-color="#F94543" />
+            <stop
+              offset="1"
+              stop-color="#F94543"
+              stop-opacity="0"
+            />
+          </linearGradient>
+          <linearGradient
+            :id="`${pathId}-fill-2`"
+            gradientUnits="userSpaceOnUse"
+            x1="3.5"
+            x2="17.5"
+            y1="13.5"
+            y2="12"
+          >
+            <stop stop-color="#FABC12" />
+            <stop
+              offset=".46"
+              stop-color="#FABC12"
+              stop-opacity="0"
+            />
+          </linearGradient>
+          <!-- Stroke gradient for outline - 4 directional gradients to match logo colors -->
+          <!-- Top point = red, Right point = blue, Bottom point = green, Left point = yellow -->
+          <linearGradient
+            :id="`${pathId}-stroke-v`"
+            gradientUnits="userSpaceOnUse"
+            x1="12"
+            x2="12"
+            y1="1"
+            y2="23"
+          >
+            <stop
+              offset="0%"
+              stop-color="#F94543"
+            />
+            <stop
+              offset="50%"
+              stop-color="#3186FF"
+            />
+            <stop
+              offset="100%"
+              stop-color="#08B962"
+            />
+          </linearGradient>
+          <linearGradient
+            :id="`${pathId}-stroke-h`"
+            gradientUnits="userSpaceOnUse"
+            x1="1"
+            x2="23"
+            y1="12"
+            y2="12"
+          >
+            <stop
+              offset="0%"
+              stop-color="#FABC12"
+            />
+            <stop
+              offset="50%"
+              stop-color="#3186FF"
+            />
+            <stop
+              offset="100%"
+              stop-color="#3186FF"
+            />
+          </linearGradient>
+          <!-- Mask for fill-inward animation (controlled by JS) -->
+          <mask :id="`${pathId}-fill-mask`">
+            <rect
+              x="-4"
+              y="-4"
+              width="32"
+              height="32"
+              fill="white"
+            />
+            <circle
+              cx="12"
+              cy="12"
+              :r="geminiFillRadius"
+              fill="black"
+            />
+          </mask>
+        </template>
+      </defs>
+
+      <!-- OpenAI special rendering: stroke outline -> fill -> rotate + breathe -->
+      <template v-if="type === 'openai'">
+        <!-- Outer breathing wrapper (scale pulse) -->
+        <g
+          class="openai-breathe-group"
+          :class="{ 'breathing': drawComplete }"
+          :style="{ transformOrigin: transformOrigin }"
+        >
+          <!-- Inner rotation wrapper -->
           <g
-            class="openai-breathe-group"
-            :class="{ 'breathing': drawComplete }"
+            class="openai-rotate-group"
+            :class="{ 'rotating': drawComplete }"
             :style="{ transformOrigin: transformOrigin }"
           >
-            <!-- Inner rotation wrapper -->
-            <g
-              class="openai-rotate-group"
-              :class="{ 'rotating': drawComplete }"
-              :style="{ transformOrigin: transformOrigin }"
-            >
-              <!-- Step 1: Stroke outline drawing -->
-              <use
-                :href="`#${pathId}`"
-                class="openai-outline"
-                :class="{ 'outline-complete': drawComplete }"
-                stroke="currentColor"
-              />
-              <!-- Step 2: Fill layer (appears after outline) -->
-              <use
-                :href="`#${pathId}`"
-                class="openai-fill"
-                :class="{ 'fill-active': drawComplete }"
-                fill="currentColor"
-                fill-rule="evenodd"
-              />
-            </g>
+            <!-- Step 1: Stroke outline drawing -->
+            <use
+              :href="`#${pathId}`"
+              class="openai-outline"
+              :class="{ 'outline-complete': drawComplete }"
+              stroke="currentColor"
+            />
+            <!-- Step 2: Fill layer (appears after outline) -->
+            <use
+              :href="`#${pathId}`"
+              class="openai-fill"
+              :class="{ 'fill-active': drawComplete }"
+              fill="currentColor"
+              fill-rule="evenodd"
+            />
           </g>
-        </template>
+        </g>
+      </template>
 
-        <!-- Claude special rendering: stroke outline -> fill -> ripple -->
-        <template v-else-if="type === 'claude'">
-          <!-- Step 1: Stroke outline drawing -->
-          <use
-            :href="`#${pathId}`"
-            class="claude-outline"
-            :class="{ 'outline-complete': drawComplete }"
-            stroke="#D97757"
-          />
-          <!-- Step 2: Fill layer (appears after outline) -->
-          <use
-            :href="`#${pathId}`"
-            class="claude-fill"
-            :class="{ 'fill-active': drawComplete }"
-            fill="#D97757"
-          />
-          <!-- Step 3: Ripple waves (after fill complete) -->
-          <use
-            :href="`#${pathId}`"
-            class="fine-line claude-ripple d-1"
-            :class="{ 'ripple-active': drawComplete }"
-            :style="{ stroke: '#D97757', transformOrigin: transformOrigin }"
-          />
-          <use
-            :href="`#${pathId}`"
-            class="fine-line claude-ripple d-2"
-            :class="{ 'ripple-active': drawComplete }"
-            :style="{ stroke: '#D97757', transformOrigin: transformOrigin }"
-          />
-          <use
-            :href="`#${pathId}`"
-            class="fine-line claude-ripple d-3"
-            :class="{ 'ripple-active': drawComplete }"
-            :style="{ stroke: '#D97757', transformOrigin: transformOrigin }"
-          />
-        </template>
+      <!-- Claude special rendering: stroke outline -> fill -> ripple -->
+      <template v-else-if="type === 'claude'">
+        <!-- Step 1: Stroke outline drawing -->
+        <use
+          :href="`#${pathId}`"
+          class="claude-outline"
+          :class="{ 'outline-complete': drawComplete }"
+          stroke="#D97757"
+        />
+        <!-- Step 2: Fill layer (appears after outline) -->
+        <use
+          :href="`#${pathId}`"
+          class="claude-fill"
+          :class="{ 'fill-active': drawComplete }"
+          fill="#D97757"
+        />
+        <!-- Step 3: Ripple waves (after fill complete) -->
+        <use
+          :href="`#${pathId}`"
+          class="fine-line claude-ripple d-1"
+          :class="{ 'ripple-active': drawComplete }"
+          :style="{ stroke: '#D97757', transformOrigin: transformOrigin }"
+        />
+        <use
+          :href="`#${pathId}`"
+          class="fine-line claude-ripple d-2"
+          :class="{ 'ripple-active': drawComplete }"
+          :style="{ stroke: '#D97757', transformOrigin: transformOrigin }"
+        />
+        <use
+          :href="`#${pathId}`"
+          class="fine-line claude-ripple d-3"
+          :class="{ 'ripple-active': drawComplete }"
+          :style="{ stroke: '#D97757', transformOrigin: transformOrigin }"
+        />
+      </template>
 
-        <!-- Gemini special rendering: stroke outline -> fill -> breathe -->
-        <template v-else-if="type === 'gemini'">
-          <!-- Step 1: Stroke outline drawing (multi-layer colorful) -->
-          <g class="gemini-outline-group" :class="{ 'outline-complete': drawComplete }">
-            <use :href="`#${pathId}`" class="gemini-outline" stroke="#3186FF" />
-            <use :href="`#${pathId}`" class="gemini-outline" :style="{ stroke: `url(#${pathId}-fill-0)` }" />
-            <use :href="`#${pathId}`" class="gemini-outline" :style="{ stroke: `url(#${pathId}-fill-1)` }" />
-            <use :href="`#${pathId}`" class="gemini-outline" :style="{ stroke: `url(#${pathId}-fill-2)` }" />
-          </g>
-          <!-- Step 2: Fill layer (appears after outline, with inward fill animation) -->
+      <!-- Gemini special rendering: stroke outline -> fill -> breathe -->
+      <template v-else-if="type === 'gemini'">
+        <!-- Step 1: Stroke outline drawing (multi-layer colorful) -->
+        <g
+          class="gemini-outline-group"
+          :class="{ 'outline-complete': drawComplete }"
+        >
+          <use
+            :href="`#${pathId}`"
+            class="gemini-outline"
+            stroke="#3186FF"
+          />
+          <use
+            :href="`#${pathId}`"
+            class="gemini-outline"
+            :style="{ stroke: `url(#${pathId}-fill-0)` }"
+          />
+          <use
+            :href="`#${pathId}`"
+            class="gemini-outline"
+            :style="{ stroke: `url(#${pathId}-fill-1)` }"
+          />
+          <use
+            :href="`#${pathId}`"
+            class="gemini-outline"
+            :style="{ stroke: `url(#${pathId}-fill-2)` }"
+          />
+        </g>
+        <!-- Step 2: Fill layer (appears after outline, with inward fill animation) -->
+        <g
+          class="gemini-fill"
+          :class="{ 'fill-complete': fillComplete }"
+          :mask="`url(#${pathId}-fill-mask)`"
+        >
+          <use
+            :href="`#${pathId}`"
+            fill="#3186FF"
+          />
+          <use
+            :href="`#${pathId}`"
+            :fill="`url(#${pathId}-fill-0)`"
+          />
+          <use
+            :href="`#${pathId}`"
+            :fill="`url(#${pathId}-fill-1)`"
+          />
+          <use
+            :href="`#${pathId}`"
+            :fill="`url(#${pathId}-fill-2)`"
+          />
+        </g>
+        <!-- Step 3: Ripple waves (after fill complete) -->
+        <g v-if="!disableRipple">
           <g
-            class="gemini-fill"
-            :class="{ 'fill-complete': fillComplete }"
-            :mask="`url(#${pathId}-fill-mask)`"
+            class="gemini-ripple d-1"
+            :class="{ 'ripple-active': fillComplete }"
+            :style="{ transformOrigin: transformOrigin }"
           >
-            <use :href="`#${pathId}`" fill="#3186FF" />
-            <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-0)`" />
-            <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-1)`" />
-            <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-2)`" />
+            <use
+              :href="`#${pathId}`"
+              fill="#3186FF"
+            />
+            <use
+              :href="`#${pathId}`"
+              :fill="`url(#${pathId}-fill-0)`"
+            />
+            <use
+              :href="`#${pathId}`"
+              :fill="`url(#${pathId}-fill-1)`"
+            />
+            <use
+              :href="`#${pathId}`"
+              :fill="`url(#${pathId}-fill-2)`"
+            />
           </g>
-          <!-- Step 3: Ripple waves (after fill complete) -->
-          <g v-if="!disableRipple">
-            <g
-              class="gemini-ripple d-1"
-              :class="{ 'ripple-active': fillComplete }"
-              :style="{ transformOrigin: transformOrigin }"
-            >
-              <use :href="`#${pathId}`" fill="#3186FF" />
-              <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-0)`" />
-              <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-1)`" />
-              <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-2)`" />
-            </g>
-            <g
-              class="gemini-ripple d-2"
-              :class="{ 'ripple-active': fillComplete }"
-              :style="{ transformOrigin: transformOrigin }"
-            >
-              <use :href="`#${pathId}`" fill="#3186FF" />
-              <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-0)`" />
-              <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-1)`" />
-              <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-2)`" />
-            </g>
-            <g
-              class="gemini-ripple d-3"
-              :class="{ 'ripple-active': fillComplete }"
-              :style="{ transformOrigin: transformOrigin }"
-            >
-              <use :href="`#${pathId}`" fill="#3186FF" />
-              <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-0)`" />
-              <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-1)`" />
-              <use :href="`#${pathId}`" :fill="`url(#${pathId}-fill-2)`" />
-            </g>
+          <g
+            class="gemini-ripple d-2"
+            :class="{ 'ripple-active': fillComplete }"
+            :style="{ transformOrigin: transformOrigin }"
+          >
+            <use
+              :href="`#${pathId}`"
+              fill="#3186FF"
+            />
+            <use
+              :href="`#${pathId}`"
+              :fill="`url(#${pathId}-fill-0)`"
+            />
+            <use
+              :href="`#${pathId}`"
+              :fill="`url(#${pathId}-fill-1)`"
+            />
+            <use
+              :href="`#${pathId}`"
+              :fill="`url(#${pathId}-fill-2)`"
+            />
           </g>
-        </template>
+          <g
+            class="gemini-ripple d-3"
+            :class="{ 'ripple-active': fillComplete }"
+            :style="{ transformOrigin: transformOrigin }"
+          >
+            <use
+              :href="`#${pathId}`"
+              fill="#3186FF"
+            />
+            <use
+              :href="`#${pathId}`"
+              :fill="`url(#${pathId}-fill-0)`"
+            />
+            <use
+              :href="`#${pathId}`"
+              :fill="`url(#${pathId}-fill-1)`"
+            />
+            <use
+              :href="`#${pathId}`"
+              :fill="`url(#${pathId}-fill-2)`"
+            />
+          </g>
+        </g>
+      </template>
 
-        <!-- Other logos: stroke-based rendering -->
-        <template v-else>
-          <!-- Static center icon with stroke drawing animation -->
+      <!-- Other logos: stroke-based rendering -->
+      <template v-else>
+        <!-- Static center icon with stroke drawing animation -->
+        <use
+          :href="`#${pathId}`"
+          class="fine-line stroke-draw"
+          :class="{ 'draw-complete': drawComplete }"
+          :style="{ stroke: strokeColor, '--path-length': pathLength }"
+        />
+
+        <!-- Ripple waves - only active after drawing completes -->
+        <g>
           <use
             :href="`#${pathId}`"
-            class="fine-line stroke-draw"
-            :class="{ 'draw-complete': drawComplete }"
-            :style="{ stroke: strokeColor, '--path-length': pathLength }"
+            class="fine-line ripple d-1"
+            :class="{ 'ripple-active': drawComplete }"
+            :style="{ stroke: strokeColor, transformOrigin: transformOrigin }"
           />
-
-          <!-- Ripple waves - only active after drawing completes -->
-          <g>
-            <use
-              :href="`#${pathId}`"
-              class="fine-line ripple d-1"
-              :class="{ 'ripple-active': drawComplete }"
-              :style="{ stroke: strokeColor, transformOrigin: transformOrigin }"
-            />
-            <use
-              :href="`#${pathId}`"
-              class="fine-line ripple d-2"
-              :class="{ 'ripple-active': drawComplete }"
-              :style="{ stroke: strokeColor, transformOrigin: transformOrigin }"
-            />
-            <use
-              :href="`#${pathId}`"
-              class="fine-line ripple d-3"
-              :class="{ 'ripple-active': drawComplete }"
-              :style="{ stroke: strokeColor, transformOrigin: transformOrigin }"
-            />
-          </g>
-        </template>
-      </svg>
-    </Transition>
+          <use
+            :href="`#${pathId}`"
+            class="fine-line ripple d-2"
+            :class="{ 'ripple-active': drawComplete }"
+            :style="{ stroke: strokeColor, transformOrigin: transformOrigin }"
+          />
+          <use
+            :href="`#${pathId}`"
+            class="fine-line ripple d-3"
+            :class="{ 'ripple-active': drawComplete }"
+            :style="{ stroke: strokeColor, transformOrigin: transformOrigin }"
+          />
+        </g>
+      </template>
+    </svg>
+  </Transition>
 </template>
 
 

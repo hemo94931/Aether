@@ -10,16 +10,26 @@
     @keydown.escape.stop="closeDropdown"
   >
     <div class="platform-select__current">
-      <component :is="currentOption.icon" class="platform-select__icon" />
+      <component
+        :is="currentOption.icon"
+        class="platform-select__icon"
+      />
       <div class="platform-select__text">
-        <p class="platform-select__label">{{ currentOption.label }}</p>
-        <p class="platform-select__hint">{{ currentOption.hint }}</p>
+        <p class="platform-select__label">
+          {{ currentOption.label }}
+        </p>
+        <p class="platform-select__hint">
+          {{ currentOption.hint }}
+        </p>
       </div>
     </div>
     <ChevronDown class="platform-select__chevron" />
 
     <transition name="platform-select-fade">
-      <ul v-if="isOpen" class="platform-select__dropdown">
+      <ul
+        v-if="isOpen"
+        class="platform-select__dropdown"
+      >
         <li
           v-for="option in resolvedOptions"
           :key="option.value"
@@ -27,12 +37,22 @@
           :class="{ 'platform-select__option--active': option.value === modelValue }"
           @click.stop="selectOption(option.value)"
         >
-          <component :is="option.icon" class="platform-select__option-icon" />
+          <component
+            :is="option.icon"
+            class="platform-select__option-icon"
+          />
           <div class="platform-select__option-copy">
-            <p class="platform-select__option-label">{{ option.label }}</p>
-            <p class="platform-select__option-hint">{{ option.hint }}</p>
+            <p class="platform-select__option-label">
+              {{ option.label }}
+            </p>
+            <p class="platform-select__option-hint">
+              {{ option.hint }}
+            </p>
           </div>
-          <Check class="platform-select__option-check" v-if="option.value === modelValue" />
+          <Check
+            v-if="option.value === modelValue"
+            class="platform-select__option-check"
+          />
         </li>
       </ul>
     </transition>

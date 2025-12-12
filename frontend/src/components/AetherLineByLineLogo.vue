@@ -1,5 +1,8 @@
 <template>
-  <div class="line-by-line-logo" :style="{ width: `${size}px`, height: `${size}px` }">
+  <div
+    class="line-by-line-logo"
+    :style="{ width: `${size}px`, height: `${size}px` }"
+  >
     <svg
       :viewBox="viewBox"
       class="logo-svg"
@@ -7,12 +10,33 @@
     >
       <defs>
         <!-- Metallic gradient -->
-        <linearGradient :id="gradientId" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" :stop-color="metallicColors.dark" />
-          <stop offset="25%" :stop-color="metallicColors.base" />
-          <stop offset="50%" :stop-color="metallicColors.light" />
-          <stop offset="75%" :stop-color="metallicColors.base" />
-          <stop offset="100%" :stop-color="metallicColors.dark" />
+        <linearGradient
+          :id="gradientId"
+          x1="0%"
+          y1="0%"
+          x2="100%"
+          y2="100%"
+        >
+          <stop
+            offset="0%"
+            :stop-color="metallicColors.dark"
+          />
+          <stop
+            offset="25%"
+            :stop-color="metallicColors.base"
+          />
+          <stop
+            offset="50%"
+            :stop-color="metallicColors.light"
+          />
+          <stop
+            offset="75%"
+            :stop-color="metallicColors.base"
+          />
+          <stop
+            offset="100%"
+            :stop-color="metallicColors.dark"
+          />
         </linearGradient>
       </defs>
 
@@ -73,6 +97,41 @@ interface ColorScheme {
   secondary: string
 }
 
+const props = withDefaults(
+  defineProps<{
+    size?: number
+    lineDelay?: number
+    strokeDuration?: number
+    fillDuration?: number
+    autoStart?: boolean
+    loop?: boolean
+    loopPause?: number
+    outlineColor?: string
+    gradientColor?: string
+    strokeWidth?: number
+    cycleColors?: boolean
+    isDark?: boolean
+  }>(),
+  {
+    size: 400,
+    lineDelay: 60,
+    strokeDuration: 1200,
+    fillDuration: 800,
+    autoStart: true,
+    loop: true,
+    loopPause: 600,
+    outlineColor: '#cc785c',
+    gradientColor: '#e8a882',
+    strokeWidth: 2.5,
+    cycleColors: false,
+    isDark: false
+  }
+)
+const emit = defineEmits<{
+  (e: 'animationComplete'): void
+  (e: 'phaseChange', phase: AnimationPhase): void
+  (e: 'colorChange', colors: ColorScheme): void
+}>()
 // Constants
 const LINE_COUNT = AETHER_LINE_PATHS.length
 const DEFAULT_PATH_LENGTH = 3000
@@ -108,43 +167,6 @@ const DARK_MODE_SCHEMES: ColorScheme[] = [
   { primary: '#facc15', secondary: '#fef08a' },
   { primary: '#e879f9', secondary: '#f5d0fe' },
 ]
-
-const props = withDefaults(
-  defineProps<{
-    size?: number
-    lineDelay?: number
-    strokeDuration?: number
-    fillDuration?: number
-    autoStart?: boolean
-    loop?: boolean
-    loopPause?: number
-    outlineColor?: string
-    gradientColor?: string
-    strokeWidth?: number
-    cycleColors?: boolean
-    isDark?: boolean
-  }>(),
-  {
-    size: 400,
-    lineDelay: 60,
-    strokeDuration: 1200,
-    fillDuration: 800,
-    autoStart: true,
-    loop: true,
-    loopPause: 600,
-    outlineColor: '#cc785c',
-    gradientColor: '#e8a882',
-    strokeWidth: 2.5,
-    cycleColors: false,
-    isDark: false
-  }
-)
-
-const emit = defineEmits<{
-  (e: 'animationComplete'): void
-  (e: 'phaseChange', phase: AnimationPhase): void
-  (e: 'colorChange', colors: ColorScheme): void
-}>()
 
 // Unique ID for gradient
 const gradientId = `aether-gradient-${Math.random().toString(36).slice(2, 9)}`

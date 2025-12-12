@@ -35,28 +35,42 @@
         />
       </svg>
       <!-- 图标 -->
-      <div class="absolute inset-0 flex items-center justify-center" :class="iconClasses">
-        <component :is="icon" class="w-4 h-4" />
+      <div
+        class="absolute inset-0 flex items-center justify-center"
+        :class="iconClasses"
+      >
+        <component
+          :is="icon"
+          class="w-4 h-4"
+        />
       </div>
     </div>
 
     <!-- 内容 -->
     <div class="flex-1 min-w-0">
-      <p v-if="toast.title" class="text-sm font-medium" :class="titleClasses">
+      <p
+        v-if="toast.title"
+        class="text-sm font-medium"
+        :class="titleClasses"
+      >
         {{ toast.title }}
       </p>
-      <p v-if="toast.message" class="text-sm" :class="messageClasses">
+      <p
+        v-if="toast.message"
+        class="text-sm"
+        :class="messageClasses"
+      >
         {{ toast.message }}
       </p>
     </div>
 
     <!-- 关闭按钮 -->
     <button
-      @click="$emit('remove')"
       class="shrink-0 p-1 rounded transition-colors opacity-40 hover:opacity-100"
       :class="closeClasses"
       type="button"
       aria-label="关闭"
+      @click="$emit('remove')"
     >
       <X class="w-3.5 h-3.5" />
     </button>

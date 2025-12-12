@@ -1,46 +1,100 @@
 <template>
   <div class="space-y-4 w-full overflow-visible">
-    <div v-if="showHeader" class="flex items-center justify-between gap-4">
+    <div
+      v-if="showHeader"
+      class="flex items-center justify-between gap-4"
+    >
       <div class="flex-shrink-0">
-        <p class="text-sm font-semibold">{{ title }}</p>
-        <p v-if="subtitle" class="text-xs text-muted-foreground">{{ subtitle }}</p>
+        <p class="text-sm font-semibold">
+          {{ title }}
+        </p>
+        <p
+          v-if="subtitle"
+          class="text-xs text-muted-foreground"
+        >
+          {{ subtitle }}
+        </p>
       </div>
-      <div v-if="weekColumns.length > 0" class="flex items-center gap-1 text-[11px] text-muted-foreground flex-shrink-0">
+      <div
+        v-if="weekColumns.length > 0"
+        class="flex items-center gap-1 text-[11px] text-muted-foreground flex-shrink-0"
+      >
         <span class="flex-shrink-0">少</span>
         <div
           v-for="(level, index) in legendLevels"
           :key="index"
           class="w-3 h-3 rounded-[3px] flex-shrink-0"
           :style="getLegendStyle(level)"
-        ></div>
+        />
         <span class="flex-shrink-0">多</span>
       </div>
     </div>
 
-    <div v-if="weekColumns.length > 0" class="flex w-full gap-3 overflow-visible">
-      <div class="flex flex-col text-[10px] text-muted-foreground flex-shrink-0" :style="verticalGapStyle">
+    <div
+      v-if="weekColumns.length > 0"
+      class="flex w-full gap-3 overflow-visible"
+    >
+      <div
+        class="flex flex-col text-[10px] text-muted-foreground flex-shrink-0"
+        :style="verticalGapStyle"
+      >
         <!-- Placeholder to align with month markers -->
-        <div class="text-[10px] mb-3 invisible">M</div>
-        <span :style="dayLabelStyle" class="flex items-center invisible">周日</span>
-        <span :style="dayLabelStyle" class="flex items-center">一</span>
-        <span :style="dayLabelStyle" class="flex items-center invisible">周二</span>
-        <span :style="dayLabelStyle" class="flex items-center">三</span>
-        <span :style="dayLabelStyle" class="flex items-center invisible">周四</span>
-        <span :style="dayLabelStyle" class="flex items-center">五</span>
-        <span :style="dayLabelStyle" class="flex items-center invisible">周六</span>
+        <div class="text-[10px] mb-3 invisible">
+          M
+        </div>
+        <span
+          :style="dayLabelStyle"
+          class="flex items-center invisible"
+        >周日</span>
+        <span
+          :style="dayLabelStyle"
+          class="flex items-center"
+        >一</span>
+        <span
+          :style="dayLabelStyle"
+          class="flex items-center invisible"
+        >周二</span>
+        <span
+          :style="dayLabelStyle"
+          class="flex items-center"
+        >三</span>
+        <span
+          :style="dayLabelStyle"
+          class="flex items-center invisible"
+        >周四</span>
+        <span
+          :style="dayLabelStyle"
+          class="flex items-center"
+        >五</span>
+        <span
+          :style="dayLabelStyle"
+          class="flex items-center invisible"
+        >周六</span>
       </div>
       <div class="flex-1 min-w-[240px] overflow-visible">
-        <div ref="heatmapWrapper" class="relative block w-full">
+        <div
+          ref="heatmapWrapper"
+          class="relative block w-full"
+        >
           <div
             v-if="tooltip.visible && tooltip.day"
             class="fixed z-10 rounded-lg border border-border/70 bg-background px-3 py-2 text-xs shadow-lg backdrop-blur pointer-events-none"
             :style="tooltipStyle"
           >
-            <p class="font-medium">{{ tooltip.day.date }}</p>
-            <p class="mt-0.5">{{ tooltip.day.requests }} 次请求 · {{ formatTokens(tooltip.day.total_tokens) }}</p>
-            <p class="text-[11px] text-muted-foreground">成本 {{ formatCurrency(tooltip.day.total_cost) }}</p>
+            <p class="font-medium">
+              {{ tooltip.day.date }}
+            </p>
+            <p class="mt-0.5">
+              {{ tooltip.day.requests }} 次请求 · {{ formatTokens(tooltip.day.total_tokens) }}
+            </p>
+            <p class="text-[11px] text-muted-foreground">
+              成本 {{ formatCurrency(tooltip.day.total_cost) }}
+            </p>
           </div>
-          <div class="flex text-[10px] text-muted-foreground/80 mb-3" :style="horizontalGapStyle">
+          <div
+            class="flex text-[10px] text-muted-foreground/80 mb-3"
+            :style="horizontalGapStyle"
+          >
             <div
               v-for="(week, weekIndex) in weekColumns"
               :key="`month-${weekIndex}`"
@@ -50,9 +104,21 @@
               <span v-if="monthMarkers[weekIndex]">{{ monthMarkers[weekIndex] }}</span>
             </div>
           </div>
-          <div class="flex" :style="horizontalGapStyle">
-            <div v-for="(week, weekIndex) in weekColumns" :key="weekIndex" class="flex flex-col" :style="verticalGapStyle">
-              <div v-for="(day, dayIndex) in week" :key="dayIndex" class="relative group">
+          <div
+            class="flex"
+            :style="horizontalGapStyle"
+          >
+            <div
+              v-for="(week, weekIndex) in weekColumns"
+              :key="weekIndex"
+              class="flex flex-col"
+              :style="verticalGapStyle"
+            >
+              <div
+                v-for="(day, dayIndex) in week"
+                :key="dayIndex"
+                class="relative group"
+              >
                 <div
                   v-if="day"
                   class="rounded-[4px] transition-all duration-200 hover:shadow-lg cursor-pointer cell-emerge"
@@ -60,15 +126,24 @@
                   :title="buildTooltip(day)"
                   @mouseenter="handleHover(day, $event)"
                   @mouseleave="clearHover"
-                ></div>
-                <div v-else :style="cellSquareStyle" class="rounded-[4px] bg-transparent"></div>
+                />
+                <div
+                  v-else
+                  :style="cellSquareStyle"
+                  class="rounded-[4px] bg-transparent"
+                />
               </div>
             </div>
           </div>
         </div>
       </div>
     </div>
-    <p v-else class="text-xs text-muted-foreground">暂无活跃数据</p>
+    <p
+      v-else
+      class="text-xs text-muted-foreground"
+    >
+      暂无活跃数据
+    </p>
   </div>
 </template>
 

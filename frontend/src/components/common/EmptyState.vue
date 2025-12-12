@@ -3,49 +3,68 @@
     <!-- 图标 -->
     <div :class="iconContainerClasses">
       <component
-        v-if="icon"
         :is="icon"
+        v-if="icon"
         :class="iconClasses"
       />
       <component
-        v-else
         :is="defaultIcon"
+        v-else
         :class="iconClasses"
       />
     </div>
 
     <!-- 标题 -->
-    <h3 v-if="title" :class="titleClasses">
+    <h3
+      v-if="title"
+      :class="titleClasses"
+    >
       {{ title }}
     </h3>
 
     <!-- 描述 -->
-    <p v-if="description" :class="descriptionClasses">
+    <p
+      v-if="description"
+      :class="descriptionClasses"
+    >
       {{ description }}
     </p>
 
     <!-- 自定义内容插槽 -->
-    <div v-if="$slots.default" class="mt-4">
+    <div
+      v-if="$slots.default"
+      class="mt-4"
+    >
       <slot />
     </div>
 
     <!-- 操作按钮 -->
-    <div v-if="$slots.actions || actionText" class="mt-6 flex flex-wrap items-center justify-center gap-3">
+    <div
+      v-if="$slots.actions || actionText"
+      class="mt-6 flex flex-wrap items-center justify-center gap-3"
+    >
       <slot name="actions">
         <Button
           v-if="actionText"
-          @click="handleAction"
           :variant="actionVariant"
           :size="actionSize"
+          @click="handleAction"
         >
-          <component v-if="actionIcon" :is="actionIcon" class="mr-2 h-4 w-4" />
+          <component
+            :is="actionIcon"
+            v-if="actionIcon"
+            class="mr-2 h-4 w-4"
+          />
           {{ actionText }}
         </Button>
       </slot>
     </div>
 
     <!-- 次要操作 -->
-    <div v-if="$slots.secondary" class="mt-3">
+    <div
+      v-if="$slots.secondary"
+      class="mt-3"
+    >
       <slot name="secondary" />
     </div>
   </div>

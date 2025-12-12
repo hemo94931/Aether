@@ -1,16 +1,26 @@
 <template>
   <nav class="sidebar-nav w-full px-3">
-    <div v-for="(group, index) in items" :key="index" class="space-y-1 mb-5">
-
+    <div
+      v-for="(group, index) in items"
+      :key="index"
+      class="space-y-1 mb-5"
+    >
       <!-- Section Header -->
-      <div v-if="group.title" class="px-2.5 pb-1 flex items-center gap-2" :class="index > 0 ? 'pt-1' : ''">
+      <div
+        v-if="group.title"
+        class="px-2.5 pb-1 flex items-center gap-2"
+        :class="index > 0 ? 'pt-1' : ''"
+      >
         <span class="text-[10px] font-medium text-muted-foreground/50 font-mono tabular-nums">{{ String(index + 1).padStart(2, '0') }}</span>
         <span class="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-[0.1em]">{{ group.title }}</span>
       </div>
 
       <!-- Links -->
       <div class="space-y-0.5">
-        <template v-for="item in group.items" :key="item.href">
+        <template
+          v-for="item in group.items"
+          :key="item.href"
+        >
           <RouterLink
             :to="item.href"
             class="group relative flex items-center justify-between px-2.5 py-2 rounded-lg transition-all duration-200"
@@ -35,7 +45,7 @@
             <div
               v-if="isItemActive(item.href)"
               class="w-1 h-1 rounded-full bg-primary"
-            ></div>
+            />
           </RouterLink>
         </template>
       </div>
