@@ -65,7 +65,10 @@ import 'chartjs-adapter-date-fns'
 
 const props = withDefaults(defineProps<Props>(), {
   height: 300,
-  options: undefined
+  options: undefined,
+  compressGaps: false,
+  gapThreshold: 60, // 默认 60 分钟以上的间隙会被压缩
+  compressedGapSize: 5 // 压缩后的间隙显示为 5 分钟
 })
 
 ChartJS.register(
@@ -82,6 +85,9 @@ interface Props {
   data: ChartData<'scatter'>
   options?: ChartOptions<'scatter'>
   height?: number
+  compressGaps?: boolean
+  gapThreshold?: number // 间隙阈值（分钟）
+  compressedGapSize?: number // 压缩后显示大小（分钟）
 }
 
 interface DatasetStats {
@@ -100,10 +106,18 @@ interface CrosshairStats {
   totalBelowPercent: number
 }
 
+interface GapInfo {
+  startX: number // 压缩后的 X 位置
+  originalStart: Date
+  originalEnd: Date
+  duration: number // 间隙时长（毫秒）
+}
+
 const chartRef = ref<HTMLCanvasElement>()
 let chart: ChartJS<'scatter'> | null = null
 
 const crosshairY = ref<number | null>(null)
+const gapInfoList = ref<GapInfo[]>([])
 
 const crosshairStats = computed<CrosshairStats | null>(() => {
   if (crosshairY.value === null || !props.data.datasets) return null
@@ -152,9 +166,6 @@ const crosshairStats = computed<CrosshairStats | null>(() => {
   }
 })
 
-// 旧版插件（保留作为参考但不再使用，使用下方的 crosshairPluginWithTransform 代替）
-// const crosshairPlugin: Plugin<'scatter'> = { ... }
-
 // 自定义非线性 Y 轴转换函数
 // 0-10 分钟占据 70% 的空间，10-120 分钟占据 30% 的空间
 const BREAKPOINT = 10  // 分界点：10 分钟
@@ -185,19 +196,112 @@ function toRealValue(displayValue: number): number {
   }
 }
 
+// 压缩时间间隙的数据转换
+function compressTimeGaps(data: ChartData<'scatter'>): {
+  data: ChartData<'scatter'>
+  gaps: GapInfo[]
+  timeMapping: Map<number, number> // 原始时间 -> 压缩后时间
+} {
+  const gapThresholdMs = props.gapThreshold * 60 * 1000
+  const compressedGapSizeMs = props.compressedGapSize * 60 * 1000
+
+  // 收集所有数据点的时间戳并排序
+  const allTimestamps: number[] = []
+  for (const dataset of data.datasets) {
+    for (const point of dataset.data as Array<{ x: string; y: number }>) {
+      allTimestamps.push(new Date(point.x).getTime())
+    }
+  }
+  allTimestamps.sort((a, b) => a - b)
+
+  if (allTimestamps.length < 2) {
+    return { data, gaps: [], timeMapping: new Map() }
+  }
+
+  // 找出所有大间隙
+  const gaps: GapInfo[] = []
+  const timeMapping = new Map<number, number>()
+  let totalCompression = 0
+
+  for (let i = 1; i < allTimestamps.length; i++) {
+    const gap = allTimestamps[i] - allTimestamps[i - 1]
+    if (gap > gapThresholdMs) {
+      const compression = gap - compressedGapSizeMs
+      gaps.push({
+        startX: allTimestamps[i - 1] - totalCompression + compressedGapSizeMs / 2,
+        originalStart: new Date(allTimestamps[i - 1]),
+        originalEnd: new Date(allTimestamps[i]),
+        duration: gap
+      })
+      totalCompression += compression
+    }
+  }
+
+  // 构建时间映射
+  let currentCompression = 0
+  let gapIndex = 0
+  for (const ts of allTimestamps) {
+    // 检查是否跨过了某个间隙
+    while (gapIndex < gaps.length && ts >= gaps[gapIndex].originalEnd.getTime()) {
+      const gapDuration = gaps[gapIndex].originalEnd.getTime() - gaps[gapIndex].originalStart.getTime()
+      currentCompression += gapDuration - compressedGapSizeMs
+      gapIndex++
+    }
+    timeMapping.set(ts, ts - currentCompression)
+  }
+
+  // 更新间隙的 startX 为压缩后的坐标
+  gapIndex = 0
+  currentCompression = 0
+  for (const gap of gaps) {
+    gap.startX = gap.originalStart.getTime() - currentCompression + compressedGapSizeMs / 2
+    const gapDuration = gap.originalEnd.getTime() - gap.originalStart.getTime()
+    currentCompression += gapDuration - compressedGapSizeMs
+  }
+
+  // 转换数据
+  const compressedData: ChartData<'scatter'> = {
+    ...data,
+    datasets: data.datasets.map(dataset => ({
+      ...dataset,
+      data: (dataset.data as Array<{ x: string; y: number }>).map(point => {
+        const originalTs = new Date(point.x).getTime()
+        const compressedTs = timeMapping.get(originalTs) ?? originalTs
+        return {
+          ...point,
+          x: new Date(compressedTs).toISOString(),
+          _originalX: point.x // 保存原始时间
+        }
+      })
+    }))
+  }
+
+  return { data: compressedData, gaps, timeMapping }
+}
+
 // 转换数据点的 Y 值
 function transformData(data: ChartData<'scatter'>): ChartData<'scatter'> {
   return {
     ...data,
     datasets: data.datasets.map(dataset => ({
       ...dataset,
-      data: (dataset.data as Array<{ x: string; y: number }>).map(point => ({
+      data: (dataset.data as Array<{ x: string; y: number; _originalX?: string }>).map(point => ({
         ...point,
         y: toDisplayValue(point.y),
         _originalY: point.y  // 保存原始值用于 tooltip
       }))
     }))
   }
+}
+
+// 格式化时长
+function formatDuration(ms: number): string {
+  const hours = Math.floor(ms / (1000 * 60 * 60))
+  const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60))
+  if (hours > 0) {
+    return `${hours}h${minutes > 0 ? minutes + 'm' : ''}`
+  }
+  return `${minutes}m`
 }
 
 const defaultOptions: ChartOptions<'scatter'> = {
@@ -211,22 +315,19 @@ const defaultOptions: ChartOptions<'scatter'> = {
     x: {
       type: 'time',
       time: {
-        unit: 'hour',
         displayFormats: {
-          hour: 'MM-dd HH:mm'
-        }
+          hour: 'HH:mm'
+        },
+        tooltipFormat: 'HH:mm'
       },
       grid: {
         color: 'rgba(156, 163, 175, 0.1)'
       },
       ticks: {
         color: 'rgb(107, 114, 128)',
-        maxRotation: 45
-      },
-      title: {
-        display: true,
-        text: '时间',
-        color: 'rgb(107, 114, 128)'
+        maxRotation: 0,
+        autoSkip: true,
+        maxTicksLimit: 10
       }
     },
     y: {
@@ -280,6 +381,18 @@ const defaultOptions: ChartOptions<'scatter'> = {
       borderColor: 'rgb(75, 85, 99)',
       borderWidth: 1,
       callbacks: {
+        title: (contexts) => {
+          if (contexts.length === 0) return ''
+          const point = contexts[0].raw as { x: string; _originalX?: string }
+          const timeStr = point._originalX || point.x
+          const date = new Date(timeStr)
+          return date.toLocaleString('zh-CN', {
+            month: 'numeric',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+        },
         label: (context) => {
           const point = context.raw as { x: string; y: number; _originalY?: number }
           const realY = point._originalY ?? toRealValue(point.y)
@@ -347,6 +460,52 @@ const crosshairPluginWithTransform: Plugin<'scatter'> = {
   }
 }
 
+// 绘制间隙标记的插件
+const gapMarkerPlugin: Plugin<'scatter'> = {
+  id: 'gapMarker',
+  afterDraw: (chartInstance) => {
+    if (gapInfoList.value.length === 0) return
+
+    const { ctx, chartArea, scales } = chartInstance
+    const xScale = scales.x
+    if (!xScale || !chartArea) return
+
+    ctx.save()
+
+    for (const gap of gapInfoList.value) {
+      const xPixel = xScale.getPixelForValue(gap.startX)
+      if (xPixel < chartArea.left || xPixel > chartArea.right) continue
+
+      // 绘制波浪线断点标记
+      const waveHeight = 6
+      const waveWidth = 8
+      const y1 = chartArea.top
+      const y2 = chartArea.bottom
+
+      ctx.beginPath()
+      ctx.strokeStyle = 'rgba(156, 163, 175, 0.5)'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([])
+
+      // 绘制波浪线
+      for (let y = y1; y < y2; y += waveHeight * 2) {
+        ctx.moveTo(xPixel - waveWidth / 2, y)
+        ctx.quadraticCurveTo(xPixel + waveWidth / 2, y + waveHeight, xPixel - waveWidth / 2, y + waveHeight * 2)
+      }
+      ctx.stroke()
+
+      // 绘制间隙时长标签
+      ctx.fillStyle = 'rgba(107, 114, 128, 0.8)'
+      ctx.font = '10px sans-serif'
+      ctx.textAlign = 'center'
+      const label = formatDuration(gap.duration)
+      ctx.fillText(label, xPixel, chartArea.top - 4)
+    }
+
+    ctx.restore()
+  }
+}
+
 function handleMouseLeave() {
   crosshairY.value = null
   if (chart) {
@@ -357,8 +516,18 @@ function handleMouseLeave() {
 function createChart() {
   if (!chartRef.value) return
 
+  let dataToUse = props.data
+  gapInfoList.value = []
+
+  // 如果启用间隙压缩
+  if (props.compressGaps) {
+    const { data: compressedData, gaps } = compressTimeGaps(props.data)
+    dataToUse = compressedData
+    gapInfoList.value = gaps
+  }
+
   // 转换数据
-  const transformedData = transformData(props.data)
+  const transformedData = transformData(dataToUse)
 
   chart = new ChartJS(chartRef.value, {
     type: 'scatter',
@@ -367,7 +536,7 @@ function createChart() {
       ...defaultOptions,
       ...props.options
     },
-    plugins: [crosshairPluginWithTransform]
+    plugins: [crosshairPluginWithTransform, gapMarkerPlugin]
   })
 
   chartRef.value.addEventListener('mouseleave', handleMouseLeave)
@@ -375,7 +544,16 @@ function createChart() {
 
 function updateChart() {
   if (chart) {
-    chart.data = transformData(props.data)
+    let dataToUse = props.data
+    gapInfoList.value = []
+
+    if (props.compressGaps) {
+      const { data: compressedData, gaps } = compressTimeGaps(props.data)
+      dataToUse = compressedData
+      gapInfoList.value = gaps
+    }
+
+    chart.data = transformData(dataToUse)
     chart.update('none')
   }
 }
@@ -396,6 +574,13 @@ onUnmounted(() => {
 })
 
 watch(() => props.data, updateChart, { deep: true })
+watch(() => props.compressGaps, () => {
+  if (chart) {
+    chart.destroy()
+    chart = null
+  }
+  createChart()
+})
 watch(() => props.options, () => {
   if (chart) {
     chart.options = {

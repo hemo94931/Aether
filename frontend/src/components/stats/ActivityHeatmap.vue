@@ -1,5 +1,24 @@
 <template>
-  <div class="space-y-4 w-full overflow-visible">
+  <div class="space-y-4 w-full">
+    <!-- Tooltip 使用 Teleport 确保不受父容器 overflow 影响 -->
+    <Teleport to="body">
+      <div
+        v-if="tooltip.visible && tooltip.day"
+        class="fixed z-50 rounded-lg border border-border/70 bg-background px-3 py-2 text-xs shadow-lg backdrop-blur pointer-events-none"
+        :style="tooltipStyle"
+      >
+        <p class="font-medium">
+          {{ tooltip.day.date }}
+        </p>
+        <p class="mt-0.5">
+          {{ tooltip.day.requests }} 次请求 · {{ formatTokens(tooltip.day.total_tokens) }}
+        </p>
+        <p class="text-[11px] text-muted-foreground">
+          成本 {{ formatCurrency(tooltip.day.total_cost) }}
+        </p>
+      </div>
+    </Teleport>
+
     <div
       v-if="showHeader"
       class="flex items-center justify-between gap-4"
@@ -32,7 +51,7 @@
 
     <div
       v-if="weekColumns.length > 0"
-      class="flex w-full gap-3 overflow-visible"
+      class="flex w-full gap-3"
     >
       <div
         class="flex flex-col text-[10px] text-muted-foreground flex-shrink-0"
@@ -71,26 +90,11 @@
           class="flex items-center invisible"
         >周六</span>
       </div>
-      <div class="flex-1 min-w-[240px] overflow-visible">
+      <div class="flex-1 min-w-[200px]">
         <div
           ref="heatmapWrapper"
           class="relative block w-full"
         >
-          <div
-            v-if="tooltip.visible && tooltip.day"
-            class="fixed z-10 rounded-lg border border-border/70 bg-background px-3 py-2 text-xs shadow-lg backdrop-blur pointer-events-none"
-            :style="tooltipStyle"
-          >
-            <p class="font-medium">
-              {{ tooltip.day.date }}
-            </p>
-            <p class="mt-0.5">
-              {{ tooltip.day.requests }} 次请求 · {{ formatTokens(tooltip.day.total_tokens) }}
-            </p>
-            <p class="text-[11px] text-muted-foreground">
-              成本 {{ formatCurrency(tooltip.day.total_cost) }}
-            </p>
-          </div>
           <div
             class="flex text-[10px] text-muted-foreground/80 mb-3"
             :style="horizontalGapStyle"
@@ -286,8 +290,8 @@ const recalcCellSize = () => {
   const totalGap = Math.max(columnCount - 1, 0) * cellGap.value
   const availableSpace = Math.max(heatmapWidth.value - totalGap, 0)
   const rawSize = availableSpace / columnCount
-  // 不设置上限，让格子填满可用空间
-  cellSize.value = rawSize > 0 ? rawSize : 8
+  // 自适应尺寸，最小 6px
+  cellSize.value = Math.max(6, rawSize)
 }
 
 watch(
