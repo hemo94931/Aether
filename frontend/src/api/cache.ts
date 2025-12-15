@@ -290,6 +290,19 @@ export interface UnmappedEntry {
   ttl: number | null
 }
 
+// Provider 模型映射缓存（Redis 缓存）
+export interface ProviderModelMapping {
+  provider_id: string
+  provider_name: string
+  global_model_id: string
+  global_model_name: string
+  global_model_display_name: string | null
+  provider_model_name: string
+  aliases: string[] | null
+  ttl: number | null
+  hit_count: number
+}
+
 export interface ModelMappingCacheStats {
   available: boolean
   message?: string
@@ -303,6 +316,7 @@ export interface ModelMappingCacheStats {
     global_model_resolve: number
   }
   mappings?: ModelMappingItem[]
+  provider_model_mappings?: ProviderModelMapping[] | null
   unmapped?: UnmappedEntry[] | null
 }
 
@@ -336,6 +350,14 @@ export const modelMappingCacheApi = {
    */
   async clearByName(modelName: string): Promise<ClearModelMappingCacheResponse> {
     const response = await api.delete(`/api/admin/monitoring/cache/model-mapping/${encodeURIComponent(modelName)}`)
+    return response.data
+  },
+
+  /**
+   * 清除指定 Provider 和 GlobalModel 的映射缓存
+   */
+  async clearProviderModel(providerId: string, globalModelId: string): Promise<ClearModelMappingCacheResponse> {
+    const response = await api.delete(`/api/admin/monitoring/cache/model-mapping/provider/${providerId}/${globalModelId}`)
     return response.data
   }
 }

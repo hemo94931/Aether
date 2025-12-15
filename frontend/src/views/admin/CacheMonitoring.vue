@@ -299,6 +299,26 @@ async function clearModelMappingByName(modelName: string) {
   }
 }
 
+async function clearProviderModelMapping(providerId: string, globalModelId: string, displayName?: string) {
+  const confirmed = await showConfirm({
+    title: '确认清除',
+    message: `确定要清除 ${displayName || 'Provider 模型映射'} 的缓存吗？`,
+    confirmText: '确认清除',
+    variant: 'destructive'
+  })
+
+  if (!confirmed) return
+
+  try {
+    await modelMappingCacheApi.clearProviderModel(providerId, globalModelId)
+    showSuccess('已清除 Provider 模型映射缓存')
+    await fetchModelMappingStats()
+  } catch (error) {
+    showError('清除缓存失败')
+    log.error('清除 Provider 模型映射缓存失败', error)
+  }
+}
+
 function formatTTL(ttl: number | null): string {
   if (ttl === null || ttl < 0) return '-'
   if (ttl < 60) return `${ttl}s`
@@ -872,9 +892,125 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <!-- Provider 模型映射缓存 -->
+      <div
+        v-if="modelMappingStats?.available && modelMappingStats.provider_model_mappings && modelMappingStats.provider_model_mappings.length > 0"
+        class="border-t border-border/40"
+      >
+        <div class="px-6 py-3 text-xs text-muted-foreground border-b border-border/30 bg-muted/20">
+          Provider 模型映射缓存
+        </div>
+        <!-- 桌面端表格 -->
+        <Table class="hidden md:table">
+          <TableHeader>
+            <TableRow>
+              <TableHead class="w-[15%]">
+                提供商
+              </TableHead>
+              <TableHead class="w-[25%]">
+                请求名称
+              </TableHead>
+              <TableHead class="w-8 text-center" />
+              <TableHead class="w-[25%]">
+                映射模型
+              </TableHead>
+              <TableHead class="w-[10%] text-center">
+                剩余
+              </TableHead>
+              <TableHead class="w-[10%] text-center">
+                次数
+              </TableHead>
+              <TableHead class="w-[7%] text-right">
+                操作
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <template
+              v-for="(mapping, index) in modelMappingStats.provider_model_mappings"
+              :key="index"
+            >
+              <TableRow
+                v-for="(alias, aliasIndex) in (mapping.aliases || [])"
+                :key="`${index}-${aliasIndex}`"
+              >
+                <TableCell>
+                  <Badge variant="outline" class="text-xs">
+                    {{ mapping.provider_name }}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <span class="text-sm font-mono">{{ alias }}</span>
+                </TableCell>
+                <TableCell class="text-center">
+                  <ArrowRight class="h-4 w-4 text-muted-foreground" />
+                </TableCell>
+                <TableCell>
+                  <span class="text-sm font-mono font-medium">{{ mapping.provider_model_name }}</span>
+                </TableCell>
+                <TableCell class="text-center">
+                  <span class="text-xs text-muted-foreground">{{ formatTTL(mapping.ttl) }}</span>
+                </TableCell>
+                <TableCell class="text-center">
+                  <span class="text-sm">{{ mapping.hit_count || 0 }}</span>
+                </TableCell>
+                <TableCell class="text-right">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    class="h-7 w-7 text-muted-foreground/70 hover:text-destructive"
+                    title="清除缓存"
+                    @click="clearProviderModelMapping(mapping.provider_id, mapping.global_model_id, `${mapping.provider_name} - ${alias}`)"
+                  >
+                    <Trash2 class="h-3.5 w-3.5" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            </template>
+          </TableBody>
+        </Table>
+        <!-- 移动端卡片 -->
+        <div class="md:hidden divide-y divide-border/40">
+          <template
+            v-for="(mapping, index) in modelMappingStats.provider_model_mappings"
+            :key="`m-pm-${index}`"
+          >
+            <div
+              v-for="(alias, aliasIndex) in (mapping.aliases || [])"
+              :key="`m-pm-${index}-${aliasIndex}`"
+              class="p-4 space-y-2"
+            >
+              <div class="flex items-center justify-between">
+                <Badge variant="outline" class="text-xs">
+                  {{ mapping.provider_name }}
+                </Badge>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted-foreground">{{ formatTTL(mapping.ttl) }}</span>
+                  <span class="text-xs">{{ mapping.hit_count || 0 }}次</span>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    class="h-6 w-6 text-muted-foreground/70 hover:text-destructive"
+                    title="清除缓存"
+                    @click="clearProviderModelMapping(mapping.provider_id, mapping.global_model_id, `${mapping.provider_name} - ${alias}`)"
+                  >
+                    <Trash2 class="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 text-sm">
+                <span class="font-mono">{{ alias }}</span>
+                <ArrowRight class="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+                <span class="font-mono font-medium">{{ mapping.provider_model_name }}</span>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
       <!-- 无缓存状态 -->
       <div
-        v-else-if="modelMappingStats?.available && (!modelMappingStats.mappings || modelMappingStats.mappings.length === 0) && (!modelMappingStats.unmapped || modelMappingStats.unmapped.length === 0)"
+        v-else-if="modelMappingStats?.available && (!modelMappingStats.mappings || modelMappingStats.mappings.length === 0) && (!modelMappingStats.unmapped || modelMappingStats.unmapped.length === 0) && (!modelMappingStats.provider_model_mappings || modelMappingStats.provider_model_mappings.length === 0)"
         class="px-6 py-8 text-center text-sm text-muted-foreground"
       >
         暂无模型解析缓存
