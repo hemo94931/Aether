@@ -157,6 +157,7 @@ class UsageService:
         api_format: Optional[str] = None,
         is_stream: bool = False,
         response_time_ms: Optional[int] = None,
+        first_byte_time_ms: Optional[int] = None,  # 首字时间 (TTFB)
         status_code: int = 200,
         error_message: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
@@ -368,6 +369,7 @@ class UsageService:
             status_code=status_code,
             error_message=error_message,
             response_time_ms=response_time_ms,
+            first_byte_time_ms=first_byte_time_ms,  # 首字时间 (TTFB)
             status=status,  # 请求状态追踪
             request_metadata=metadata,
             request_headers=processed_request_headers,
@@ -419,6 +421,7 @@ class UsageService:
         api_format: Optional[str] = None,
         is_stream: bool = False,
         response_time_ms: Optional[int] = None,
+        first_byte_time_ms: Optional[int] = None,  # 首字时间 (TTFB)
         status_code: int = 200,
         error_message: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
@@ -629,6 +632,7 @@ class UsageService:
             status_code=status_code,
             error_message=error_message,
             response_time_ms=response_time_ms,
+            first_byte_time_ms=first_byte_time_ms,  # 首字时间 (TTFB)
             status=status,  # 请求状态追踪
             request_metadata=metadata,
             request_headers=processed_request_headers,
@@ -649,6 +653,7 @@ class UsageService:
             existing_usage.status_code = status_code
             existing_usage.error_message = error_message
             existing_usage.response_time_ms = response_time_ms
+            existing_usage.first_byte_time_ms = first_byte_time_ms  # 更新首字时间
             # 更新请求头和请求体（如果有新值）
             if processed_request_headers is not None:
                 existing_usage.request_headers = processed_request_headers
@@ -1315,11 +1320,11 @@ class UsageService:
         default_timeout_seconds: int = 300,
     ) -> List[Dict[str, Any]]:
         """
-        获取活跃请求状态（用于前端轮询），并自动清理超时的 pending 请求
+        获取活跃请求状态（用于前端轮询），并自动清理超时的 pending/streaming 请求
 
         与 get_active_requests 不同，此方法：
         1. 返回轻量级的状态字典而非完整 Usage 对象
-        2. 自动检测并清理超时的 pending 请求
+        2. 自动检测并清理超时的 pending/streaming 请求
         3. 支持按 ID 列表查询特定请求
 
         Args:
@@ -1343,6 +1348,7 @@ class UsageService:
             Usage.output_tokens,
             Usage.total_cost_usd,
             Usage.response_time_ms,
+            Usage.first_byte_time_ms,  # 首字时间 (TTFB)
             Usage.created_at,
             Usage.provider_endpoint_id,
             ProviderEndpoint.timeout.label("endpoint_timeout"),
@@ -1361,10 +1367,10 @@ class UsageService:
 
         records = query.all()
 
-        # 检查超时的 pending 请求
+        # 检查超时的 pending/streaming 请求
         timeout_ids = []
         for r in records:
-            if r.status == "pending" and r.created_at:
+            if r.status in ("pending", "streaming") and r.created_at:
                 # 使用端点配置的超时时间，若无则使用默认值
                 timeout_seconds = r.endpoint_timeout or default_timeout_seconds
 
@@ -1392,6 +1398,7 @@ class UsageService:
                 "output_tokens": r.output_tokens,
                 "cost": float(r.total_cost_usd) if r.total_cost_usd else 0,
                 "response_time_ms": r.response_time_ms,
+                "first_byte_time_ms": r.first_byte_time_ms,  # 首字时间 (TTFB)
             }
             for r in records
         ]

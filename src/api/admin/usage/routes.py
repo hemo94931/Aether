@@ -628,6 +628,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                     "actual_cost": actual_cost,
                     "rate_multiplier": rate_multiplier,
                     "response_time_ms": usage.response_time_ms,
+                    "first_byte_time_ms": usage.first_byte_time_ms,  # 首字时间 (TTFB)
                     "created_at": usage.created_at.isoformat(),
                     "is_stream": usage.is_stream,
                     "input_price_per_1m": usage.input_price_per_1m,
@@ -738,6 +739,7 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
             "status_code": usage_record.status_code,
             "error_message": usage_record.error_message,
             "response_time_ms": usage_record.response_time_ms,
+            "first_byte_time_ms": usage_record.first_byte_time_ms,  # 首字时间 (TTFB)
             "created_at": usage_record.created_at.isoformat() if usage_record.created_at else None,
             "request_headers": usage_record.request_headers,
             "request_body": usage_record.get_request_body(),
