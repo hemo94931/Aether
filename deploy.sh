@@ -21,9 +21,9 @@ HASH_FILE=".deps-hash"
 CODE_HASH_FILE=".code-hash"
 MIGRATION_HASH_FILE=".migration-hash"
 
-# 计算依赖文件的哈希值
+# 计算依赖文件的哈希值（包含 Dockerfile.base.local）
 calc_deps_hash() {
-    cat pyproject.toml frontend/package.json frontend/package-lock.json 2>/dev/null | md5sum | cut -d' ' -f1
+    cat pyproject.toml frontend/package.json frontend/package-lock.json Dockerfile.base.local 2>/dev/null | md5sum | cut -d' ' -f1
 }
 
 # 计算代码文件的哈希值
