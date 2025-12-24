@@ -58,3 +58,16 @@ export async function deleteProvider(providerId: string): Promise<{ message: str
   return response.data
 }
 
+/**
+ * 测试模型连接性
+ */
+export async function testModel(data: {
+  provider_id: string
+  model_name: string
+  api_key_id?: string
+  message?: string
+}): Promise<any> {
+  const response = await client.post('/api/admin/provider-query/test-model', data)
+  return response.data
+}
+
