@@ -2,7 +2,7 @@
 提供商策略管理 API 端点
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -103,6 +103,9 @@ class AdminProviderBillingAdapter(AdminApiAdapter):
 
         if config.quota_last_reset_at:
             new_reset_at = parser.parse(config.quota_last_reset_at)
+            # 确保有时区信息，如果没有则假设为 UTC
+            if new_reset_at.tzinfo is None:
+                new_reset_at = new_reset_at.replace(tzinfo=timezone.utc)
             provider.quota_last_reset_at = new_reset_at
 
             # 自动同步该周期内的历史使用量
@@ -118,7 +121,11 @@ class AdminProviderBillingAdapter(AdminApiAdapter):
             logger.info(f"Synced usage for provider {provider.name}: ${period_usage:.4f} since {new_reset_at}")
 
         if config.quota_expires_at:
-            provider.quota_expires_at = parser.parse(config.quota_expires_at)
+            expires_at = parser.parse(config.quota_expires_at)
+            # 确保有时区信息，如果没有则假设为 UTC
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            provider.quota_expires_at = expires_at
 
         db.commit()
         db.refresh(provider)
@@ -149,7 +156,7 @@ class AdminProviderStatsAdapter(AdminApiAdapter):
         if not provider:
             raise HTTPException(status_code=404, detail="Provider not found")
 
-        since = datetime.now() - timedelta(hours=self.hours)
+        since = datetime.now(timezone.utc) - timedelta(hours=self.hours)
         stats = (
             db.query(ProviderUsageTracking)
             .filter(

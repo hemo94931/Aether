@@ -21,7 +21,7 @@ WARNING: 多进程环境注意事项
 import asyncio
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Deque, Dict
 
 from src.core.logger import logger
@@ -95,12 +95,12 @@ class SlidingWindow:
         """获取最早的重置时间"""
         self._cleanup()
         if not self.requests:
-            return datetime.now()
+            return datetime.now(timezone.utc)
 
         # 最早的请求将在window_size秒后过期
         oldest_request = self.requests[0]
         reset_time = oldest_request + self.window_size
-        return datetime.fromtimestamp(reset_time)
+        return datetime.fromtimestamp(reset_time, tz=timezone.utc)
 
 
 class SlidingWindowStrategy(RateLimitStrategy):
@@ -250,7 +250,7 @@ class SlidingWindowStrategy(RateLimitStrategy):
             retry_after = None
             if not allowed:
                 # 计算需要等待的时间（最早请求过期的时间）
-                retry_after = int((reset_at - datetime.now()).total_seconds()) + 1
+                retry_after = int((reset_at - datetime.now(timezone.utc)).total_seconds()) + 1
 
             return RateLimitResult(
                 allowed=allowed,

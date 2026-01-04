@@ -3,7 +3,7 @@
 import asyncio
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from ...clients.redis_client import get_redis_client_sync
@@ -63,11 +63,11 @@ class TokenBucket:
     def get_reset_time(self) -> datetime:
         """获取下次完全恢复的时间"""
         if self.tokens >= self.capacity:
-            return datetime.now()
+            return datetime.now(timezone.utc)
 
         tokens_needed = self.capacity - self.tokens
         seconds_to_full = tokens_needed / self.refill_rate
-        return datetime.now() + timedelta(seconds=seconds_to_full)
+        return datetime.now(timezone.utc) + timedelta(seconds=seconds_to_full)
 
 
 class TokenBucketStrategy(RateLimitStrategy):
@@ -370,7 +370,7 @@ class RedisTokenBucketBackend:
 
         if tokens is None or last_refill is None:
             remaining = capacity
-            reset_at = datetime.now() + timedelta(seconds=capacity / refill_rate)
+            reset_at = datetime.now(timezone.utc) + timedelta(seconds=capacity / refill_rate)
         else:
             tokens_value = float(tokens)
             last_refill_value = float(last_refill)
@@ -378,7 +378,7 @@ class RedisTokenBucketBackend:
             tokens_value = min(capacity, tokens_value + delta * refill_rate)
             remaining = int(tokens_value)
             reset_after = 0 if tokens_value >= capacity else (capacity - tokens_value) / refill_rate
-            reset_at = datetime.now() + timedelta(seconds=reset_after)
+            reset_at = datetime.now(timezone.utc) + timedelta(seconds=reset_after)
 
         allowed = remaining >= amount
         retry_after = None
