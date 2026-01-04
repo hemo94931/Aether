@@ -834,6 +834,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             last_data_time = time.time()
             buffer = b""
             first_yield = True  # 标记是否是第一次 yield
+            streaming_status_updated = False  # 标记状态是否已更新
             # 使用增量解码器处理跨 chunk 的 UTF-8 字符
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
@@ -843,6 +844,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 在第一次输出数据前更新状态为 streaming
             if prefetched_chunks:
                 self._update_usage_to_streaming_with_ctx(ctx)
+                streaming_status_updated = True
 
             # 先处理预读的字节块
             for chunk in prefetched_chunks:
@@ -907,6 +909,11 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
             # 继续处理剩余的流数据（使用同一个迭代器）
             async for chunk in byte_iterator:
+                # 如果预读数据为空，在收到第一个 chunk 时更新状态
+                if not streaming_status_updated:
+                    self._update_usage_to_streaming_with_ctx(ctx)
+                    streaming_status_updated = True
+
                 buffer += chunk
                 # 处理缓冲区中的完整行
                 while b"\n" in buffer:

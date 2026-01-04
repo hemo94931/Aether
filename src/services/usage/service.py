@@ -1503,6 +1503,12 @@ class UsageService:
             usage.error_message = error_message
         if provider:
             usage.provider = provider
+        elif status == "streaming" and usage.provider == "pending":
+            # 状态变为 streaming 但 provider 仍为 pending，记录警告
+            logger.warning(
+                f"状态更新为 streaming 但 provider 为空: request_id={request_id}, "
+                f"当前 provider={usage.provider}"
+            )
         if target_model:
             usage.target_model = target_model
         if first_byte_time_ms is not None:

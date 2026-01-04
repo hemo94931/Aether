@@ -423,6 +423,13 @@ class BaseMessageHandler:
         provider = ctx.provider_name
         target_model = ctx.mapped_model
 
+        # 如果 provider 为空，记录警告（不应该发生，但用于调试）
+        if not provider:
+            logger.warning(
+                f"[{target_request_id}] 更新 streaming 状态时 provider 为空: "
+                f"ctx.provider_name={ctx.provider_name}, ctx.provider_id={ctx.provider_id}"
+            )
+
         async def _do_update() -> None:
             try:
                 db_gen = get_db()
