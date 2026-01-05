@@ -24,6 +24,7 @@ class GeminiCliAdapter(CliAdapterBase):
     """
 
     FORMAT_ID = "GEMINI_CLI"
+    BILLING_TEMPLATE = "gemini"  # 使用 Gemini 计费模板
     name = "gemini.cli"
 
     @property

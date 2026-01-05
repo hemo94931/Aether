@@ -24,6 +24,7 @@ class OpenAICliAdapter(CliAdapterBase):
     """
 
     FORMAT_ID = "OPENAI_CLI"
+    BILLING_TEMPLATE = "openai"  # 使用 OpenAI 计费模板
     name = "openai.cli"
 
     @property

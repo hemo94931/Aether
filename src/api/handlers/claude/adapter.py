@@ -63,6 +63,7 @@ class ClaudeChatAdapter(ChatAdapterBase):
     """
 
     FORMAT_ID = "CLAUDE"
+    BILLING_TEMPLATE = "claude"  # 使用 Claude 计费模板
     name = "claude.chat"
 
     @property

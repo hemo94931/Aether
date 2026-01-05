@@ -27,6 +27,7 @@ class GeminiChatAdapter(ChatAdapterBase):
     """
 
     FORMAT_ID = "GEMINI"
+    BILLING_TEMPLATE = "gemini"  # 使用 Gemini 计费模板
     name = "gemini.chat"
 
     @property

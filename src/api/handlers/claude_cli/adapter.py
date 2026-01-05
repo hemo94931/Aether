@@ -24,6 +24,7 @@ class ClaudeCliAdapter(CliAdapterBase):
     """
 
     FORMAT_ID = "CLAUDE_CLI"
+    BILLING_TEMPLATE = "claude"  # 使用 Claude 计费模板
     name = "claude.cli"
 
     @property

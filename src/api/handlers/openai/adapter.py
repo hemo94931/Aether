@@ -26,6 +26,7 @@ class OpenAIChatAdapter(ChatAdapterBase):
     """
 
     FORMAT_ID = "OPENAI"
+    BILLING_TEMPLATE = "openai"  # 使用 OpenAI 计费模板
     name = "openai.chat"
 
     @property
