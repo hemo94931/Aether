@@ -20,43 +20,6 @@
           API 配置
         </h3>
 
-        <!-- API 格式 -->
-        <div class="space-y-2">
-          <Label for="api_format">API 格式 *</Label>
-          <template v-if="isEditMode">
-            <Input
-              id="api_format"
-              v-model="form.api_format"
-              disabled
-              class="bg-muted"
-            />
-            <p class="text-xs text-muted-foreground">
-              API 格式创建后不可修改
-            </p>
-          </template>
-          <template v-else>
-            <div class="grid grid-cols-2 gap-3">
-              <label
-                v-for="format in apiFormats"
-                :key="format.value"
-                class="flex items-center gap-3 rounded-lg border p-4 cursor-pointer transition-colors hover:bg-accent"
-                :class="selectedFormats.includes(format.value) ? 'border-primary bg-accent' : 'border-border'"
-              >
-                <input
-                  type="checkbox"
-                  :value="format.value"
-                  v-model="selectedFormats"
-                  class="h-4 w-4 text-primary focus:ring-2 focus:ring-primary rounded"
-                />
-                <span class="text-sm font-medium">{{ format.label }}</span>
-              </label>
-            </div>
-            <p class="text-xs text-muted-foreground">
-              选择一个或多个 API 格式，将为每个格式创建独立的端点
-            </p>
-          </template>
-        </div>
-
         <!-- API URL 和自定义路径 -->
         <div class="grid grid-cols-2 gap-4">
           <div class="space-y-2">
@@ -76,10 +39,62 @@
               v-model="form.custom_path"
               :placeholder="isEditMode ? defaultPathPlaceholder : '留空使用各格式的默认路径'"
             />
-            <p v-if="!isEditMode && selectedFormats.length > 0" class="text-xs text-muted-foreground">
-              将为所有选中的格式使用相同的 URL 和路径配置
-            </p>
           </div>
+        </div>
+
+        <!-- API 格式 -->
+        <div class="space-y-2">
+          <Label for="api_format">API 格式 *</Label>
+          <template v-if="isEditMode">
+            <Input
+              id="api_format"
+              v-model="form.api_format"
+              disabled
+              class="bg-muted"
+            />
+            <p class="text-xs text-muted-foreground">
+              API 格式创建后不可修改
+            </p>
+          </template>
+          <template v-else>
+            <div class="grid grid-cols-3 grid-flow-col grid-rows-2 gap-2">
+              <label
+                v-for="format in sortedApiFormats"
+                :key="format.value"
+                class="flex items-center gap-2 rounded-md border px-3 py-2 cursor-pointer transition-all text-sm"
+                :class="selectedFormats.includes(format.value)
+                  ? 'border-primary bg-primary/10 text-primary font-medium'
+                  : 'border-border hover:border-primary/50 hover:bg-accent'"
+              >
+                <input
+                  type="checkbox"
+                  :value="format.value"
+                  v-model="selectedFormats"
+                  class="sr-only"
+                />
+                <span
+                  class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors"
+                  :class="selectedFormats.includes(format.value)
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-muted-foreground/30'"
+                >
+                  <svg
+                    v-if="selectedFormats.includes(format.value)"
+                    class="h-3 w-3"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                </span>
+                <span>{{ format.label }}</span>
+              </label>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -89,7 +104,7 @@
           请求配置
         </h3>
 
-        <div class="grid grid-cols-3 gap-4">
+        <div class="grid grid-cols-4 gap-4">
           <div class="space-y-2">
             <Label for="timeout">超时（秒）</Label>
             <Input
@@ -120,11 +135,9 @@
               @update:model-value="(v) => form.max_concurrent = parseNumberInput(v)"
             />
           </div>
-        </div>
 
-        <div class="grid grid-cols-2 gap-4">
           <div class="space-y-2">
-            <Label for="rate_limit">速率限制（请求/分钟）</Label>
+            <Label for="rate_limit">速率限制（/分钟）</Label>
             <Input
               id="rate_limit"
               :model-value="form.rate_limit ?? ''"
@@ -248,11 +261,6 @@ import {
   Button,
   Input,
   Label,
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
   Switch,
 } from '@/components/ui'
 import AlertDialog from '@/components/common/AlertDialog.vue'
@@ -283,7 +291,6 @@ const emit = defineEmits<{
 
 const { success, error: showError } = useToast()
 const loading = ref(false)
-const selectOpen = ref(false)
 const proxyEnabled = ref(false)
 const showClearCredentialsDialog = ref(false)  // 确认清空凭据对话框
 
@@ -315,6 +322,22 @@ const selectedFormats = ref<string[]>([])
 // API 格式列表
 const apiFormats = ref<Array<{ value: string; label: string; default_path: string; aliases: string[] }>>([])
 
+// 排序后的 API 格式：按列排列，每列是基础格式+CLI格式
+const sortedApiFormats = computed(() => {
+  const baseFormats = apiFormats.value.filter(f => !f.value.endsWith('_cli'))
+  const cliFormats = apiFormats.value.filter(f => f.value.endsWith('_cli'))
+  // 交错排列：base1, cli1, base2, cli2, base3, cli3
+  const result: typeof apiFormats.value = []
+  for (let i = 0; i < baseFormats.length; i++) {
+    result.push(baseFormats[i])
+    const cliFormat = cliFormats.find(f => f.value === baseFormats[i].value + '_cli')
+    if (cliFormat) {
+      result.push(cliFormat)
+    }
+  }
+  return result
+})
+
 // 加载API格式列表
 const loadApiFormats = async () => {
   try {
@@ -336,7 +359,7 @@ const defaultPath = computed(() => {
 
 // 动态 placeholder
 const defaultPathPlaceholder = computed(() => {
-  return `留空使用默认路径：${defaultPath.value}`
+  return defaultPath.value
 })
 
 // 检查是否有已保存的密码（后端返回 *** 表示有密码）
@@ -508,14 +531,11 @@ const handleSubmit = async (skipCredentialCheck = false) => {
       emit('endpointUpdated')
       emit('update:modelValue', false)
     } else if (props.provider) {
-      // 批量创建端点
-      let failCount = 0
-      const errors: string[] = []
-
-      for (const apiFormat of selectedFormats.value) {
-        try {
-          await createEndpoint(props.provider.id, {
-            provider_id: props.provider.id,
+      // 批量创建端点 - 使用并发请求提升性能
+      const results = await Promise.allSettled(
+        selectedFormats.value.map(apiFormat =>
+          createEndpoint(props.provider!.id, {
+            provider_id: props.provider!.id,
             api_format: apiFormat,
             base_url: form.value.base_url,
             custom_path: form.value.custom_path || undefined,
@@ -526,22 +546,29 @@ const handleSubmit = async (skipCredentialCheck = false) => {
             is_active: form.value.is_active,
             proxy: proxyConfig,
           })
+        )
+      )
+
+      // 统计结果
+      const errors: string[] = []
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
           successCount++
-        } catch (error: any) {
-          failCount++
+        } else {
+          const apiFormat = selectedFormats.value[index]
           const formatLabel = apiFormats.value.find((f: any) => f.value === apiFormat)?.label || apiFormat
-          errors.push(`${formatLabel}: ${error.response?.data?.detail || '创建失败'}`)
+          const errorMsg = result.reason?.response?.data?.detail || '创建失败'
+          errors.push(`${formatLabel}: ${errorMsg}`)
         }
-      }
+      })
+
+      const failCount = errors.length
 
       // 显示结果
       if (successCount > 0 && failCount === 0) {
         success(`成功创建 ${successCount} 个端点`, '创建成功')
       } else if (successCount > 0 && failCount > 0) {
-        success(`成功创建 ${successCount} 个端点，${failCount} 个失败`, '部分成功')
-        if (errors.length > 0) {
-          log.error('创建端点失败:', errors)
-        }
+        showError(`${failCount} 个端点创建失败:\n${errors.join('\n')}`, `${successCount} 个成功，${failCount} 个失败`)
       } else {
         showError(errors.join('\n') || '创建端点失败', '创建失败')
       }
