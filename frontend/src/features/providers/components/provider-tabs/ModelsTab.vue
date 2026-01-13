@@ -121,15 +121,6 @@
                   variant="ghost"
                   size="icon"
                   class="h-8 w-8"
-                  title="添加映射"
-                  @click="addMapping(model)"
-                >
-                  <Link class="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="h-8 w-8"
                   title="编辑"
                   @click="editModel(model)"
                 >
@@ -179,7 +170,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Box, Edit, Trash2, Layers, Power, Copy, Link } from 'lucide-vue-next'
+import { Box, Edit, Trash2, Layers, Power, Copy } from 'lucide-vue-next'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
 import { useToast } from '@/composables/useToast'
@@ -195,7 +186,6 @@ const emit = defineEmits<{
   'editModel': [model: Model]
   'deleteModel': [model: Model]
   'batchAssign': []
-  'addMapping': [model: Model]
 }>()
 
 const { error: showError, success: showSuccess } = useToast()
@@ -313,11 +303,6 @@ function editModel(model: Model) {
 // 删除模型
 function deleteModel(model: Model) {
   emit('deleteModel', model)
-}
-
-// 添加映射
-function addMapping(model: Model) {
-  emit('addMapping', model)
 }
 
 // 打开批量关联对话框

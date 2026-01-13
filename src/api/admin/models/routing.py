@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.pipeline import ApiRequestPipeline
+from src.core.model_permissions import parse_allowed_models_to_list
 from src.database import get_db
 from src.models.database import (
     GlobalModel,
@@ -49,6 +50,8 @@ class RoutingKeyInfo(BaseModel):
     health_score: float = Field(100.0, description="健康度分数")
     is_active: bool
     api_formats: List[str] = Field(default_factory=list, description="支持的 API 格式")
+    # 模型白名单
+    allowed_models: Optional[List[str]] = Field(None, description="允许的模型列表，null 表示不限制")
     # 熔断状态
     circuit_breaker_open: bool = Field(False, description="熔断器是否打开")
     circuit_breaker_formats: List[str] = Field(default_factory=list, description="熔断的 API 格式列表")
@@ -299,6 +302,21 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
                                 circuit_breaker_open = True
                                 circuit_breaker_formats.append(fmt)
 
+                    # 解析 allowed_models
+                    # 语义说明：
+                    # - None: 不限制（允许所有模型）
+                    # - {}: 空字典 = 不限制（normalize_allowed_models 返回 None）
+                    # - []: 空列表 = 拒绝所有模型
+                    # - {"CLAUDE": []}: 指定格式空列表 = 该格式拒绝所有
+                    raw_allowed_models = key.allowed_models
+                    if raw_allowed_models is None:
+                        allowed_models_list = None
+                    elif isinstance(raw_allowed_models, dict) and not raw_allowed_models:
+                        # 空 dict {} 在语义上等价于不限制
+                        allowed_models_list = None
+                    else:
+                        allowed_models_list = parse_allowed_models_to_list(raw_allowed_models)
+
                     key_infos.append(
                         RoutingKeyInfo(
                             id=key.id or "",
@@ -313,6 +331,7 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
                             health_score=health_score,
                             is_active=bool(key.is_active),
                             api_formats=key.api_formats or [],
+                            allowed_models=allowed_models_list,
                             circuit_breaker_open=circuit_breaker_open,
                             circuit_breaker_formats=circuit_breaker_formats,
                         )
