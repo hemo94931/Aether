@@ -296,10 +296,10 @@
                     <!-- 提供商行 -->
                     <div class="flex py-1">
                       <!-- 左侧：节点 + 连线 -->
-                      <div class="w-6 flex flex-col items-center shrink-0">
+                      <div class="w-6 flex flex-col items-center shrink-0 self-stretch">
                         <!-- 上半段连线 -->
                         <div
-                          class="w-0.5 flex-1"
+                          class="w-0.5 h-5"
                           :class="providerIndex === 0 ? 'bg-transparent' : 'bg-border'"
                         />
                         <!-- 节点圆点 -->
@@ -307,7 +307,7 @@
                           class="w-3 h-3 rounded-full border-2 shrink-0"
                           :class="getFormatProviderNodeClass(providerEntry, providerIndex)"
                         />
-                        <!-- 下半段连线 -->
+                        <!-- 下半段连线（延伸到底部） -->
                         <div
                           class="w-0.5 flex-1"
                           :class="providerIndex === formatGroup.providers.length - 1 ? 'bg-transparent' : 'bg-border'"
