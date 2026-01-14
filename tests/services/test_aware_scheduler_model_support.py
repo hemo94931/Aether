@@ -2,7 +2,7 @@
 测试 aware_scheduler 的模型支持检查逻辑
 
 场景：
-- GlobalModel claude-haiku 配置了 model_aliases: ["haiku", "claude.*haiku.*"]
+- GlobalModel claude-haiku 配置了 model_mappings: ["haiku", "claude.*haiku.*"]
 - Provider A：Model 表有记录关联到 claude-haiku
 - Provider B：Model 表没有记录关联到 claude-haiku
 - 用户请求 haiku 模型

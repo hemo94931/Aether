@@ -4,9 +4,9 @@
 allowed_models 格式: ["claude-sonnet-4", "gpt-4o"]
 使用 None/null 表示不限制（允许所有模型）
 
-支持模型别名匹配：
-- GlobalModel.config.model_aliases 定义别名模式
-- 别名模式支持正则表达式语法
+支持模型映射匹配：
+- GlobalModel.config.model_mappings 定义映射模式
+- 映射模式支持正则表达式语法
 - 例如：claude-haiku-.* 可匹配 claude-haiku-4.5, claude-haiku-last
 - 使用 regex 库的原生超时保护（100ms）防止 ReDoS
 """
@@ -19,10 +19,10 @@ import regex
 
 from src.core.logger import logger
 
-# 别名规则限制
-MAX_ALIASES_PER_MODEL = 50
-MAX_ALIAS_LENGTH = 200
-MAX_MODEL_NAME_LENGTH = 200  # 与 MAX_ALIAS_LENGTH 保持一致
+# 映射规则限制
+MAX_MAPPINGS_PER_MODEL = 50
+MAX_MAPPING_LENGTH = 200
+MAX_MODEL_NAME_LENGTH = 200  # 与 MAX_MAPPING_LENGTH 保持一致
 REGEX_MATCH_TIMEOUT_MS = 100  # 正则匹配超时（毫秒）
 
 # 类型别名
@@ -154,9 +154,9 @@ def parse_allowed_models_to_list(allowed_models: AllowedModels) -> List[str]:
     return list(allowed_models)
 
 
-def validate_alias_pattern(pattern: str) -> Tuple[bool, Optional[str]]:
+def validate_mapping_pattern(pattern: str) -> Tuple[bool, Optional[str]]:
     """
-    验证别名模式是否安全
+    验证映射模式是否安全
 
     Args:
         pattern: 待验证的正则模式
@@ -165,10 +165,10 @@ def validate_alias_pattern(pattern: str) -> Tuple[bool, Optional[str]]:
         (is_valid, error_message)
     """
     if not pattern or not pattern.strip():
-        return False, "别名规则不能为空"
+        return False, "映射规则不能为空"
 
-    if len(pattern) > MAX_ALIAS_LENGTH:
-        return False, f"别名规则过长 (最大 {MAX_ALIAS_LENGTH} 字符)"
+    if len(pattern) > MAX_MAPPING_LENGTH:
+        return False, f"映射规则过长 (最大 {MAX_MAPPING_LENGTH} 字符)"
 
     # 尝试编译验证语法
     try:
@@ -179,35 +179,35 @@ def validate_alias_pattern(pattern: str) -> Tuple[bool, Optional[str]]:
     return True, None
 
 
-def validate_model_aliases(aliases: Optional[List[str]]) -> Tuple[bool, Optional[str]]:
+def validate_model_mappings(mappings: Optional[List[str]]) -> Tuple[bool, Optional[str]]:
     """
-    验证别名列表是否合法
+    验证映射列表是否合法
 
     Args:
-        aliases: 别名列表
+        mappings: 映射列表
 
     Returns:
         (is_valid, error_message)
     """
-    if not aliases:
+    if not mappings:
         return True, None
 
-    if len(aliases) > MAX_ALIASES_PER_MODEL:
-        return False, f"别名规则数量超限 (最大 {MAX_ALIASES_PER_MODEL} 条)"
+    if len(mappings) > MAX_MAPPINGS_PER_MODEL:
+        return False, f"映射规则数量超限 (最大 {MAX_MAPPINGS_PER_MODEL} 条)"
 
-    for i, alias in enumerate(aliases):
-        is_valid, error = validate_alias_pattern(alias)
+    for i, mapping in enumerate(mappings):
+        is_valid, error = validate_mapping_pattern(mapping)
         if not is_valid:
             return False, f"第 {i + 1} 条规则无效: {error}"
 
     return True, None
 
 
-def validate_and_extract_model_aliases(
+def validate_and_extract_model_mappings(
     config: Optional[dict],
 ) -> Tuple[bool, Optional[str], Optional[List[str]]]:
     """
-    从 config 中验证并提取 model_aliases
+    从 config 中验证并提取 model_mappings
 
     用于 GlobalModel 创建/更新时的统一验证
 
@@ -215,34 +215,34 @@ def validate_and_extract_model_aliases(
         config: GlobalModel 的 config 字典
 
     Returns:
-        (is_valid, error_message, aliases):
+        (is_valid, error_message, mappings):
         - is_valid: 验证是否通过
         - error_message: 错误信息（验证失败时）
-        - aliases: 提取的别名列表（验证成功时）
+        - mappings: 提取的映射列表（验证成功时）
     """
-    if not config or "model_aliases" not in config:
+    if not config or "model_mappings" not in config:
         return True, None, None
 
-    aliases = config.get("model_aliases")
+    mappings = config.get("model_mappings")
 
-    # 允许显式设置为 None（表示清除别名）
-    if aliases is None:
+    # 允许显式设置为 None（表示清除映射）
+    if mappings is None:
         return True, None, None
 
     # 类型验证：必须是列表
-    if not isinstance(aliases, list):
-        return False, "model_aliases 必须是数组类型", None
+    if not isinstance(mappings, list):
+        return False, "model_mappings 必须是数组类型", None
 
     # 元素类型验证：必须是字符串
-    if not all(isinstance(a, str) for a in aliases):
-        return False, "model_aliases 数组元素必须是字符串", None
+    if not all(isinstance(m, str) for m in mappings):
+        return False, "model_mappings 数组元素必须是字符串", None
 
     # 业务规则验证
-    is_valid, error = validate_model_aliases(aliases)
+    is_valid, error = validate_model_mappings(mappings)
     if not is_valid:
         return False, error, None
 
-    return True, None, aliases
+    return True, None, mappings
 
 
 @lru_cache(maxsize=2000)
@@ -267,7 +267,7 @@ def clear_regex_cache() -> None:
     """
     清空正则缓存
 
-    在 GlobalModel 别名更新时调用此函数以确保缓存一致性
+    在 GlobalModel 映射更新时调用此函数以确保缓存一致性
     """
     _compile_pattern_cached.cache_clear()
     logger.debug("[RegexCache] 缓存已清空")
@@ -310,7 +310,7 @@ def _match_with_timeout(
 
 def match_model_with_pattern(pattern: str, model_name: str) -> bool:
     """
-    检查模型名是否匹配别名模式（支持正则表达式）
+    检查模型名是否匹配映射模式（支持正则表达式）
 
     安全特性：
     - 长度限制检查
@@ -318,7 +318,7 @@ def match_model_with_pattern(pattern: str, model_name: str) -> bool:
     - 正则匹配超时保护（100ms，使用 regex 库原生超时）
 
     Args:
-        pattern: 别名模式，支持正则表达式语法
+        pattern: 映射模式，支持正则表达式语法
         model_name: 被检查的模型名（来自 Key 的 allowed_models）
 
     Returns:
@@ -334,7 +334,7 @@ def match_model_with_pattern(pattern: str, model_name: str) -> bool:
         return True
 
     # 长度检查
-    if len(pattern) > MAX_ALIAS_LENGTH or len(model_name) > MAX_MODEL_NAME_LENGTH:
+    if len(pattern) > MAX_MAPPING_LENGTH or len(model_name) > MAX_MODEL_NAME_LENGTH:
         return False
 
     # 使用缓存的编译结果
@@ -347,45 +347,45 @@ def match_model_with_pattern(pattern: str, model_name: str) -> bool:
     return result is True
 
 
-def check_model_allowed_with_aliases(
+def check_model_allowed_with_mappings(
     model_name: str,
     allowed_models: AllowedModels,
     resolved_model_name: Optional[str] = None,
-    model_aliases: Optional[List[str]] = None,
+    model_mappings: Optional[List[str]] = None,
     candidate_models: Optional[set[str]] = None,
 ) -> tuple[bool, Optional[str]]:
     """
-    检查模型是否被允许（支持别名通配符匹配）
+    检查模型是否被允许（支持映射通配符匹配）
 
     匹配优先级：
     1. 精确匹配 model_name（用户请求的模型名）
     2. 精确匹配 resolved_model_name（GlobalModel.name）
-    3. 遍历 model_aliases，检查每个别名是否匹配 allowed_models 中的任一项
+    3. 遍历 model_mappings，检查每个映射是否匹配 allowed_models 中的任一项
 
-    别名匹配顺序说明：
+    映射匹配顺序说明：
     - 按 allowed_models 集合的迭代顺序遍历（通常为字母顺序，因为内部使用 set）
-    - 对于每个 allowed_model，按 model_aliases 数组顺序依次尝试匹配
+    - 对于每个 allowed_model，按 model_mappings 数组顺序依次尝试匹配
     - 返回第一个成功匹配的 allowed_model
-    - 如需确定性行为，请确保 model_aliases 中的规则从最具体到最通用排序
+    - 如需确定性行为，请确保 model_mappings 中的规则从最具体到最通用排序
 
     Args:
         model_name: 请求的模型名称
         allowed_models: 允许的模型配置（来自 Provider Key）
         resolved_model_name: 解析后的 GlobalModel.name
-        model_aliases: GlobalModel 的别名列表（来自 config.model_aliases）
-        candidate_models: 可选的候选模型集合（用于限制别名匹配只能落到这些模型名上）
+        model_mappings: GlobalModel 的映射列表（来自 config.model_mappings）
+        candidate_models: 可选的候选模型集合（用于限制映射匹配只能落到这些模型名上）
 
     Returns:
         (is_allowed, matched_model_name):
         - is_allowed: 是否允许使用该模型
-        - matched_model_name: 通过别名匹配到的模型名（仅别名匹配时有值，精确匹配时为 None）
+        - matched_model_name: 通过映射匹配到的模型名（仅映射匹配时有值，精确匹配时为 None）
     """
     # 先尝试精确匹配（使用原有逻辑）
     if check_model_allowed(model_name, allowed_models, resolved_model_name):
         return True, None
 
-    # 如果精确匹配失败且有别名配置，尝试别名匹配
-    if not model_aliases:
+    # 如果精确匹配失败且有映射配置，尝试映射匹配
+    if not model_mappings:
         return False, None
 
     # 获取 allowed_models 的集合
@@ -398,18 +398,18 @@ def check_model_allowed_with_aliases(
         # 空集合 = 拒绝所有
         return False, None
 
-    # 如果提供了候选集合，只允许在候选集合中进行别名匹配
+    # 如果提供了候选集合，只允许在候选集合中进行映射匹配
     if candidate_models is not None:
         allowed_set = allowed_set & candidate_models
         if len(allowed_set) == 0:
             return False, None
 
-    # 遍历 allowed_models 中的每个模型名，检查是否有别名能匹配
+    # 遍历 allowed_models 中的每个模型名，检查是否有映射能匹配
     # 注意：为了避免 set 迭代顺序带来的非确定性，这里对 allowed_set 做排序
-    # 返回第一个匹配的模型名，匹配顺序由 allowed_models 排序结果和 model_aliases 数组顺序共同决定
+    # 返回第一个匹配的模型名，匹配顺序由 allowed_models 排序结果和 model_mappings 数组顺序共同决定
     for allowed_model in sorted(allowed_set):
-        for alias_pattern in model_aliases:
-            if match_model_with_pattern(alias_pattern, allowed_model):
+        for mapping_pattern in model_mappings:
+            if match_model_with_pattern(mapping_pattern, allowed_model):
                 # 返回匹配到的模型名，用于实际请求
                 return True, allowed_model
 

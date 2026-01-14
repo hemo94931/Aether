@@ -64,6 +64,6 @@ async def test_resolve_global_model_prefers_direct_match(monkeypatch) -> None:
     )
     db = _FakeSession(direct_match=global_model)
 
-    resolved = await ModelCacheService.resolve_global_model_by_name_or_alias(db, global_model.name)
+    resolved = await ModelCacheService.resolve_global_model_by_name_or_mapping(db, global_model.name)
     assert resolved is global_model
 

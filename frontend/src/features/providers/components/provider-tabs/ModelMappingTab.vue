@@ -287,11 +287,11 @@ import ModelMappingDialog, { type AliasGroup } from '../ModelMappingDialog.vue'
 import { useToast } from '@/composables/useToast'
 import {
   getProviderModels,
-  getProviderAliasMappingPreview,
+  getProviderMappingPreview,
   testModel,
   type Model,
   type ProviderModelAlias,
-  type ProviderAliasMappingPreviewResponse
+  type ProviderMappingPreviewResponse
 } from '@/api/endpoints'
 import { updateModel } from '@/api/endpoints/models'
 import { parseTestModelError } from '@/utils/errorParser'
@@ -333,7 +333,7 @@ const { error: showError, success: showSuccess } = useToast()
 // 状态
 const loading = ref(false)
 const models = ref<Model[]>([])
-const aliasMappingPreview = ref<ProviderAliasMappingPreviewResponse | null>(null)
+const aliasMappingPreview = ref<ProviderMappingPreviewResponse | null>(null)
 const dialogOpen = ref(false)
 const deleteConfirmOpen = ref(false)
 const editingGroup = ref<AliasGroup | null>(null)
@@ -410,7 +410,7 @@ const regexMappings = computed<CombinedMapping[]>(() => {
       // 添加 Key 信息
       const keyMatches: MappingItem[] = gm.matched_models.map(m => ({
         name: m.allowed_model,
-        pattern: m.alias_pattern
+        pattern: m.mapping_pattern
       }))
 
       mapping.matchedKeys!.push({
@@ -425,7 +425,7 @@ const regexMappings = computed<CombinedMapping[]>(() => {
         if (!mapping.mappings.some(m => m.name === match.allowed_model)) {
           mapping.mappings.push({
             name: match.allowed_model,
-            pattern: match.alias_pattern
+            pattern: match.mapping_pattern
           })
         }
       }
@@ -472,7 +472,7 @@ async function loadData() {
     loading.value = true
     const [modelsData, previewData] = await Promise.all([
       getProviderModels(props.provider.id),
-      getProviderAliasMappingPreview(props.provider.id).catch(() => null)
+      getProviderMappingPreview(props.provider.id).catch(() => null)
     ])
     models.value = modelsData
     aliasMappingPreview.value = previewData

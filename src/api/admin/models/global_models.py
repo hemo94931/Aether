@@ -322,12 +322,12 @@ class AdminCreateGlobalModelAdapter(AdminApiAdapter):
 
     async def handle(self, context):  # type: ignore[override]
         from src.core.exceptions import InvalidRequestException
-        from src.core.model_permissions import validate_and_extract_model_aliases
+        from src.core.model_permissions import validate_and_extract_model_mappings
 
-        # 验证 model_aliases（如果有）
-        is_valid, error, _ = validate_and_extract_model_aliases(self.payload.config)
+        # 验证 model_mappings（如果有）
+        is_valid, error, _ = validate_and_extract_model_mappings(self.payload.config)
         if not is_valid:
-            raise InvalidRequestException(f"别名规则验证失败: {error}", "model_aliases")
+            raise InvalidRequestException(f"映射规则验证失败: {error}", "model_mappings")
 
         # 将 TieredPricingConfig 转换为 dict
         tiered_pricing_dict = self.payload.default_tiered_pricing.model_dump()
@@ -361,12 +361,12 @@ class AdminUpdateGlobalModelAdapter(AdminApiAdapter):
 
     async def handle(self, context):  # type: ignore[override]
         from src.core.exceptions import InvalidRequestException
-        from src.core.model_permissions import validate_and_extract_model_aliases
+        from src.core.model_permissions import validate_and_extract_model_mappings
 
-        # 验证 model_aliases（如果有）
-        is_valid, error, _ = validate_and_extract_model_aliases(self.payload.config)
+        # 验证 model_mappings（如果有）
+        is_valid, error, _ = validate_and_extract_model_mappings(self.payload.config)
         if not is_valid:
-            raise InvalidRequestException(f"别名规则验证失败: {error}", "model_aliases")
+            raise InvalidRequestException(f"映射规则验证失败: {error}", "model_mappings")
 
         # 使用行级锁获取旧的 GlobalModel 信息，防止并发更新导致的竞态条件
         # 设置 2 秒锁超时，允许短暂等待而非立即失败，提升并发操作的成功率

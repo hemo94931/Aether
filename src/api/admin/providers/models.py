@@ -405,6 +405,7 @@ class AdminCreateProviderModelAdapter(AdminApiAdapter):
         try:
             model = ModelService.create_model(db, self.provider_id, self.model_data)
             logger.info(f"Model created: {model.provider_model_name} for provider {provider.name} by {context.user.username}")
+            # 缓存失效已在 ModelService.create_model 中处理
             return ModelService.convert_to_response(model)
         except Exception as exc:
             raise InvalidRequestException(str(exc))
@@ -447,6 +448,7 @@ class AdminUpdateProviderModelAdapter(AdminApiAdapter):
         try:
             updated_model = ModelService.update_model(db, self.model_id, self.model_data)
             logger.info(f"Model updated: {updated_model.provider_model_name} by {context.user.username}")
+            # 缓存失效已在 ModelService.update_model 中处理
             return ModelService.convert_to_response(updated_model)
         except Exception as exc:
             raise InvalidRequestException(str(exc))
@@ -471,6 +473,7 @@ class AdminDeleteProviderModelAdapter(AdminApiAdapter):
         try:
             ModelService.delete_model(db, self.model_id)
             logger.info(f"Model deleted: {model_name} by {context.user.username}")
+            # 缓存失效已在 ModelService.delete_model 中处理
             return {"message": f"Model '{model_name}' deleted successfully"}
         except Exception as exc:
             raise InvalidRequestException(str(exc))
@@ -490,6 +493,7 @@ class AdminBatchCreateModelsAdapter(AdminApiAdapter):
         try:
             models = ModelService.batch_create_models(db, self.provider_id, self.models_data)
             logger.info(f"Batch created {len(models)} models for provider {provider.name} by {context.user.username}")
+            # 缓存失效已在 ModelService.batch_create_models 中处理
             return [ModelService.convert_to_response(model) for model in models]
         except Exception as exc:
             raise InvalidRequestException(str(exc))
@@ -633,6 +637,11 @@ class AdminBatchAssignModelsToProviderAdapter(AdminApiAdapter):
 
         # 清除 /v1/models 列表缓存
         if success:
+            # Provider 新增模型实现后，清除同进程的 ModelMapper 缓存，避免 TTL 内仍返回 None
+            from src.services.cache.invalidation import get_cache_invalidation_service
+            cache_service = get_cache_invalidation_service()
+            cache_service.on_model_changed(self.provider_id, success[0].get("global_model_id", ""))
+
             await invalidate_models_list_cache()
 
         return BatchAssignModelsToProviderResponse(success=success, errors=errors)

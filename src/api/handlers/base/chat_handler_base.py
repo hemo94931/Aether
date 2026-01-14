@@ -429,8 +429,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             provider_api_format=str(endpoint.api_format) if endpoint.api_format else None,
         )
 
-        # 获取模型映射（优先使用别名匹配到的模型，其次是 Provider 级别的映射）
-        mapped_model = candidate.alias_matched_model if candidate else None
+        # 获取模型映射（优先使用映射匹配到的模型，其次是 Provider 级别的映射）
+        mapped_model = candidate.mapping_matched_model if candidate else None
         if not mapped_model:
             mapped_model = await self._get_mapped_model(
                 source_model=ctx.model,
@@ -663,8 +663,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             provider_name = str(provider.name)
 
-            # 获取模型映射（优先使用别名匹配到的模型，其次是 Provider 级别的映射）
-            mapped_model = candidate.alias_matched_model if candidate else None
+            # 获取模型映射（优先使用映射匹配到的模型，其次是 Provider 级别的映射）
+            mapped_model = candidate.mapping_matched_model if candidate else None
             if not mapped_model:
                 mapped_model = await self._get_mapped_model(
                     source_model=model,

@@ -77,6 +77,24 @@ class ModelService:
 
             logger.info(f"创建模型成功: provider={provider.name}, model={model.provider_model_name}, global_model_id={model.global_model_id}")
 
+            # 清除 Redis 缓存（异步执行，不阻塞返回）
+            # 重要：新增模型可能需要清除 resolver 的 NOT_FOUND 负缓存（global_model:resolve:*），
+            # 否则请求链路在 TTL 内可能无法立刻解析到新模型。
+            asyncio.create_task(
+                ModelCacheService.invalidate_model_cache(
+                    model_id=model.id,
+                    provider_id=model.provider_id,
+                    global_model_id=model.global_model_id,
+                    provider_model_name=model.provider_model_name,
+                    provider_model_mappings=model.provider_model_mappings,
+                )
+            )
+
+            # 清除内存缓存（ModelMapperMiddleware 实例）
+            if model.provider_id and model.global_model_id:
+                cache_service = get_cache_invalidation_service()
+                cache_service.on_model_changed(model.provider_id, model.global_model_id)
+
             # 清除 /v1/models 列表缓存
             asyncio.create_task(invalidate_models_list_cache())
 
@@ -154,6 +172,7 @@ class ModelService:
             raise NotFoundException(f"模型 {model_id} 不存在")
 
         # 保存旧的映射，用于清除缓存
+        old_global_model_id = model.global_model_id
         old_provider_model_name = model.provider_model_name
         old_provider_model_mappings = model.provider_model_mappings
 
@@ -179,14 +198,17 @@ class ModelService:
                 ModelCacheService.invalidate_model_cache(
                     model_id=model.id,
                     provider_id=model.provider_id,
-                    global_model_id=model.global_model_id,
+                    global_model_id=old_global_model_id,
                     provider_model_name=old_provider_model_name,
                     provider_model_mappings=old_provider_model_mappings,
                 )
             )
-            # 再清除新的映射缓存（如果有变化）
-            if (model.provider_model_name != old_provider_model_name or
-                model.provider_model_mappings != old_provider_model_mappings):
+            # 再清除新的映射缓存（如果有变化，包括 global_model_id 变更）
+            if (
+                model.provider_model_name != old_provider_model_name
+                or model.provider_model_mappings != old_provider_model_mappings
+                or model.global_model_id != old_global_model_id
+            ):
                 asyncio.create_task(
                     ModelCacheService.invalidate_model_cache(
                         model_id=model.id,
@@ -354,6 +376,7 @@ class ModelService:
                 provider_id=provider_id,
                 global_model_id=model_data.global_model_id,
                 provider_model_name=model_data.provider_model_name,
+                provider_model_mappings=model_data.provider_model_mappings,
                 price_per_request=model_data.price_per_request,
                 tiered_pricing=model_data.tiered_pricing,
                 supports_vision=model_data.supports_vision,
@@ -372,6 +395,23 @@ class ModelService:
                 for model in created_models:
                     db.refresh(model)
                 logger.info(f"批量创建 {len(created_models)} 个模型成功")
+
+                # 清除 Redis 缓存（异步执行，不阻塞返回）
+                # 逐个清除 resolver 的映射缓存，避免 NOT_FOUND 负缓存阻塞新模型生效。
+                for model in created_models:
+                    asyncio.create_task(
+                        ModelCacheService.invalidate_model_cache(
+                            model_id=model.id,
+                            provider_id=model.provider_id,
+                            global_model_id=model.global_model_id,
+                            provider_model_name=model.provider_model_name,
+                            provider_model_mappings=model.provider_model_mappings,
+                        )
+                    )
+
+                # 清除内存缓存（ModelMapperMiddleware 实例）
+                cache_service = get_cache_invalidation_service()
+                cache_service.on_model_changed(provider_id, created_models[0].global_model_id)
 
                 # 清除 /v1/models 列表缓存
                 asyncio.create_task(invalidate_models_list_cache())

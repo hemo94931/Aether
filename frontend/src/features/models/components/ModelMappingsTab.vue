@@ -6,7 +6,7 @@
         <div class="flex items-baseline gap-2">
           <h4 class="text-sm font-semibold">映射规则</h4>
           <span class="text-xs text-muted-foreground">
-            支持正则表达式 ({{ localAliases.length }}/{{ MAX_ALIASES_PER_MODEL }})
+            支持正则表达式 ({{ localMappings.length }}/{{ MAX_MAPPINGS_PER_MODEL }})
           </span>
         </div>
         <div class="flex items-center gap-1">
@@ -15,8 +15,8 @@
             size="icon"
             class="h-7 w-7"
             title="添加规则"
-            :disabled="localAliases.length >= MAX_ALIASES_PER_MODEL"
-            @click="addAlias"
+            :disabled="localMappings.length >= MAX_MAPPINGS_PER_MODEL"
+            @click="addMapping"
           >
             <Plus class="w-4 h-4" />
           </Button>
@@ -35,9 +35,9 @@
     </div>
 
     <!-- 规则列表 -->
-    <div v-if="localAliases.length > 0" class="divide-y">
+    <div v-if="localMappings.length > 0" class="divide-y">
       <div
-        v-for="(alias, index) in localAliases"
+        v-for="(mapping, index) in localMappings"
         :key="index"
       >
         <!-- 规则行 -->
@@ -51,31 +51,31 @@
           />
           <div class="flex-1 min-w-0">
             <Input
-              v-model="localAliases[index]"
+              v-model="localMappings[index]"
               placeholder="例如: claude-haiku-.*"
-              :class="`font-mono text-sm ${alias.trim() && !getAliasValidation(alias).valid ? 'border-destructive' : ''}`"
+              :class="`font-mono text-sm ${mapping.trim() && !getMappingValidation(mapping).valid ? 'border-destructive' : ''}`"
               @click.stop
               @input="markDirty"
             />
             <!-- 验证错误提示 -->
             <div
-              v-if="alias.trim() && !getAliasValidation(alias).valid"
+              v-if="mapping.trim() && !getMappingValidation(mapping).valid"
               class="flex items-center gap-1 mt-1 text-xs text-destructive"
             >
               <AlertCircle class="w-3 h-3" />
-              <span>{{ getAliasValidation(alias).error }}</span>
+              <span>{{ getMappingValidation(mapping).error }}</span>
             </div>
           </div>
           <!-- 匹配统计 -->
           <Badge
-            v-if="getAliasValidation(alias).valid && getMatchCount(alias) > 0"
+            v-if="getMappingValidation(mapping).valid && getMatchCount(mapping) > 0"
             variant="secondary"
             class="text-xs flex-shrink-0 h-6 leading-none"
           >
-            {{ getMatchCount(alias) }} 匹配
+            {{ getMatchCount(mapping) }} 匹配
           </Badge>
           <Badge
-            v-else-if="alias.trim() && getAliasValidation(alias).valid"
+            v-else-if="mapping.trim() && getMappingValidation(mapping).valid"
             variant="outline"
             class="text-xs text-muted-foreground flex-shrink-0 h-6 leading-none"
           >
@@ -90,7 +90,7 @@
               class="h-7 w-7 text-muted-foreground hover:text-primary"
               title="保存"
               :disabled="saving || hasValidationErrors"
-              @click.stop="saveAliases"
+              @click.stop="saveMappings"
             >
               <Save v-if="!saving" class="w-4 h-4" />
               <RefreshCw v-else class="w-4 h-4 animate-spin" />
@@ -101,7 +101,7 @@
               class="h-7 w-7 text-muted-foreground hover:text-destructive"
               title="删除"
               :disabled="saving"
-              @click.stop="removeAlias(index)"
+              @click.stop="removeMapping(index)"
             >
               <Trash2 class="w-4 h-4" />
             </Button>
@@ -117,15 +117,15 @@
             <RefreshCw class="w-4 h-4 animate-spin text-muted-foreground" />
           </div>
 
-          <div v-else-if="getMatchedKeysForAlias(alias).length === 0" class="text-center py-4">
+          <div v-else-if="getMatchedKeysForMapping(mapping).length === 0" class="text-center py-4">
             <p class="text-sm text-muted-foreground">
-              {{ alias.trim() ? '此规则暂无匹配的 Key 白名单' : '请输入别名规则' }}
+              {{ mapping.trim() ? '此规则暂无匹配的 Key 白名单' : '请输入映射规则' }}
             </p>
           </div>
 
           <div v-else class="space-y-2">
             <div
-              v-for="item in getMatchedKeysForAlias(alias)"
+              v-for="item in getMatchedKeysForMapping(mapping)"
               :key="item.keyId"
               class="bg-background rounded-md border p-3"
             >
@@ -159,10 +159,10 @@
     >
       <GitMerge class="w-10 h-10 mx-auto text-muted-foreground/30 mb-3" />
       <p class="text-sm text-muted-foreground">
-        暂无别名规则
+        暂无映射规则
       </p>
       <p class="text-xs text-muted-foreground mt-1">
-        添加别名可匹配 Provider Key 白名单中的模型
+        添加映射可匹配 Provider Key 白名单中的模型
       </p>
     </div>
   </Card>
@@ -180,16 +180,16 @@ import { useToast } from '@/composables/useToast'
 const props = defineProps<{
   globalModelId: string
   modelName: string
-  aliases: string[]
+  mappings: string[]
   loading?: boolean
 }>()
 const emit = defineEmits<{
-  update: [aliases: string[]]
+  update: [mappings: string[]]
   refresh: []
 }>()
 // 安全限制常量（与后端保持一致）
-const MAX_ALIASES_PER_MODEL = 50
-const MAX_ALIAS_LENGTH = 200
+const MAX_MAPPINGS_PER_MODEL = 50
+const MAX_MAPPING_LENGTH = 200
 
 // 危险的正则模式（可能导致 ReDoS，与后端 model_permissions.py 保持一致）
 // 注意：这些是用于检测用户输入字符串中的危险正则构造
@@ -222,8 +222,8 @@ const REGEX_MATCH_MAX_INPUT_LENGTH = 200
 const { success: toastSuccess, error: toastError } = useToast()
 
 // 本地状态
-const localAliases = ref<string[]>([...props.aliases])
-const originalAliases = ref<string[]>([...props.aliases])  // 用于保存失败时恢复
+const localMappings = ref<string[]>([...props.mappings])
+const originalMappings = ref<string[]>([...props.mappings])  // 用于保存失败时恢复
 const isDirty = ref(false)
 const saving = ref(false)
 const expandedIndex = ref<number | null>(null)
@@ -277,7 +277,7 @@ class LRURegexCache {
 
 const regexCache = new LRURegexCache(REGEX_CACHE_MAX_SIZE)
 
-interface MatchedKeyForAlias {
+interface MatchedKeyForMapping {
   keyId: string
   keyName: string
   maskedKey: string
@@ -291,15 +291,15 @@ interface ValidationResult {
 }
 
 /**
- * 验证别名规则是否安全
+ * 验证映射规则是否安全
  */
-function validateAliasPattern(pattern: string): ValidationResult {
+function validateMappingPattern(pattern: string): ValidationResult {
   if (!pattern || !pattern.trim()) {
     return { valid: false, error: '规则不能为空' }
   }
 
-  if (pattern.length > MAX_ALIAS_LENGTH) {
-    return { valid: false, error: `规则过长 (最大 ${MAX_ALIAS_LENGTH} 字符)` }
+  if (pattern.length > MAX_MAPPING_LENGTH) {
+    return { valid: false, error: `规则过长 (最大 ${MAX_MAPPING_LENGTH} 字符)` }
   }
 
   // 检查危险模式
@@ -320,22 +320,22 @@ function validateAliasPattern(pattern: string): ValidationResult {
 }
 
 /**
- * 获取别名的验证状态
+ * 获取映射的验证状态
  */
-function getAliasValidation(alias: string): ValidationResult {
-  if (!alias.trim()) {
+function getMappingValidation(mapping: string): ValidationResult {
+  if (!mapping.trim()) {
     return { valid: true } // 空值暂不报错，保存时过滤
   }
-  return validateAliasPattern(alias)
+  return validateMappingPattern(mapping)
 }
 
 /**
  * 检查是否有验证错误
  */
 const hasValidationErrors = computed(() => {
-  return localAliases.value.some(alias => {
-    if (!alias.trim()) return false
-    return !validateAliasPattern(alias).valid
+  return localMappings.value.some(mapping => {
+    if (!mapping.trim()) return false
+    return !validateMappingPattern(mapping).valid
   })
 })
 
@@ -349,7 +349,7 @@ function matchPattern(pattern: string, text: string): boolean {
   }
 
   // 长度检查
-  if (pattern.length > MAX_ALIAS_LENGTH) {
+  if (pattern.length > MAX_MAPPING_LENGTH) {
     return false
   }
 
@@ -385,12 +385,12 @@ function matchPattern(pattern: string, text: string): boolean {
   }
 }
 
-// 获取指定别名匹配的 Key 列表
-function getMatchedKeysForAlias(alias: string): MatchedKeyForAlias[] {
-  if (!routingData.value || !alias.trim()) return []
+// 获取指定映射匹配的 Key 列表
+function getMatchedKeysForMapping(mapping: string): MatchedKeyForMapping[] {
+  if (!routingData.value || !mapping.trim()) return []
 
   // 使用 Map 按 keyId 去重并合并匹配结果
-  const keyMap = new Map<string, MatchedKeyForAlias>()
+  const keyMap = new Map<string, MatchedKeyForMapping>()
 
   for (const provider of routingData.value.providers) {
     for (const endpoint of provider.endpoints) {
@@ -399,7 +399,7 @@ function getMatchedKeysForAlias(alias: string): MatchedKeyForAlias[] {
 
         const matchedModels: string[] = []
         for (const allowedModel of key.allowed_models) {
-          if (matchPattern(alias, allowedModel)) {
+          if (matchPattern(mapping, allowedModel)) {
             matchedModels.push(allowedModel)
           }
         }
@@ -427,18 +427,18 @@ function getMatchedKeysForAlias(alias: string): MatchedKeyForAlias[] {
   return Array.from(keyMap.values())
 }
 
-// 获取指定别名的匹配数量
-function getMatchCount(alias: string): number {
-  return getMatchedKeysForAlias(alias).reduce((sum, item) => sum + item.matchedModels.length, 0)
+// 获取指定映射的匹配数量
+function getMatchCount(mapping: string): number {
+  return getMatchedKeysForMapping(mapping).reduce((sum, item) => sum + item.matchedModels.length, 0)
 }
 
 function toggleExpand(index: number) {
   expandedIndex.value = expandedIndex.value === index ? null : index
 }
 
-watch(() => props.aliases, (newAliases) => {
-  localAliases.value = [...newAliases]
-  originalAliases.value = [...newAliases]
+watch(() => props.mappings, (newAliases) => {
+  localMappings.value = [...newAliases]
+  originalMappings.value = [...newAliases]
   isDirty.value = false
 }, { deep: true })
 
@@ -452,18 +452,18 @@ function markDirty() {
   isDirty.value = true
 }
 
-function addAlias() {
-  if (localAliases.value.length >= MAX_ALIASES_PER_MODEL) {
-    toastError(`最多支持 ${MAX_ALIASES_PER_MODEL} 条别名规则`)
+function addMapping() {
+  if (localMappings.value.length >= MAX_MAPPINGS_PER_MODEL) {
+    toastError(`最多支持 ${MAX_MAPPINGS_PER_MODEL} 条映射规则`)
     return
   }
-  localAliases.value.push('')
+  localMappings.value.push('')
   isDirty.value = true
-  expandedIndex.value = localAliases.value.length - 1
+  expandedIndex.value = localMappings.value.length - 1
 }
 
-function removeAlias(index: number) {
-  localAliases.value.splice(index, 1)
+function removeMapping(index: number) {
+  localMappings.value.splice(index, 1)
   isDirty.value = true
   if (expandedIndex.value === index) {
     expandedIndex.value = null
@@ -472,8 +472,8 @@ function removeAlias(index: number) {
   }
 }
 
-async function saveAliases() {
-  const cleanedAliases = localAliases.value
+async function saveMappings() {
+  const cleanedMappings = localMappings.value
     .map(a => a.trim())
     .filter(a => a.length > 0)
 
@@ -484,28 +484,28 @@ async function saveAliases() {
 
     const updatedConfig = {
       ...currentConfig,
-      model_aliases: cleanedAliases.length > 0 ? cleanedAliases : undefined,
+      model_mappings: cleanedMappings.length > 0 ? cleanedMappings : undefined,
     }
 
-    if (!updatedConfig.model_aliases || updatedConfig.model_aliases.length === 0) {
-      delete updatedConfig.model_aliases
+    if (!updatedConfig.model_mappings || updatedConfig.model_mappings.length === 0) {
+      delete updatedConfig.model_mappings
     }
 
     await updateGlobalModel(props.globalModelId, {
       config: updatedConfig,
     })
 
-    localAliases.value = cleanedAliases
-    originalAliases.value = [...cleanedAliases]  // 更新原始值
+    localMappings.value = cleanedMappings
+    originalMappings.value = [...cleanedMappings]  // 更新原始值
     isDirty.value = false
 
-    toastSuccess('别名规则已保存')
-    emit('update', cleanedAliases)
+    toastSuccess('映射规则已保存')
+    emit('update', cleanedMappings)
   } catch (err) {
-    log.error('保存别名规则失败:', err)
+    log.error('保存映射规则失败:', err)
     toastError('保存失败，请重试')
     // 保存失败时恢复到原始值
-    localAliases.value = [...originalAliases.value]
+    localMappings.value = [...originalMappings.value]
     isDirty.value = false
   } finally {
     saving.value = false

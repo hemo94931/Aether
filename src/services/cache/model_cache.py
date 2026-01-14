@@ -15,7 +15,7 @@ Model 映射缓存服务 - 减少模型查询
 
 使用示例
 --------
-    global_model = await ModelCacheService.resolve_global_model_by_name_or_alias(db, "gpt-4")
+    global_model = await ModelCacheService.resolve_global_model_by_name_or_mapping(db, "gpt-4")
 """
 
 import time
@@ -250,7 +250,7 @@ class ModelCacheService:
         logger.debug(f"GlobalModel 缓存已清除: {global_model_id}")
 
     @staticmethod
-    async def resolve_global_model_by_name_or_alias(
+    async def resolve_global_model_by_name_or_mapping(
         db: Session, model_name: str
     ) -> Optional[GlobalModel]:
         """

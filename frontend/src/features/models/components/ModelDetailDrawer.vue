@@ -108,11 +108,11 @@
                 type="button"
                 class="flex-1 px-2 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-md transition-all duration-200"
                 :class="[
-                  detailTab === 'aliases'
+                  detailTab === 'mappings'
                     ? 'bg-primary text-primary-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
                 ]"
-                @click="detailTab = 'aliases'"
+                @click="detailTab = 'mappings'"
               >
                 <span class="hidden sm:inline">模型映射</span>
                 <span class="sm:hidden">映射</span>
@@ -434,13 +434,13 @@
             </div>
 
             <!-- Tab 3: 模型映射 -->
-            <div v-show="detailTab === 'aliases'">
-              <ModelAliasesTab
+            <div v-show="detailTab === 'mappings'">
+              <ModelMappingsTab
                 v-if="model"
                 :global-model-id="model.id"
                 :model-name="model.name"
-                :aliases="model.config?.model_aliases || []"
-                @update="handleAliasesUpdate"
+                :mappings="model.config?.model_mappings || []"
+                @update="handleMappingsUpdate"
               />
             </div>
           </div>
@@ -480,7 +480,7 @@ import TableRow from '@/components/ui/table-row.vue'
 import TableHead from '@/components/ui/table-head.vue'
 import TableCell from '@/components/ui/table-cell.vue'
 import RoutingTab from './RoutingTab.vue'
-import ModelAliasesTab from './ModelAliasesTab.vue'
+import ModelMappingsTab from './ModelMappingsTab.vue'
 
 // 使用外部类型定义
 import type { GlobalModelResponse } from '@/api/global-models'
@@ -543,9 +543,9 @@ function refreshRoutingData() {
   routingTabRef.value?.loadRoutingData?.()
 }
 
-// 处理模型别名更新
-function handleAliasesUpdate(_aliases: string[]) {
-  // 别名已在 ModelAliasesTab 内部保存到服务器
+// 处理模型映射更新
+function handleMappingsUpdate(_mappings: string[]) {
+  // 映射已在 ModelMappingsTab 内部保存到服务器
   // 刷新路由数据以反映可能的候选变化
   refreshRoutingData()
 }

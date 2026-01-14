@@ -97,34 +97,34 @@ export async function testModel(data: TestModelRequest): Promise<TestModelRespon
 }
 
 /**
- * 别名映射预览相关类型
+ * 映射预览相关类型
  */
-export interface AliasMatchedModel {
+export interface MappingMatchedModel {
   allowed_model: string
-  alias_pattern: string
+  mapping_pattern: string
 }
 
-export interface AliasMatchingGlobalModel {
+export interface MappingMatchingGlobalModel {
   global_model_id: string
   global_model_name: string
   display_name: string
   is_active: boolean
-  matched_models: AliasMatchedModel[]
+  matched_models: MappingMatchedModel[]
 }
 
-export interface AliasMatchingKey {
+export interface MappingMatchingKey {
   key_id: string
   key_name: string
   masked_key: string
   is_active: boolean
   allowed_models: string[]
-  matching_global_models: AliasMatchingGlobalModel[]
+  matching_global_models: MappingMatchingGlobalModel[]
 }
 
-export interface ProviderAliasMappingPreviewResponse {
+export interface ProviderMappingPreviewResponse {
   provider_id: string
   provider_name: string
-  keys: AliasMatchingKey[]
+  keys: MappingMatchingKey[]
   total_keys: number
   total_matches: number
   // 截断提示
@@ -134,11 +134,11 @@ export interface ProviderAliasMappingPreviewResponse {
 }
 
 /**
- * 获取 Provider 别名映射预览
+ * 获取 Provider 映射预览
  */
-export async function getProviderAliasMappingPreview(
+export async function getProviderMappingPreview(
   providerId: string
-): Promise<ProviderAliasMappingPreviewResponse> {
-  const response = await client.get(`/api/admin/providers/${providerId}/alias-mapping-preview`)
+): Promise<ProviderMappingPreviewResponse> {
+  const response = await client.get(`/api/admin/providers/${providerId}/mapping-preview`)
   return response.data
 }

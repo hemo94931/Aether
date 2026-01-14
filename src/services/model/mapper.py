@@ -102,7 +102,7 @@ class ModelMapperMiddleware:
         mapping = None
 
         # 步骤 1: 解析 GlobalModel（支持映射名）
-        global_model = await ModelCacheService.resolve_global_model_by_name_or_alias(
+        global_model = await ModelCacheService.resolve_global_model_by_name_or_mapping(
             self.db, source_model
         )
 
