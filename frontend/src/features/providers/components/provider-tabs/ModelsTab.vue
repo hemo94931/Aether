@@ -211,7 +211,13 @@ import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
-import { getProviderModels, type Model, testModel } from '@/api/endpoints'
+import {
+  getProviderModels,
+  getProviderMappingPreview,
+  testModel,
+  type Model,
+  type ProviderMappingPreviewResponse
+} from '@/api/endpoints'
 import { updateModel } from '@/api/endpoints/models'
 import { parseTestModelError } from '@/utils/errorParser'
 
@@ -239,6 +245,7 @@ const { copyToClipboard } = useClipboard()
 // 状态
 const loading = ref(false)
 const models = ref<Model[]>([])
+const mappingPreview = ref<ProviderMappingPreviewResponse | null>(null)
 const togglingModelId = ref<string | null>(null)
 const testingModelId = ref<string | null>(null)
 const formatMenuModelId = ref<string | null>(null)
@@ -265,11 +272,19 @@ async function copyModelId(modelId: string) {
   await copyToClipboard(modelId)
 }
 
-// 加载模型
+// 加载模型和映射预览
 async function loadModels() {
   try {
     loading.value = true
-    models.value = await getProviderModels(props.provider.id)
+    const [modelsData, previewData] = await Promise.all([
+      getProviderModels(props.provider.id),
+      getProviderMappingPreview(props.provider.id).catch((err) => {
+        console.warn('Failed to load mapping preview:', err)
+        return null
+      })
+    ])
+    models.value = modelsData
+    mappingPreview.value = previewData
   } catch (err: any) {
     showError(err.response?.data?.detail || '加载失败', '错误')
   } finally {
@@ -382,6 +397,31 @@ async function toggleModelActive(model: Model) {
   }
 }
 
+// 查找模型的正则映射信息（返回第一个匹配的活跃 key 和映射名称）
+function findRegexMapping(model: Model): { keyId: string; mappedName: string } | null {
+  if (!mappingPreview.value) return null
+
+  // 在映射预览中查找该模型的全局模型 ID
+  const globalModelId = model.global_model_id
+  if (!globalModelId) return null
+
+  for (const keyInfo of mappingPreview.value.keys) {
+    // 跳过未激活的 key
+    if (!keyInfo.is_active) continue
+
+    for (const gm of keyInfo.matching_global_models) {
+      if (gm.global_model_id === globalModelId && gm.matched_models.length > 0) {
+        // 返回第一个匹配的映射名称
+        return {
+          keyId: keyInfo.key_id,
+          mappedName: gm.matched_models[0].allowed_model
+        }
+      }
+    }
+  }
+  return null
+}
+
 // 测试模型连接性
 async function testModelConnection(model: Model, apiFormat?: string) {
   if (testingModelId.value) return
@@ -389,11 +429,17 @@ async function testModelConnection(model: Model, apiFormat?: string) {
   testingModelId.value = model.id
   formatMenuModelId.value = null
   try {
+    // 检查是否有正则映射，如果有则使用映射名称和指定 key
+    const regexMapping = findRegexMapping(model)
+    const modelName = regexMapping?.mappedName || model.provider_model_name
+    const apiKeyId = regexMapping?.keyId
+
     const result = await testModel({
       provider_id: props.provider.id,
-      model_name: model.provider_model_name,
+      model_name: modelName,
       message: "hello",
-      api_format: apiFormat
+      api_format: apiFormat,
+      api_key_id: apiKeyId
     })
 
     if (result.success) {
@@ -404,7 +450,7 @@ async function testModelConnection(model: Model, apiFormat?: string) {
       } else if (result.data?.content_preview) {
         showSuccess(`流式测试成功，预览: ${result.data.content_preview}`)
       } else {
-        showSuccess(`模型 "${model.provider_model_name}" 测试成功`)
+        showSuccess(`模型 "${modelName}" 测试成功`)
       }
     } else {
       showError(`模型测试失败: ${parseTestModelError(result)}`)
@@ -446,5 +492,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+})
+
+// 暴露给父组件
+defineExpose({
+  reload: loadModels
 })
 </script>

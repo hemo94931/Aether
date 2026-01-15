@@ -383,6 +383,7 @@
               <!-- 模型查看 -->
               <ModelsTab
                 v-if="provider"
+                ref="modelsTabRef"
                 :key="`models-${provider.id}`"
                 :provider="provider"
                 :endpoints="endpoints"
@@ -585,6 +586,7 @@ const editingModel = ref<Model | null>(null)
 const deleteModelConfirmOpen = ref(false)
 const modelToDelete = ref<Model | null>(null)
 const batchAssignDialogOpen = ref(false)
+const modelsTabRef = ref<InstanceType<typeof ModelsTab> | null>(null)
 const modelMappingTabRef = ref<InstanceType<typeof ModelMappingTab> | null>(null)
 
 // 密钥列表拖拽排序状态
@@ -797,6 +799,11 @@ async function handleRecoverKey(key: EndpointAPIKey) {
 
 async function handleKeyChanged() {
   await loadEndpoints()
+  // 并行刷新模型列表和模型映射（因为模型权限会影响正则映射预览）
+  await Promise.all([
+    modelsTabRef.value?.reload(),
+    modelMappingTabRef.value?.reload()
+  ])
   emit('refresh')
 }
 

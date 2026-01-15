@@ -2,11 +2,26 @@
 
 import functools
 import json
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from src.core.logger import logger
 
 from src.clients.redis_client import get_redis_client_sync
+
+
+def _is_adapter_instance(obj: Any) -> bool:
+    """检查对象是否是 ApiAdapter 的实例（延迟导入避免循环依赖）"""
+    try:
+        from src.api.base.adapter import ApiAdapter
+
+        return isinstance(obj, ApiAdapter)
+    except ImportError:
+        return False
+
+
+def _is_api_context(obj: Any) -> bool:
+    """检查对象是否是 ApiRequestContext（通过 duck typing）"""
+    return hasattr(obj, "user") and hasattr(obj, "db")
 
 
 def cache_result(key_prefix: str, ttl: int = 60, user_specific: bool = True) -> Callable:
@@ -30,8 +45,23 @@ def cache_result(key_prefix: str, ttl: int = 60, user_specific: bool = True) -> 
 
             # 构建缓存键
             try:
-                # 从 args 中获取 context（通常是第一个参数）
-                context = args[0] if args else None
+                # 从 args 中获取 context
+                # 对于实例方法，args[0] 是 self，args[1] 才是 context
+                # 对于普通函数，args[0] 是 context
+                context = None
+                adapter_self = None
+
+                if len(args) >= 2 and _is_adapter_instance(args[0]) and _is_api_context(args[1]):
+                    # 实例方法: handle(self, context)
+                    adapter_self = args[0]
+                    context = args[1]
+                elif len(args) >= 1 and _is_api_context(args[0]):
+                    # 普通函数或 context 在第一个位置
+                    context = args[0]
+                elif len(args) >= 1 and _is_adapter_instance(args[0]):
+                    # 实例方法但 context 可能在 kwargs 中
+                    adapter_self = args[0]
+                    context = kwargs.get("context")
 
                 if user_specific and context and hasattr(context, "user") and context.user:
                     cache_key = f"{key_prefix}:user:{context.user.id}"
@@ -39,11 +69,11 @@ def cache_result(key_prefix: str, ttl: int = 60, user_specific: bool = True) -> 
                     cache_key = f"{key_prefix}:global"
 
                 # 如果有额外的参数（如 days），添加到键中
-                if hasattr(args[0], "__dict__"):
-                    # 如果是 dataclass 或对象，获取其属性
+                # 从 adapter_self 获取（dataclass 属性）
+                if adapter_self and hasattr(adapter_self, "__dict__"):
                     for attr_name in ["days", "limit"]:
-                        if hasattr(args[0], attr_name):
-                            attr_value = getattr(args[0], attr_name)
+                        if hasattr(adapter_self, attr_name):
+                            attr_value = getattr(adapter_self, attr_name)
                             cache_key += f":{attr_name}:{attr_value}"
 
                 # 尝试从缓存获取
