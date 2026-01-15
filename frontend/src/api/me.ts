@@ -11,8 +11,9 @@ export interface Profile {
   used_usd: number
   total_usd?: number  // 累积消费总额
   created_at: string
-  updated_at: string
+  updated_at?: string
   last_login_at?: string
+  auth_source?: 'local' | 'ldap'
   preferences?: UserPreferences
 }
 

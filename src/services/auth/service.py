@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session, joinedload
 from src.config import config
 from src.core.logger import logger
 from src.core.enums import AuthSource
+from src.services.system.config import SystemConfigService
 
 if TYPE_CHECKING:
     from src.models.database import ManagementToken
@@ -317,6 +318,9 @@ class AuthService:
                 username = f"{base_username}_ldap_{int(time.time())}{uuid.uuid4().hex[:4]}"
                 logger.info(f"LDAP 用户名冲突，使用新用户名: {ldap_user['username']} -> {username}")
 
+            # 读取系统配置的默认配额
+            default_quota = SystemConfigService.get_config(db, "default_user_quota_usd", default=10.0)
+
             # 创建新用户
             user = User(
                 email=email,
@@ -328,6 +332,7 @@ class AuthService:
                 role=UserRole.USER,
                 is_active=True,
                 last_login_at=datetime.now(timezone.utc),
+                quota_usd=default_quota,
             )
 
             try:

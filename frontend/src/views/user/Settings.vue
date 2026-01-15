@@ -69,8 +69,11 @@
           </form>
         </Card>
 
-        <!-- 修改密码 -->
-        <Card class="p-6">
+        <!-- 修改密码 (LDAP 用户不显示) -->
+        <Card
+          v-if="profile?.auth_source !== 'ldap'"
+          class="p-6"
+        >
           <h3 class="text-lg font-medium text-foreground mb-4">
             修改密码
           </h3>

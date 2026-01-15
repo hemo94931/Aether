@@ -536,6 +536,7 @@ class AuthCurrentUserAdapter(AuthenticatedApiAdapter):
             "allowed_models": user.allowed_models,
             "created_at": user.created_at.isoformat(),
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+            "auth_source": user.auth_source.value,
         }
 
 
