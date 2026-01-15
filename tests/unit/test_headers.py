@@ -1,0 +1,152 @@
+from src.core.enums import APIFormat
+from src.core.headers import (
+    CORE_REDACT_HEADERS,
+    HeaderBuilder,
+    build_upstream_headers,
+    detect_capabilities,
+    extract_client_api_key,
+    filter_response_headers,
+    get_header_value,
+    normalize_headers,
+    redact_headers_for_log,
+)
+from src.services.capability.resolver import CapabilityResolver
+
+
+class TestNormalizeHeaders:
+    def test_lowercases_keys(self) -> None:
+        result = normalize_headers({"Authorization": "Bearer x", "X-API-Key": "y"})
+        assert result == {"authorization": "Bearer x", "x-api-key": "y"}
+
+    def test_last_wins_on_case_collision(self) -> None:
+        # 同一 header 不同大小写同时存在时，normalize 会按 dict 迭代顺序“后者覆盖前者”。
+        result = normalize_headers({"A": "1", "a": "2"})
+        assert result == {"a": "2"}
+
+
+class TestGetHeaderValue:
+    def test_case_insensitive_lookup(self) -> None:
+        headers = {"X-Require-Capability": "context_1m"}
+        assert get_header_value(headers, "x-require-capability") == "context_1m"
+
+    def test_default_when_missing(self) -> None:
+        assert get_header_value({"a": "1"}, "missing", default="d") == "d"
+
+
+class TestExtractClientApiKey:
+    def test_bearer_token(self) -> None:
+        headers = {"authorization": "Bearer test-token"}
+        assert extract_client_api_key(headers, APIFormat.OPENAI) == "test-token"
+
+    def test_bearer_token_requires_prefix(self) -> None:
+        headers = {"Authorization": "test-token"}
+        assert extract_client_api_key(headers, APIFormat.OPENAI) is None
+
+    def test_header_auth(self) -> None:
+        headers = {"X-API-Key": "abc"}
+        assert extract_client_api_key(headers, APIFormat.CLAUDE) == "abc"
+
+
+class TestDetectCapabilities:
+    def test_claude_context_1m(self) -> None:
+        headers = {"Anthropic-Beta": "context-1m,foo"}
+        assert detect_capabilities(headers, APIFormat.CLAUDE) == {"context_1m": True}
+
+    def test_non_claude_noop(self) -> None:
+        headers = {"Anthropic-Beta": "context-1m"}
+        assert detect_capabilities(headers, APIFormat.OPENAI) == {}
+
+
+class TestHeaderBuilder:
+    def test_case_insensitive_uniqueness(self) -> None:
+        builder = HeaderBuilder()
+        builder.add("Authorization", "a")
+        builder.add("authorization", "b")
+        built = builder.build()
+        assert len(built) == 1
+        assert list(built.values()) == ["b"]
+
+    def test_add_protected_does_not_override(self) -> None:
+        builder = HeaderBuilder()
+        builder.add("Authorization", "base")
+        builder.add_protected({"authorization": "override", "X-Test": "1"}, {"Authorization"})
+        built = builder.build()
+        assert built["Authorization"] == "base"
+        assert built["X-Test"] == "1"
+
+
+class TestBuildUpstreamHeaders:
+    def test_priority_and_drop_headers(self) -> None:
+        result = build_upstream_headers(
+            {
+                "Host": "example.com",
+                "X-Api-Key": "client",
+                "User-Agent": "ua",
+                "Content-Type": "text/plain",
+            },
+            APIFormat.OPENAI,
+            "provider",
+            endpoint_headers={"Authorization": "bad", "X-Endpoint": "1", "Content-Type": "bad"},
+            extra_headers={"User-Agent": "extra", "X-Extra": "1"},
+        )
+        assert "Host" not in result
+        assert "X-Api-Key" not in result
+        assert result["Authorization"] == "Bearer provider"
+        assert result["User-Agent"] == "extra"
+        assert result["Content-Type"] == "text/plain"
+        assert result["X-Endpoint"] == "1"
+        assert result["X-Extra"] == "1"
+
+    def test_drop_headers_empty_does_not_fallback(self) -> None:
+        result = build_upstream_headers(
+            {"Host": "example.com"},
+            APIFormat.OPENAI,
+            "provider",
+            drop_headers=frozenset(),
+        )
+        assert result["Host"] == "example.com"
+        assert result["Authorization"] == "Bearer provider"
+
+    def test_no_duplicate_on_case_variants(self) -> None:
+        result = build_upstream_headers(
+            {"user-agent": "a"},
+            APIFormat.OPENAI,
+            "provider",
+            extra_headers={"User-Agent": "b"},
+        )
+        assert len([k for k in result if k.lower() == "user-agent"]) == 1
+        assert result["User-Agent"] == "b"
+
+    def test_default_content_type(self) -> None:
+        result = build_upstream_headers({}, APIFormat.OPENAI, "provider")
+        assert result["Content-Type"] == "application/json"
+
+
+class TestFilterResponseHeaders:
+    def test_drops_hop_by_hop_and_body_dependent_headers(self) -> None:
+        headers = {
+            "Content-Length": "1",
+            "Transfer-Encoding": "chunked",
+            "Connection": "keep-alive",
+            "Content-Type": "application/json",
+            "X-Test": "1",
+        }
+        assert filter_response_headers(headers) == {"X-Test": "1"}
+
+
+class TestRedactHeadersForLog:
+    def test_redacts_core_sensitive_headers_case_insensitively(self) -> None:
+        headers = {"Authorization": "secret", "X-Api-Key": "secret2", "X-Test": "1"}
+        redacted = redact_headers_for_log(headers, CORE_REDACT_HEADERS)
+        assert redacted["Authorization"] == "***"
+        assert redacted["X-Api-Key"] == "***"
+        assert redacted["X-Test"] == "1"
+
+
+class TestCapabilityResolverHeaderParsing:
+    def test_x_require_capability_case_insensitive(self) -> None:
+        reqs = CapabilityResolver.resolve_requirements(
+            request_headers={"x-require-capability": "context_1m"}
+        )
+        assert reqs == {"context_1m": True}
+

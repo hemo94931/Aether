@@ -4,10 +4,9 @@ Gemini CLI Adapter - 基于通用 CLI Adapter 基类的实现
 继承 CliAdapterBase，处理 Gemini CLI 格式的请求。
 """
 
-from typing import Any, AsyncIterator, Dict, Optional, Tuple, Type, Union
+from typing import Any, Dict, Optional, Tuple, Type
 
 import httpx
-from fastapi import Request
 
 from src.api.handlers.base.cli_adapter_base import CliAdapterBase, register_cli_adapter
 from src.api.handlers.base.cli_handler_base import CliMessageHandlerBase
@@ -36,10 +35,6 @@ class GeminiCliAdapter(CliAdapterBase):
 
     def __init__(self, allowed_api_formats: Optional[list[str]] = None):
         super().__init__(allowed_api_formats or ["GEMINI_CLI"])
-
-    def extract_api_key(self, request: Request) -> Optional[str]:
-        """从请求中提取 API 密钥 (x-goog-api-key)"""
-        return request.headers.get("x-goog-api-key")
 
     def _merge_path_params(
         self, original_request_body: Dict[str, Any], path_params: Dict[str, Any]  # noqa: ARG002
@@ -137,19 +132,6 @@ class GeminiCliAdapter(CliAdapterBase):
         else:
             prefix = f"{base_url}/v1beta"
         return f"{prefix}/models/{effective_model_name}:generateContent"
-
-    @classmethod
-    def build_base_headers(cls, api_key: str) -> Dict[str, str]:
-        """构建Gemini CLI API认证头"""
-        return {
-            "x-goog-api-key": api_key,
-            "Content-Type": "application/json",
-        }
-
-    @classmethod
-    def get_protected_header_keys(cls) -> tuple:
-        """返回Gemini CLI API的保护头部key"""
-        return ("x-goog-api-key", "content-type")
 
     @classmethod
     def build_request_body(cls, request_data: Dict[str, Any]) -> Dict[str, Any]:

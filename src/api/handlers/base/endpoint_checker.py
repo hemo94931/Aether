@@ -27,23 +27,11 @@ from collections import defaultdict
 import httpx
 
 from src.core.logger import logger
-
-
-_SENSITIVE_HEADER_KEYS = {
-    "authorization",
-    "x-api-key",
-    "x-goog-api-key",
-}
+from src.core.headers import CORE_REDACT_HEADERS, merge_headers_with_protection, redact_headers_for_log
 
 
 def _redact_headers(headers: Dict[str, str]) -> Dict[str, str]:
-    redacted: Dict[str, str] = {}
-    for key, value in headers.items():
-        if key.lower() in _SENSITIVE_HEADER_KEYS:
-            redacted[key] = "***"
-        else:
-            redacted[key] = value
-    return redacted
+    return redact_headers_for_log(headers, CORE_REDACT_HEADERS)
 
 
 def _truncate_repr(value: Any, limit: int = 1200) -> str:
@@ -64,14 +52,7 @@ def build_safe_headers(
     """
     合并 extra_headers，但防止覆盖 protected_keys（大小写不敏感）。
     """
-    headers = dict(base_headers)
-    if not extra_headers:
-        return headers
-
-    protected = {k.lower() for k in protected_keys}
-    safe_headers = {k: v for k, v in extra_headers.items() if k.lower() not in protected}
-    headers.update(safe_headers)
-    return headers
+    return merge_headers_with_protection(base_headers, extra_headers, set(protected_keys))
 
 
 async def run_endpoint_check(

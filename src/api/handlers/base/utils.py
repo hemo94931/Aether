@@ -6,6 +6,7 @@ import json
 from typing import Any, Dict, Optional
 
 from src.core.exceptions import EmbeddedErrorException, ProviderNotAvailableException
+from src.core.headers import filter_response_headers
 from src.core.logger import logger
 
 
@@ -94,25 +95,6 @@ def build_sse_headers(extra_headers: Optional[Dict[str, str]] = None) -> Dict[st
     return headers
 
 
-_PROXY_RESPONSE_HEADER_BLOCKLIST = frozenset(
-    {
-        # Body-dependent headers: 我们会重编码响应体（JSONResponse / SSE），不能透传上游值
-        "content-length",
-        "content-encoding",
-        "transfer-encoding",
-        "content-type",
-        # Hop-by-hop headers (RFC 7230)
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailer",
-        "upgrade",
-    }
-)
-
-
 def filter_proxy_response_headers(headers: Optional[Dict[str, str]]) -> Dict[str, str]:
     """
     过滤上游响应头中不应透传给客户端的字段。
@@ -123,9 +105,7 @@ def filter_proxy_response_headers(headers: Optional[Dict[str, str]]) -> Dict[str
 
     如果透传上游的 `content-length/content-encoding/...`，会导致客户端解码失败或等待更多字节。
     """
-    if not headers:
-        return {}
-    return {k: v for k, v in headers.items() if k.lower() not in _PROXY_RESPONSE_HEADER_BLOCKLIST}
+    return filter_response_headers(headers)
 
 
 def check_html_response(line: str) -> bool:

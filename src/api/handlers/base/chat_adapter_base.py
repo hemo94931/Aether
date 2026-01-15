@@ -22,12 +22,13 @@ from abc import abstractmethod
 from typing import Any, Dict, Optional, Tuple, Type
 
 import httpx
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.api.base.adapter import ApiAdapter, ApiMode
 from src.api.base.context import ApiRequestContext
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
+from src.core.enums import APIFormat
 from src.core.exceptions import (
     InvalidRequestException,
     ModelNotSupportedException,
@@ -38,6 +39,12 @@ from src.core.exceptions import (
     ProxyException,
     QuotaExceededException,
     UpstreamClientException,
+)
+from src.core.headers import (
+    build_adapter_base_headers,
+    build_adapter_headers,
+    extract_client_api_key,
+    get_adapter_protected_keys,
 )
 from src.core.logger import logger
 from src.services.billing import calculate_request_cost as _calculate_request_cost
@@ -67,6 +74,14 @@ class ChatAdapterBase(ApiAdapter):
     # 计费模板配置（子类可覆盖，如 "claude", "openai", "gemini"）
     BILLING_TEMPLATE: str = "claude"
 
+    @classmethod
+    def _get_api_format(cls) -> APIFormat:
+        """获取 API 格式枚举，用于调用 headers.py 的统一函数"""
+        try:
+            return APIFormat[cls.FORMAT_ID]
+        except KeyError:
+            return APIFormat.OPENAI  # 默认回退
+
     # 子类可以配置的特殊方法（用于check_endpoint）
     @classmethod
     def build_endpoint_url(cls, base_url: str) -> str:
@@ -76,24 +91,30 @@ class ChatAdapterBase(ApiAdapter):
 
     @classmethod
     def build_base_headers(cls, api_key: str) -> Dict[str, str]:
-        """构建基础请求头，子类可以覆盖以自定义认证头"""
-        # 默认实现：Bearer token认证
-        return {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        """构建基础请求头，使用统一的 headers.py 实现"""
+        return build_adapter_base_headers(cls._get_api_format(), api_key)
 
     @classmethod
     def get_protected_header_keys(cls) -> tuple:
-        """返回不应被extra_headers覆盖的头部key，子类可以覆盖"""
-        # 默认保护认证相关头部
-        return ("authorization", "content-type")
+        """返回不应被extra_headers覆盖的头部key，使用统一的 headers.py 实现"""
+        return get_adapter_protected_keys(cls._get_api_format())
+
+    @classmethod
+    def build_headers_with_extra(
+        cls, api_key: str, extra_headers: Optional[Dict[str, str]] = None
+    ) -> Dict[str, str]:
+        """构建完整请求头（包含 extra_headers），使用统一的 headers.py 实现"""
+        return build_adapter_headers(cls._get_api_format(), api_key, extra_headers)
 
     @classmethod
     def build_request_body(cls, request_data: Dict[str, Any]) -> Dict[str, Any]:
         """构建请求体，子类可以覆盖以自定义请求格式转换"""
         # 默认实现：直接使用请求数据
         return request_data.copy()
+
+    def extract_api_key(self, request: Request) -> Optional[str]:
+        """从请求中提取 API 密钥，使用统一的 headers.py 实现"""
+        return extract_client_api_key(dict(request.headers), self._get_api_format())
 
     def __init__(self, allowed_api_formats: Optional[list[str]] = None):
         self.allowed_api_formats = allowed_api_formats or [self.FORMAT_ID]
@@ -626,13 +647,11 @@ class ChatAdapterBase(ApiAdapter):
         Returns:
             测试响应数据
         """
-        from src.api.handlers.base.endpoint_checker import build_safe_headers, run_endpoint_check
+        from src.api.handlers.base.endpoint_checker import run_endpoint_check
 
         # 使用子类配置方法构建请求组件
         url = cls.build_endpoint_url(base_url)
-        base_headers = cls.build_base_headers(api_key)
-        protected_keys = cls.get_protected_header_keys()
-        headers = build_safe_headers(base_headers, extra_headers, protected_keys)
+        headers = cls.build_headers_with_extra(api_key, extra_headers)
         body = cls.build_request_body(request_data)
 
         # 使用通用的endpoint checker执行请求

@@ -16,6 +16,7 @@ from src.core.key_capabilities import (
     CapabilityConfigMode,
     get_user_configurable_capabilities,
 )
+from src.core.headers import get_header_value
 from src.core.logger import logger
 
 # Adapter 检测器类型：接受 headers 和可选的 request_body，返回能力需求字典
@@ -87,7 +88,7 @@ class CapabilityResolver:
 
         # 3. 从请求头 X-Require-Capability 获取（显式声明）
         if request_headers:
-            header_caps = request_headers.get("X-Require-Capability", "")
+            header_caps = get_header_value(request_headers, "X-Require-Capability")
             if header_caps:
                 for cap in header_caps.split(","):
                     cap = cap.strip()

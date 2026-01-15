@@ -17,27 +17,14 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 from src.core.crypto import crypto_service
+from src.core.headers import HeaderBuilder, UPSTREAM_DROP_HEADERS
 
 # ==============================================================================
 # 统一的头部配置常量
 # ==============================================================================
 
-# 敏感头部 - 透传时需要清理（黑名单）
-# 这些头部要么包含认证信息，要么由代理层重新生成
-SENSITIVE_HEADERS: FrozenSet[str] = frozenset(
-    {
-        "authorization",
-        "x-api-key",
-        "x-goog-api-key",  # Gemini API 认证头
-        "host",
-        "content-length",
-        "transfer-encoding",
-        "connection",
-        # 不透传 accept-encoding，让 httpx 自己协商压缩格式
-        # 避免客户端请求 brotli/zstd 但 httpx 不支持解压的问题
-        "accept-encoding",
-    }
-)
+# 兼容别名：历史代码使用 SENSITIVE_HEADERS 命名
+SENSITIVE_HEADERS: FrozenSet[str] = UPSTREAM_DROP_HEADERS
 
 
 # ==============================================================================
@@ -140,8 +127,6 @@ class PassthroughRequestBuilder(RequestBuilder):
         """
         from src.core.api_format_metadata import get_auth_config, resolve_api_format
 
-        headers: Dict[str, str] = {}
-
         # 1. 根据 API 格式自动设置认证头
         decrypted_key = crypto_service.decrypt(key.api_key)
         api_format = getattr(endpoint, "api_format", None)
@@ -150,32 +135,32 @@ class PassthroughRequestBuilder(RequestBuilder):
             get_auth_config(resolved_format) if resolved_format else ("Authorization", "bearer")
         )
 
-        if auth_type == "bearer":
-            headers[auth_header] = f"Bearer {decrypted_key}"
-        else:
-            headers[auth_header] = decrypted_key
+        auth_value = f"Bearer {decrypted_key}" if auth_type == "bearer" else decrypted_key
+        protected_keys = {auth_header.lower(), "content-type"}
 
-        # 2. 添加 endpoint 配置的额外头部
-        if endpoint.headers:
-            headers.update(endpoint.headers)
+        builder = HeaderBuilder()
 
-        # 3. 透传原始头部（排除敏感头部 - 黑名单模式）
+        # 2. 透传原始头部（排除敏感头部 - 黑名单模式）
         if original_headers:
             for name, value in original_headers.items():
-                lower_name = name.lower()
-
-                # 跳过敏感头部
-                if lower_name in SENSITIVE_HEADERS:
+                if name.lower() in SENSITIVE_HEADERS:
                     continue
+                builder.add(name, value)
 
-                headers[name] = value
+        # 3. 添加 endpoint 配置的额外头部（不能覆盖认证头/Content-Type）
+        if endpoint.headers:
+            builder.add_protected(endpoint.headers, protected_keys)
 
         # 4. 添加额外头部
         if extra_headers:
-            headers.update(extra_headers)
+            builder.add_many(extra_headers)
 
-        # 5. 确保有 Content-Type
-        if "Content-Type" not in headers and "content-type" not in headers:
+        # 5. 设置认证头（最高优先级）
+        builder.add(auth_header, auth_value)
+
+        # 6. 确保有 Content-Type
+        headers = builder.build()
+        if not any(k.lower() == "content-type" for k in headers):
             headers["Content-Type"] = "application/json"
 
         return headers

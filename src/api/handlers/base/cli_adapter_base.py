@@ -20,12 +20,13 @@ import traceback
 from typing import Any, Dict, Optional, Tuple, Type
 
 import httpx
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.api.base.adapter import ApiAdapter, ApiMode
 from src.api.base.context import ApiRequestContext
 from src.api.handlers.base.cli_handler_base import CliMessageHandlerBase
+from src.core.enums import APIFormat
 from src.core.exceptions import (
     InvalidRequestException,
     ModelNotSupportedException,
@@ -36,6 +37,12 @@ from src.core.exceptions import (
     ProxyException,
     QuotaExceededException,
     UpstreamClientException,
+)
+from src.core.headers import (
+    build_adapter_base_headers,
+    build_adapter_headers,
+    extract_client_api_key,
+    get_adapter_protected_keys,
 )
 from src.core.logger import logger
 from src.services.billing import calculate_request_cost as _calculate_request_cost
@@ -67,6 +74,55 @@ class CliAdapterBase(ApiAdapter):
 
     def __init__(self, allowed_api_formats: Optional[list[str]] = None):
         self.allowed_api_formats = allowed_api_formats or [self.FORMAT_ID]
+
+    # =========================================================================
+    # API 格式与头部处理 - 使用统一的 headers.py 函数
+    # =========================================================================
+
+    @classmethod
+    def _get_api_format(cls) -> APIFormat:
+        """将 FORMAT_ID 转换为 APIFormat 枚举"""
+        try:
+            return APIFormat[cls.FORMAT_ID]
+        except KeyError:
+            return APIFormat.OPENAI
+
+    def extract_api_key(self, request: Request) -> Optional[str]:
+        """
+        从请求中提取 API 密钥
+
+        使用统一的头部处理函数，根据 API 格式自动识别认证头。
+        """
+        return extract_client_api_key(dict(request.headers), self._get_api_format())
+
+    @classmethod
+    def build_base_headers(cls, api_key: str) -> Dict[str, str]:
+        """
+        构建 CLI API 认证头
+
+        使用统一的头部处理函数。
+        """
+        return build_adapter_base_headers(cls._get_api_format(), api_key)
+
+    @classmethod
+    def build_headers_with_extra(
+        cls, api_key: str, extra_headers: Optional[Dict[str, str]] = None
+    ) -> Dict[str, str]:
+        """
+        构建带额外头部的完整请求头
+
+        使用统一的头部处理函数，自动保护关键头部不被覆盖。
+        """
+        return build_adapter_headers(cls._get_api_format(), api_key, extra_headers)
+
+    @classmethod
+    def get_protected_header_keys(cls) -> tuple[str, ...]:
+        """
+        返回 CLI API 的保护头部 key
+
+        使用统一的头部处理函数。
+        """
+        return get_adapter_protected_keys(cls._get_api_format())
 
     async def handle(self, context: ApiRequestContext):
         """处理 CLI API 请求"""
@@ -575,20 +631,19 @@ class CliAdapterBase(ApiAdapter):
         Returns:
             测试响应数据
         """
-        from src.api.handlers.base.endpoint_checker import build_safe_headers, run_endpoint_check
+        from src.api.handlers.base.endpoint_checker import run_endpoint_check
 
         # 构建请求组件
         url = cls.build_endpoint_url(base_url, request_data, model_name)
-        base_headers = cls.build_base_headers(api_key)
-        protected_keys = cls.get_protected_header_keys()
 
-        # 添加CLI User-Agent
+        # 添加 CLI User-Agent 到 extra_headers
         cli_user_agent = cls.get_cli_user_agent()
+        merged_extra = dict(extra_headers) if extra_headers else {}
         if cli_user_agent:
-            base_headers["User-Agent"] = cli_user_agent
-            protected_keys = tuple(list(protected_keys) + ["user-agent"])
+            merged_extra["User-Agent"] = cli_user_agent
 
-        headers = build_safe_headers(base_headers, extra_headers, protected_keys)
+        # 使用统一的头部构建函数
+        headers = cls.build_headers_with_extra(api_key, merged_extra if merged_extra else None)
         body = cls.build_request_body(request_data)
 
         # 获取有效的模型名称
@@ -610,7 +665,7 @@ class CliAdapterBase(ApiAdapter):
         )
 
     # =========================================================================
-    # CLI Adapter 配置方法 - 子类应覆盖这些方法而不是整个 check_endpoint
+    # CLI Adapter 配置方法 - 子类应覆盖这些方法
     # =========================================================================
 
     @classmethod
@@ -627,29 +682,6 @@ class CliAdapterBase(ApiAdapter):
             完整的端点URL
         """
         raise NotImplementedError(f"{cls.FORMAT_ID} adapter must implement build_endpoint_url")
-
-    @classmethod
-    def build_base_headers(cls, api_key: str) -> Dict[str, str]:
-        """
-        构建CLI API认证头 - 子类应覆盖
-
-        Args:
-            api_key: API密钥
-
-        Returns:
-            基础认证头部字典
-        """
-        raise NotImplementedError(f"{cls.FORMAT_ID} adapter must implement build_base_headers")
-
-    @classmethod
-    def get_protected_header_keys(cls) -> tuple:
-        """
-        返回CLI API的保护头部key - 子类应覆盖
-
-        Returns:
-            保护头部key的元组
-        """
-        raise NotImplementedError(f"{cls.FORMAT_ID} adapter must implement get_protected_header_keys")
 
     @classmethod
     def build_request_body(cls, request_data: Dict[str, Any]) -> Dict[str, Any]:

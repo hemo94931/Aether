@@ -2,75 +2,18 @@
 统一的 Provider 请求构建工具。
 
 负责:
-- 根据 endpoint/key 构建标准请求头
 - 根据 API 格式或端点配置生成请求 URL
 """
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 from urllib.parse import urlencode
 
-from src.core.api_format_metadata import get_auth_config, get_default_path, resolve_api_format
-from src.core.crypto import crypto_service
+from src.core.api_format_metadata import get_default_path, resolve_api_format
 from src.core.enums import APIFormat
 from src.core.logger import logger
 
 if TYPE_CHECKING:
-    from src.models.database import ProviderAPIKey, ProviderEndpoint
-
-
-
-def build_provider_headers(
-    endpoint: "ProviderEndpoint",
-    key: "ProviderAPIKey",
-    original_headers: Optional[Dict[str, str]] = None,
-    *,
-    extra_headers: Optional[Dict[str, str]] = None,
-) -> Dict[str, str]:
-    """
-    根据 endpoint/key 构建请求头，并透传客户端自定义头。
-    """
-    headers: Dict[str, str] = {}
-
-    # api_key 在数据库中是 NOT NULL，类型标注为 Optional 是 SQLAlchemy 限制
-    decrypted_key = crypto_service.decrypt(key.api_key)  # type: ignore[arg-type]
-
-    # 根据 API 格式自动选择认证头
-    api_format = getattr(endpoint, "api_format", None)
-    resolved_format = resolve_api_format(api_format)
-    auth_header, auth_type = (
-        get_auth_config(resolved_format) if resolved_format else ("Authorization", "bearer")
-    )
-
-    if auth_type == "bearer":
-        headers[auth_header] = f"Bearer {decrypted_key}"
-    else:
-        headers[auth_header] = decrypted_key
-
-    if endpoint.headers:
-        headers.update(endpoint.headers)
-
-    excluded_headers = {
-        "host",
-        "authorization",
-        "x-api-key",
-        "x-goog-api-key",
-        "content-length",
-        "transfer-encoding",
-    }
-
-    if original_headers:
-        for name, value in original_headers.items():
-            if name.lower() not in excluded_headers:
-                headers[name] = value
-
-    if extra_headers:
-        headers.update(extra_headers)
-
-    if "Content-Type" not in headers and "content-type" not in headers:
-        headers["Content-Type"] = "application/json"
-
-    return headers
-
+    from src.models.database import ProviderEndpoint
 
 def _normalize_base_url(base_url: str, path: str) -> str:
     """

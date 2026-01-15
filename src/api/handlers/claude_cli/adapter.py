@@ -4,10 +4,9 @@ Claude CLI Adapter - 基于通用 CLI Adapter 基类的简化实现
 继承 CliAdapterBase，只需配置 FORMAT_ID 和 HANDLER_CLASS。
 """
 
-from typing import Any, AsyncIterator, Dict, Optional, Tuple, Type, Union
+from typing import Any, Dict, Optional, Tuple, Type
 
 import httpx
-from fastapi import Request
 
 from src.api.handlers.base.cli_adapter_base import CliAdapterBase, register_cli_adapter
 from src.api.handlers.base.cli_handler_base import CliMessageHandlerBase
@@ -36,13 +35,6 @@ class ClaudeCliAdapter(CliAdapterBase):
 
     def __init__(self, allowed_api_formats: Optional[list[str]] = None):
         super().__init__(allowed_api_formats or ["CLAUDE_CLI"])
-
-    def extract_api_key(self, request: Request) -> Optional[str]:
-        """从请求中提取 API 密钥 (Authorization: Bearer)"""
-        authorization = request.headers.get("authorization")
-        if authorization and authorization.startswith("Bearer "):
-            return authorization.replace("Bearer ", "")
-        return None
 
     def detect_capability_requirements(
         self,
@@ -135,19 +127,6 @@ class ClaudeCliAdapter(CliAdapterBase):
             return f"{base_url}/messages"
         else:
             return f"{base_url}/v1/messages"
-
-    @classmethod
-    def build_base_headers(cls, api_key: str) -> Dict[str, str]:
-        """构建Claude CLI API认证头"""
-        return {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-
-    @classmethod
-    def get_protected_header_keys(cls) -> tuple:
-        """返回Claude CLI API的保护头部key"""
-        return ("authorization", "content-type")
 
     @classmethod
     def build_request_body(cls, request_data: Dict[str, Any]) -> Dict[str, Any]:

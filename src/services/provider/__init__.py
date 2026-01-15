@@ -6,11 +6,10 @@ Provider 服务模块
 
 from src.services.provider.format import normalize_api_format
 from src.services.provider.service import ProviderService
-from src.services.provider.transport import build_provider_headers, build_provider_url
+from src.services.provider.transport import build_provider_url
 
 __all__ = [
     "ProviderService",
     "normalize_api_format",
-    "build_provider_headers",
     "build_provider_url",
 ]

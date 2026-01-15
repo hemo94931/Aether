@@ -36,6 +36,8 @@ class ApiFormatDefinition:
     - path_prefix: 本站路径前缀（如 /claude, /openai），为空表示无前缀
     - auth_header: 认证头名称 (如 "x-api-key", "x-goog-api-key")
     - auth_type: 认证类型 ("header" 直接放值, "bearer" 加 Bearer 前缀)
+    - extra_headers: 该格式必须携带的额外头部（如 anthropic-version）
+    - protected_keys: 不应被 extra_headers 覆盖的头部（小写）
     """
 
     api_format: APIFormat
@@ -44,6 +46,8 @@ class ApiFormatDefinition:
     path_prefix: str = ""  # 本站路径前缀，为空表示无前缀
     auth_header: str = "Authorization"
     auth_type: str = "bearer"  # "bearer" or "header"
+    extra_headers: Mapping[str, str] = field(default_factory=dict)  # 格式必须的额外头部
+    protected_keys: frozenset[str] = field(default_factory=frozenset)  # 受保护的头部 key（小写）
 
     def iter_aliases(self) -> Iterable[str]:
         """返回大小写统一后的别名集合，包含枚举名本身。"""
@@ -62,14 +66,17 @@ _DEFINITIONS: Dict[APIFormat, ApiFormatDefinition] = {
         path_prefix="",  # 通过请求头区分格式，不使用路径前缀
         auth_header="x-api-key",
         auth_type="header",
+        extra_headers={"anthropic-version": "2023-06-01"},
+        protected_keys=frozenset({"x-api-key", "content-type", "anthropic-version"}),
     ),
     APIFormat.CLAUDE_CLI: ApiFormatDefinition(
         api_format=APIFormat.CLAUDE_CLI,
         aliases=("claude_cli", "claude-cli"),
         default_path="/v1/messages",
         path_prefix="",  # 与 CLAUDE 共享入口，通过 header 区分
-        auth_header="authorization",
+        auth_header="Authorization",
         auth_type="bearer",
+        protected_keys=frozenset({"authorization", "content-type"}),
     ),
     APIFormat.OPENAI: ApiFormatDefinition(
         api_format=APIFormat.OPENAI,
@@ -88,6 +95,7 @@ _DEFINITIONS: Dict[APIFormat, ApiFormatDefinition] = {
         path_prefix="",  # 默认格式
         auth_header="Authorization",
         auth_type="bearer",
+        protected_keys=frozenset({"authorization", "content-type"}),
     ),
     APIFormat.OPENAI_CLI: ApiFormatDefinition(
         api_format=APIFormat.OPENAI_CLI,
@@ -96,6 +104,7 @@ _DEFINITIONS: Dict[APIFormat, ApiFormatDefinition] = {
         path_prefix="",  # 与 OPENAI 共享入口
         auth_header="Authorization",
         auth_type="bearer",
+        protected_keys=frozenset({"authorization", "content-type"}),
     ),
     APIFormat.GEMINI: ApiFormatDefinition(
         api_format=APIFormat.GEMINI,
@@ -104,6 +113,7 @@ _DEFINITIONS: Dict[APIFormat, ApiFormatDefinition] = {
         path_prefix="",  # 通过请求头区分格式
         auth_header="x-goog-api-key",
         auth_type="header",
+        protected_keys=frozenset({"x-goog-api-key", "content-type"}),
     ),
     APIFormat.GEMINI_CLI: ApiFormatDefinition(
         api_format=APIFormat.GEMINI_CLI,
@@ -112,6 +122,7 @@ _DEFINITIONS: Dict[APIFormat, ApiFormatDefinition] = {
         path_prefix="",  # 与 GEMINI 共享入口
         auth_header="x-goog-api-key",
         auth_type="header",
+        protected_keys=frozenset({"x-goog-api-key", "content-type"}),
     ),
 }
 
@@ -178,6 +189,36 @@ def get_auth_config(api_format: APIFormat) -> tuple[str, str]:
     if definition:
         return definition.auth_header, definition.auth_type
     return "Authorization", "bearer"
+
+
+def get_extra_headers(api_format: APIFormat) -> Mapping[str, str]:
+    """
+    获取该格式必须携带的额外头部。
+
+    例如 Claude 需要 anthropic-version 头部。
+
+    Returns:
+        额外头部字典（只读）
+    """
+    definition = API_FORMAT_DEFINITIONS.get(api_format)
+    if definition:
+        return definition.extra_headers
+    return {}
+
+
+def get_protected_keys(api_format: APIFormat) -> frozenset[str]:
+    """
+    获取该格式的受保护头部 key（小写）。
+
+    这些头部不应被 extra_headers 覆盖。
+
+    Returns:
+        受保护的头部 key 集合
+    """
+    definition = API_FORMAT_DEFINITIONS.get(api_format)
+    if definition:
+        return definition.protected_keys
+    return frozenset({"authorization", "content-type"})
 
 
 @lru_cache(maxsize=1)

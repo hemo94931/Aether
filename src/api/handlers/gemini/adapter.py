@@ -4,15 +4,14 @@ Gemini Chat Adapter
 处理 Gemini API 格式的请求适配
 """
 
-from typing import Any, AsyncIterator, Dict, Optional, Tuple, Type, Union
+from typing import Any, Dict, Optional, Tuple, Type
 
 import httpx
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
 from src.api.handlers.base.chat_adapter_base import ChatAdapterBase, register_adapter
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
-from src.api.handlers.base.endpoint_checker import build_safe_headers, run_endpoint_check
 from src.core.logger import logger
 from src.models.gemini import GeminiRequest
 
@@ -40,10 +39,6 @@ class GeminiChatAdapter(ChatAdapterBase):
     def __init__(self, allowed_api_formats: Optional[list[str]] = None):
         super().__init__(allowed_api_formats or ["GEMINI"])
         logger.info(f"[{self.name}] 初始化 Gemini Chat 适配器 | API格式: {self.allowed_api_formats}")
-
-    def extract_api_key(self, request: Request) -> Optional[str]:
-        """从请求中提取 API 密钥 (x-goog-api-key)"""
-        return request.headers.get("x-goog-api-key")
 
     def _merge_path_params(
         self, original_request_body: Dict[str, Any], path_params: Dict[str, Any]  # noqa: ARG002
@@ -163,7 +158,7 @@ class GeminiChatAdapter(ChatAdapterBase):
         extra_headers: Optional[Dict[str, str]] = None,
     ) -> Tuple[list, Optional[str]]:
         """查询 Gemini API 支持的模型列表"""
-        # 兼容 base_url 已包含 /v1beta 的情况
+        # Gemini 使用 URL 参数传递 key，不需要 headers 中的认证
         base_url_clean = base_url.rstrip("/")
         if base_url_clean.endswith("/v1beta"):
             models_url = f"{base_url_clean}/models?key={api_key}"
@@ -211,19 +206,6 @@ class GeminiChatAdapter(ChatAdapterBase):
             return f"{base_url}/v1beta"
 
     @classmethod
-    def build_base_headers(cls, api_key: str) -> Dict[str, str]:
-        """构建Gemini API认证头"""
-        return {
-            "x-goog-api-key": api_key,
-            "Content-Type": "application/json",
-        }
-
-    @classmethod
-    def get_protected_header_keys(cls) -> tuple:
-        """返回Gemini API的保护头部key"""
-        return ("x-goog-api-key", "content-type")
-
-    @classmethod
     def build_request_body(cls, request_data: Dict[str, Any]) -> Dict[str, Any]:
         """构建Gemini API请求体"""
         return {
@@ -263,13 +245,11 @@ class GeminiChatAdapter(ChatAdapterBase):
             }
 
         # 使用基类配置方法，但重写URL构建逻辑
-        base_url = cls.build_endpoint_url(base_url)
-        url = f"{base_url}/models/{effective_model_name}:generateContent"
+        base_url_resolved = cls.build_endpoint_url(base_url)
+        url = f"{base_url_resolved}/models/{effective_model_name}:generateContent"
 
         # 构建请求组件
-        base_headers = cls.build_base_headers(api_key)
-        protected_keys = cls.get_protected_header_keys()
-        headers = build_safe_headers(base_headers, extra_headers, protected_keys)
+        headers = cls.build_headers_with_extra(api_key, extra_headers)
         body = cls.build_request_body(request_data)
 
         # 使用基类的通用endpoint checker
@@ -290,7 +270,7 @@ class GeminiChatAdapter(ChatAdapterBase):
         )
 
 
-def build_gemini_adapter(x_app_header: str = "") -> GeminiChatAdapter:
+def build_gemini_adapter(x_app_header: str = "") -> GeminiChatAdapter:  # noqa: ARG001
     """
     根据请求头构建适当的 Gemini 适配器
 
