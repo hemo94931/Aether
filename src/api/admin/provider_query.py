@@ -317,14 +317,14 @@ async def test_model(
         logger.error(f"[test-model] Failed to decrypt API key: {e}")
         raise HTTPException(status_code=500, detail="Failed to decrypt API key")
 
-    # 构建请求配置（timeout 从 Provider 读取）
+    # 构建请求配置
     endpoint_config = {
         "api_key": api_key_value,
         "api_key_id": api_key.id,  # 添加API Key ID用于用量记录
         "base_url": endpoint.base_url,
         "api_format": endpoint.api_format,
         "extra_headers": get_extra_headers_from_endpoint(endpoint),
-        "timeout": provider.timeout or TimeoutDefaults.HTTP_REQUEST,
+        "timeout": TimeoutDefaults.HTTP_REQUEST,
     }
 
     try:

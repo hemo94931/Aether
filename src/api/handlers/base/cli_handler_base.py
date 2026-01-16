@@ -490,8 +490,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
             pool=config.http_pool_timeout,
         )
 
-        # provider.timeout 作为整体请求超时（建立连接 + 获取首字节）
-        request_timeout = float(provider.timeout or 300)
+        # 流式请求使用 stream_first_byte_timeout 作为首字节超时
+        request_timeout = config.stream_first_byte_timeout
 
         logger.debug(
             f"  └─ [{self.request_id}] 发送流式请求: "
@@ -539,7 +539,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
         try:
             # 使用 asyncio.wait_for 包裹整个"建立连接 + 获取首字节"阶段
-            # provider.timeout 控制整体超时，避免上游长时间无响应
+            # stream_first_byte_timeout 控制首字节超时，避免上游长时间无响应
             await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
 
         except asyncio.TimeoutError:
@@ -1633,7 +1633,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 注意：使用 get_proxy_client 复用连接池，不再每次创建新客户端
             from src.clients.http_client import HTTPClientPool
 
-            request_timeout = float(provider.timeout or 300)
+            # 非流式请求使用 http_request_timeout 作为整体超时
+            request_timeout = config.http_request_timeout
             http_client = await HTTPClientPool.get_proxy_client(
                 proxy_config=provider.proxy,
             )

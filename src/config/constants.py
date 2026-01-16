@@ -214,16 +214,14 @@ class TimeoutDefaults:
     """超时配置默认值（秒）
 
     超时配置说明：
-    - 全局默认值和 Provider 默认值统一为 120 秒
-    - 120 秒是 LLM API 的合理默认值：
-      * 大多数请求在 30 秒内完成
-      * 复杂推理（如 Claude extended thinking）可能需要 60-90 秒
-      * 120 秒足够覆盖大部分场景，同时避免线程池被长时间占用
-    - 如需更长超时，可在 Provider 级别单独配置
+    - 非流式请求超时由环境变量 HTTP_REQUEST_TIMEOUT 控制（默认 300 秒）
+    - 流式请求首字节超时由环境变量 STREAM_FIRST_BYTE_TIMEOUT 控制（默认 30 秒）
+    - 此处的常量仅用于无法访问 config 的场景（如模型查询测试）
     """
 
-    # HTTP 请求默认超时（与 Provider 默认值保持一致）
-    HTTP_REQUEST = 120  # 2分钟
+    # HTTP 请求默认超时（用于模型查询等测试场景）
+    # 与 config.http_request_timeout 默认值保持一致
+    HTTP_REQUEST = 300  # 5分钟
 
     # 数据库连接池获取超时
     DB_POOL = 30

@@ -65,7 +65,6 @@ async def list_provider_endpoints(
     - `api_format`: API 格式
     - `base_url`: 基础 URL
     - `custom_path`: 自定义路径
-    - `timeout`: 超时时间（秒）
     - `max_retries`: 最大重试次数
     - `is_active`: 是否活跃
     - `total_keys`: Key 总数
@@ -103,7 +102,6 @@ async def create_provider_endpoint(
     - `base_url`: 基础 URL
     - `custom_path`: 自定义路径（可选）
     - `header_rules`: 请求头规则列表（可选，支持 set/drop/rename 操作）
-    - `timeout`: 超时时间（秒，默认 300）
     - `max_retries`: 最大重试次数（默认 2）
     - `config`: 额外配置（可选）
     - `proxy`: 代理配置（可选）
@@ -139,7 +137,6 @@ async def get_endpoint(
     - `api_format`: API 格式
     - `base_url`: 基础 URL
     - `custom_path`: 自定义路径
-    - `timeout`: 超时时间（秒）
     - `max_retries`: 最大重试次数
     - `is_active`: 是否活跃
     - `total_keys`: Key 总数
@@ -170,7 +167,6 @@ async def update_endpoint(
     - `base_url`: 基础 URL
     - `custom_path`: 自定义路径
     - `header_rules`: 请求头规则列表
-    - `timeout`: 超时时间（秒）
     - `max_retries`: 最大重试次数
     - `is_active`: 是否活跃
     - `config`: 额外配置
@@ -306,7 +302,6 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
             base_url=self.endpoint_data.base_url,
             custom_path=self.endpoint_data.custom_path,
             header_rules=self.endpoint_data.header_rules,
-            timeout=self.endpoint_data.timeout,
             max_retries=self.endpoint_data.max_retries,
             is_active=True,
             config=self.endpoint_data.config,

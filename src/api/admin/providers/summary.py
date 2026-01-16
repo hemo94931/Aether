@@ -302,7 +302,6 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
         quota_reset_day=provider.quota_reset_day,
         quota_last_reset_at=provider.quota_last_reset_at,
         quota_expires_at=provider.quota_expires_at,
-        timeout=provider.timeout,
         max_retries=provider.max_retries,
         proxy=provider.proxy,
         total_endpoints=total_endpoints,

@@ -144,6 +144,8 @@ class Config:
         self.http_read_timeout = float(os.getenv("HTTP_READ_TIMEOUT", "60.0"))
         self.http_write_timeout = float(os.getenv("HTTP_WRITE_TIMEOUT", "60.0"))
         self.http_pool_timeout = float(os.getenv("HTTP_POOL_TIMEOUT", "10.0"))
+        # HTTP_REQUEST_TIMEOUT: 非流式请求整体超时（秒），默认 300 秒
+        self.http_request_timeout = float(os.getenv("HTTP_REQUEST_TIMEOUT", "300.0"))
 
         # HTTP 连接池配置
         # HTTP_MAX_CONNECTIONS: 最大连接数，影响并发能力
@@ -167,10 +169,9 @@ class Config:
         # STREAM_PREFETCH_LINES: 预读行数，用于检测嵌套错误
         # STREAM_STATS_DELAY: 统计记录延迟（秒），等待流完全关闭
         # STREAM_FIRST_BYTE_TIMEOUT: 首字节超时（秒），等待首字节超过此时间触发故障转移
-        #   范围: 10-120 秒，默认 30 秒（必须小于 http_write_timeout 避免竞态）
         self.stream_prefetch_lines = int(os.getenv("STREAM_PREFETCH_LINES", "5"))
         self.stream_stats_delay = float(os.getenv("STREAM_STATS_DELAY", "0.1"))
-        self.stream_first_byte_timeout = self._parse_ttfb_timeout()
+        self.stream_first_byte_timeout = float(os.getenv("STREAM_FIRST_BYTE_TIMEOUT", "30.0"))
 
         # 请求体读取超时（秒）
         # REQUEST_BODY_TIMEOUT: 等待客户端发送完整请求体的超时时间
@@ -289,39 +290,6 @@ class Config:
         # 最小 10 个保活连接，最大不超过 max_connections
         return max(10, min(keepalive, self.http_max_connections))
 
-    def _parse_ttfb_timeout(self) -> float:
-        """
-        解析 TTFB 超时配置，带错误处理和范围限制
-
-        TTFB (Time To First Byte) 用于检测慢响应的 Provider，超时触发故障转移。
-        此值必须小于 http_write_timeout，避免竞态条件。
-
-        Returns:
-            超时时间（秒），范围 10-120，默认 30
-        """
-        default_timeout = 30.0
-        min_timeout = 10.0
-        max_timeout = 120.0  # 必须小于 http_write_timeout (默认 60s) 的 2 倍
-
-        raw_value = os.getenv("STREAM_FIRST_BYTE_TIMEOUT", str(default_timeout))
-        try:
-            timeout = float(raw_value)
-        except ValueError:
-            # 延迟导入，避免循环依赖（Config 初始化时 logger 可能未就绪）
-            self._ttfb_config_warning = (
-                f"无效的 STREAM_FIRST_BYTE_TIMEOUT 配置 '{raw_value}'，使用默认值 {default_timeout}秒"
-            )
-            return default_timeout
-
-        # 范围限制
-        clamped = max(min_timeout, min(max_timeout, timeout))
-        if clamped != timeout:
-            self._ttfb_config_warning = (
-                f"STREAM_FIRST_BYTE_TIMEOUT={timeout}秒超出范围 [{min_timeout}-{max_timeout}]，"
-                f"已调整为 {clamped}秒"
-            )
-        return clamped
-
     def _validate_pool_config(self) -> None:
         """验证连接池配置是否安全"""
         total_per_worker = self.db_pool_size + self.db_max_overflow
@@ -368,10 +336,6 @@ class Config:
         # 连接池配置警告
         if hasattr(self, "_pool_config_warning") and self._pool_config_warning:
             logger.warning(self._pool_config_warning)
-
-        # TTFB 超时配置警告
-        if hasattr(self, "_ttfb_config_warning") and self._ttfb_config_warning:
-            logger.warning(self._ttfb_config_warning)
 
         # 管理员密码检查（必须在环境变量中设置）
         if hasattr(self, "_missing_admin_password") and self._missing_admin_password:

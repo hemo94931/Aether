@@ -403,7 +403,6 @@ class ProviderUpdate(BaseModel):
     api_format: Optional[str] = None
     base_url: Optional[str] = None
     headers: Optional[dict] = None
-    timeout: Optional[int] = Field(None, ge=1, le=600)
     max_retries: Optional[int] = Field(None, ge=0, le=10)
     priority: Optional[int] = None
     weight: Optional[float] = Field(None, gt=0)
@@ -423,7 +422,6 @@ class ProviderResponse(BaseModel):
     api_format: str
     base_url: str
     headers: Optional[dict]
-    timeout: int
     max_retries: int
     priority: int
     weight: float

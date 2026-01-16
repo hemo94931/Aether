@@ -76,7 +76,6 @@ export interface ProviderExport {
   provider_priority?: number
   is_active: boolean
   concurrent_limit?: number | null
-  timeout?: number | null
   max_retries?: number | null
   proxy?: any
   config?: any
@@ -89,7 +88,6 @@ export interface EndpointExport {
   api_format: string
   base_url: string
   headers?: any
-  timeout?: number
   max_retries?: number
   is_active: boolean
   custom_path?: string | null

@@ -552,11 +552,10 @@ class Provider(Base):
     concurrent_limit = Column(Integer, nullable=True)  # 并发请求限制
 
     # 请求配置（从 Endpoint 迁移，作为全局默认值）
-    # 超时 300 秒对于 LLM API 是合理的默认值：
-    # - 大多数请求在 30 秒内完成
-    # - 复杂推理（如 Claude thinking）可能需要 60-120 秒
-    # - 300 秒足够覆盖极端场景（如超长上下文、复杂工具调用）
-    timeout = Column(Integer, default=300, nullable=True)  # 请求超时（秒）
+    # [已废弃] timeout 字段不再使用，超时由环境变量控制：
+    # - 非流式请求: HTTP_REQUEST_TIMEOUT（默认 300 秒）
+    # - 流式首字节: STREAM_FIRST_BYTE_TIMEOUT（默认 30 秒）
+    timeout = Column(Integer, default=300, nullable=True)  # [已废弃] 请求超时（秒）
     max_retries = Column(Integer, default=2, nullable=True)  # 最大重试次数
     proxy = Column(JSONB, nullable=True)  # 代理配置: {url, username, password, enabled}
 
@@ -604,7 +603,7 @@ class ProviderEndpoint(Base):
 
     # 请求配置
     header_rules = Column(JSON, nullable=True)  # 请求头规则 [{action, key, value, from, to}]
-    timeout = Column(Integer, default=300)  # 超时（秒）
+    timeout = Column(Integer, default=300)  # [已废弃] 超时（秒），由环境变量控制
     max_retries = Column(Integer, default=2)  # 最大重试次数
 
     # 状态

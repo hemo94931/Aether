@@ -1703,11 +1703,9 @@ class UsageService:
         Returns:
             请求状态列表
         """
-        from src.models.database import ProviderEndpoint
-
         now = datetime.now(timezone.utc)
 
-        # 构建基础查询，包含端点的 timeout 配置
+        # 构建基础查询
         query = db.query(
             Usage.id,
             Usage.status,
@@ -1722,8 +1720,7 @@ class UsageService:
             Usage.first_byte_time_ms,  # 首字时间 (TTFB)
             Usage.created_at,
             Usage.provider_endpoint_id,
-            ProviderEndpoint.timeout.label("endpoint_timeout"),
-        ).outerjoin(ProviderEndpoint, Usage.provider_endpoint_id == ProviderEndpoint.id)
+        )
 
         # 管理员轮询：可附带 provider 与上游 key 名称（注意：不要在普通用户接口暴露上游 key 信息）
         if include_admin_fields:
@@ -1751,8 +1748,8 @@ class UsageService:
         timeout_ids = []
         for r in records:
             if r.status in ("pending", "streaming") and r.created_at:
-                # 使用端点配置的超时时间，若无则使用默认值
-                timeout_seconds = r.endpoint_timeout or default_timeout_seconds
+                # 使用全局配置的超时时间
+                timeout_seconds = default_timeout_seconds
 
                 # 处理时区：如果 created_at 没有时区信息，假定为 UTC
                 created_at = r.created_at

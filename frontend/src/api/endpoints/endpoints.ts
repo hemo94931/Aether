@@ -28,7 +28,6 @@ export async function createEndpoint(
     base_url: string
     custom_path?: string
     header_rules?: HeaderRule[]
-    timeout?: number
     max_retries?: number
     is_active?: boolean
     config?: Record<string, any>
@@ -48,7 +47,6 @@ export async function updateEndpoint(
     base_url: string
     custom_path: string | null
     header_rules: HeaderRule[]
-    timeout: number
     max_retries: number
     is_active: boolean
     config: Record<string, any>

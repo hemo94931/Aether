@@ -96,7 +96,6 @@ export interface ProviderEndpoint {
   custom_path?: string  // 自定义请求路径（可选，为空则使用 API 格式默认路径）
   // 请求头配置
   header_rules?: HeaderRule[]  // 请求头规则列表，支持 set/drop/rename 操作
-  timeout: number
   max_retries: number
   is_active: boolean
   config?: Record<string, any>
@@ -302,7 +301,6 @@ export interface ProviderWithEndpointsSummary {
   quota_last_reset_at?: string  // 当前周期开始时间
   quota_expires_at?: string
   // 请求配置（从 Endpoint 迁移）
-  timeout?: number  // 请求超时（秒）
   max_retries?: number  // 最大重试次数
   proxy?: ProxyConfig | null  // 代理配置
   is_active: boolean
