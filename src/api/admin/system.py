@@ -774,7 +774,6 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                         "api_format": ep.api_format,
                         "base_url": ep.base_url,
                         "header_rules": ep.header_rules,
-                        "timeout": ep.timeout,
                         "max_retries": ep.max_retries,
                         "is_active": ep.is_active,
                         "custom_path": ep.custom_path,
@@ -855,7 +854,6 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                     "provider_priority": provider.provider_priority,
                     "is_active": provider.is_active,
                     "concurrent_limit": provider.concurrent_limit,
-                    "timeout": provider.timeout,
                     "max_retries": provider.max_retries,
                     "proxy": provider.proxy,
                     "config": provider.config,
@@ -1006,7 +1004,6 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                         existing_provider.concurrent_limit = prov_data.get(
                             "concurrent_limit"
                         )
-                        existing_provider.timeout = prov_data.get("timeout", existing_provider.timeout)
                         existing_provider.max_retries = prov_data.get(
                             "max_retries", existing_provider.max_retries
                         )
@@ -1031,7 +1028,6 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                         provider_priority=prov_data.get("provider_priority", 100),
                         is_active=prov_data.get("is_active", True),
                         concurrent_limit=prov_data.get("concurrent_limit"),
-                        timeout=prov_data.get("timeout"),
                         max_retries=prov_data.get("max_retries"),
                         proxy=prov_data.get("proxy"),
                         config=prov_data.get("config"),
@@ -1064,7 +1060,6 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                                 "base_url", existing_ep.base_url
                             )
                             existing_ep.header_rules = ep_data.get("header_rules")
-                            existing_ep.timeout = ep_data.get("timeout", 300)
                             existing_ep.max_retries = ep_data.get("max_retries", 2)
                             existing_ep.is_active = ep_data.get("is_active", True)
                             existing_ep.custom_path = ep_data.get("custom_path")
@@ -1079,7 +1074,6 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             api_format=ep_data["api_format"],
                             base_url=ep_data["base_url"],
                             header_rules=ep_data.get("header_rules"),
-                            timeout=ep_data.get("timeout", 300),
                             max_retries=ep_data.get("max_retries", 2),
                             is_active=ep_data.get("is_active", True),
                             custom_path=ep_data.get("custom_path"),

@@ -88,7 +88,6 @@ class CreateProviderRequest(BaseModel):
     is_active: Optional[bool] = Field(True, description="是否启用")
     concurrent_limit: Optional[int] = Field(None, ge=0, description="并发限制")
     # 请求配置（从 Endpoint 迁移）
-    timeout: Optional[int] = Field(300, ge=1, le=600, description="请求超时（秒）")
     max_retries: Optional[int] = Field(2, ge=0, le=10, description="最大重试次数")
     proxy: Optional[ProxyConfig] = Field(None, description="代理配置")
     config: Optional[Dict[str, Any]] = Field(None, description="其他配置")
@@ -159,7 +158,6 @@ class UpdateProviderRequest(BaseModel):
     is_active: Optional[bool] = None
     concurrent_limit: Optional[int] = Field(None, ge=0)
     # 请求配置（从 Endpoint 迁移）
-    timeout: Optional[int] = Field(None, ge=1, le=600, description="请求超时（秒）")
     max_retries: Optional[int] = Field(None, ge=0, le=10, description="最大重试次数")
     proxy: Optional[ProxyConfig] = Field(None, description="代理配置")
     config: Optional[Dict[str, Any]] = None

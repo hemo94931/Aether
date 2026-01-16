@@ -388,7 +388,7 @@ class AuthService:
 
         if key_record.is_locked:
             logger.warning("API认证失败 - 密钥已被管理员锁定")
-            raise ForbiddenException("该API密钥已被管理员锁定，请联系管理员")
+            raise ForbiddenException("该密钥已被管理员锁定，请联系管理员")
 
         # 检查过期时间
         if key_record.expires_at:

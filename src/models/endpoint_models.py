@@ -37,7 +37,6 @@ class ProviderEndpointCreate(BaseModel):
         description="请求头规则列表，支持 set/drop/rename 操作",
     )
 
-    timeout: int = Field(default=300, ge=10, le=600, description="超时时间（秒）")
     max_retries: int = Field(default=2, ge=0, le=10, description="最大重试次数")
 
     # 额外配置
@@ -81,7 +80,6 @@ class ProviderEndpointUpdate(BaseModel):
         description="请求头规则列表，支持 set/drop/rename 操作",
     )
 
-    timeout: Optional[int] = Field(default=None, ge=10, le=600, description="超时时间（秒）")
     max_retries: Optional[int] = Field(default=None, ge=0, le=10, description="最大重试次数")
     is_active: Optional[bool] = Field(default=None, description="是否启用")
     config: Optional[Dict[str, Any]] = Field(default=None, description="额外配置")
@@ -117,7 +115,6 @@ class ProviderEndpointResponse(BaseModel):
         default=None, description="请求头规则列表"
     )
 
-    timeout: int
     max_retries: int
 
     # 状态
@@ -619,7 +616,6 @@ class ProviderWithEndpointsSummary(BaseModel):
     quota_expires_at: Optional[datetime] = Field(default=None, description="配额过期时间")
 
     # 请求配置（从 Endpoint 迁移）
-    timeout: Optional[int] = Field(default=300, description="请求超时（秒）")
     max_retries: Optional[int] = Field(default=2, description="最大重试次数")
     proxy: Optional[Dict[str, Any]] = Field(default=None, description="代理配置")
 

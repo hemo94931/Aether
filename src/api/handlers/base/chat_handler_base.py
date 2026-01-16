@@ -20,6 +20,7 @@ Chat Handler Base - Chat API 格式的通用基类
 """
 
 import asyncio
+import json
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
@@ -476,7 +477,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
         # 配置 HTTP 超时
         # 注意：read timeout 用于检测连接断开，不是整体请求超时
-        # 整体请求超时由 asyncio.wait_for 控制，使用 provider.timeout
+        # 整体请求超时由 asyncio.wait_for 控制，使用全局配置
         timeout_config = httpx.Timeout(
             connect=config.http_connect_timeout,
             read=config.http_read_timeout,  # 使用全局配置，用于检测连接断开
@@ -484,8 +485,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             pool=config.http_pool_timeout,
         )
 
-        # provider.timeout 作为整体请求超时（建立连接 + 获取首字节）
-        request_timeout = float(provider.timeout or 300)
+        # 流式请求使用 stream_first_byte_timeout 作为首字节超时
+        request_timeout = config.stream_first_byte_timeout
 
         # 创建 HTTP 客户端（支持代理配置，从 Provider 读取）
         from src.clients.http_client import HTTPClientPool
@@ -527,7 +528,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
         try:
             # 使用 asyncio.wait_for 包裹整个"建立连接 + 获取首字节"阶段
-            # provider.timeout 控制整体超时，避免上游长时间无响应
+            # stream_first_byte_timeout 控制首字节超时，避免上游长时间无响应
             await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
 
         except asyncio.TimeoutError:
@@ -716,7 +717,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             # 注意：使用 get_proxy_client 复用连接池，不再每次创建新客户端
             from src.clients.http_client import HTTPClientPool
 
-            request_timeout = float(provider.timeout or 300)
+            # 非流式请求使用 http_request_timeout 作为整体超时
+            request_timeout = config.http_request_timeout
             http_client = await HTTPClientPool.get_proxy_client(
                 proxy_config=provider.proxy,
             )
@@ -803,6 +805,26 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                     upstream_status=resp.status_code,
                     upstream_response=raw_content,
                 )
+
+            # 检查响应体中的嵌套错误（HTTP 200 但响应体包含错误）
+            if isinstance(response_json, dict):
+                parser = get_parser_for_format(api_format)
+                if parser.is_error_response(response_json):
+                    parsed = parser.parse_response(response_json, 200)
+                    logger.warning(
+                        f"  [{self.request_id}] 非流式检测到嵌套错误: "
+                        f"Provider={provider.name}, "
+                        f"error_type={parsed.error_type}, "
+                        f"embedded_status={parsed.embedded_status_code}, "
+                        f"message={parsed.error_message}"
+                    )
+                    raise EmbeddedErrorException(
+                        provider_name=str(provider.name),
+                        error_code=parsed.embedded_status_code,
+                        error_message=parsed.error_message,
+                        error_status=parsed.error_type,
+                    )
+
             return response_json if isinstance(response_json, dict) else {}
 
         try:

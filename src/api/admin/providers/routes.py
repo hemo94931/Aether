@@ -140,7 +140,6 @@ async def create_provider(request: Request, db: Session = Depends(get_db)):
     - `provider_priority`: 提供商优先级（数字越小优先级越高，默认 100）
     - `is_active`: 是否启用（默认 true）
     - `concurrent_limit`: 并发限制（可选）
-    - `timeout`: 请求超时（秒，可选）
     - `max_retries`: 最大重试次数（可选）
     - `proxy`: 代理配置（可选）
     - `config`: 额外配置信息（JSON，可选）
@@ -176,7 +175,6 @@ async def update_provider(provider_id: str, request: Request, db: Session = Depe
     - `provider_priority`: 提供商优先级
     - `is_active`: 是否启用
     - `concurrent_limit`: 并发限制
-    - `timeout`: 请求超时（秒）
     - `max_retries`: 最大重试次数
     - `proxy`: 代理配置
     - `config`: 额外配置信息（JSON）
@@ -293,7 +291,6 @@ class AdminCreateProviderAdapter(AdminApiAdapter):
                 provider_priority=validated_data.provider_priority,
                 is_active=validated_data.is_active,
                 concurrent_limit=validated_data.concurrent_limit,
-                timeout=validated_data.timeout,
                 max_retries=validated_data.max_retries,
                 proxy=validated_data.proxy.model_dump() if validated_data.proxy else None,
                 config=validated_data.config,

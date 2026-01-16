@@ -186,15 +186,12 @@ def check_prefetched_response_error(
                     f"  [{request_id}] 检测到 JSON 错误响应: "
                     f"Provider={provider_name}, "
                     f"error_type={parsed.error_type}, "
+                    f"embedded_status={parsed.embedded_status_code}, "
                     f"message={parsed.error_message}"
                 )
                 raise EmbeddedErrorException(
                     provider_name=provider_name,
-                    error_code=(
-                        int(parsed.error_type)
-                        if parsed.error_type and parsed.error_type.isdigit()
-                        else None
-                    ),
+                    error_code=parsed.embedded_status_code,
                     error_message=parsed.error_message,
                     error_status=parsed.error_type,
                 )

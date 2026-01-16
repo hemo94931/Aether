@@ -80,29 +80,16 @@
               </SelectContent>
             </Select>
           </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div class="space-y-1.5">
-              <Label>超时时间 (秒)</Label>
-              <Input
-                :model-value="form.timeout ?? ''"
-                type="number"
-                min="1"
-                max="600"
-                placeholder="默认 300"
-                @update:model-value="(v) => form.timeout = parseNumberInput(v)"
-              />
-            </div>
-            <div class="space-y-1.5">
-              <Label>最大重试次数</Label>
-              <Input
-                :model-value="form.max_retries ?? ''"
-                type="number"
-                min="0"
-                max="10"
-                placeholder="默认 2"
-                @update:model-value="(v) => form.max_retries = parseNumberInput(v)"
-              />
-            </div>
+          <div class="space-y-1.5">
+            <Label>最大重试次数</Label>
+            <Input
+              :model-value="form.max_retries ?? ''"
+              type="number"
+              min="0"
+              max="10"
+              placeholder="默认 2"
+              @update:model-value="(v) => form.max_retries = parseNumberInput(v)"
+            />
           </div>
         </div>
 
@@ -279,7 +266,6 @@ const form = ref({
   rate_limit: undefined as number | undefined,
   concurrent_limit: undefined as number | undefined,
   // 请求配置
-  timeout: undefined as number | undefined,
   max_retries: undefined as number | undefined,
   // 代理配置（扁平化便于表单绑定）
   proxy_enabled: false,
@@ -304,7 +290,6 @@ function resetForm() {
     rate_limit: undefined,
     concurrent_limit: undefined,
     // 请求配置
-    timeout: undefined,
     max_retries: undefined,
     // 代理配置
     proxy_enabled: false,
@@ -335,7 +320,6 @@ function loadProviderData() {
     rate_limit: undefined,
     concurrent_limit: undefined,
     // 请求配置
-    timeout: props.provider.timeout ?? undefined,
     max_retries: props.provider.max_retries ?? undefined,
     // 代理配置
     proxy_enabled: proxy?.enabled ?? false,
@@ -391,7 +375,6 @@ const handleSubmit = async () => {
       provider_priority: form.value.provider_priority,
       is_active: form.value.is_active,
       // 请求配置
-      timeout: form.value.timeout ?? undefined,
       max_retries: form.value.max_retries ?? undefined,
       proxy,
     }

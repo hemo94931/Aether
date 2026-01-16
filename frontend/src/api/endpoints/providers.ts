@@ -34,7 +34,6 @@ export async function updateProvider(
     quota_expires_at: string
     rpm_limit: number | null
     // 请求配置（从 Endpoint 迁移）
-    timeout: number
     max_retries: number
     proxy: ProxyConfig | null
     cache_ttl_minutes: number  // 0表示不支持缓存，>0表示支持缓存并设置TTL(分钟)

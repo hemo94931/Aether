@@ -286,15 +286,12 @@ class StreamProcessor:
                             f"  [{self.request_id}] 检测到嵌套错误: "
                             f"Provider={provider.name}, "
                             f"error_type={parsed.error_type}, "
+                            f"embedded_status={parsed.embedded_status_code}, "
                             f"message={parsed.error_message}"
                         )
                         raise EmbeddedErrorException(
                             provider_name=str(provider.name),
-                            error_code=(
-                                int(parsed.error_type)
-                                if parsed.error_type and parsed.error_type.isdigit()
-                                else None
-                            ),
+                            error_code=parsed.embedded_status_code,
                             error_message=parsed.error_message,
                             error_status=parsed.error_type,
                         )

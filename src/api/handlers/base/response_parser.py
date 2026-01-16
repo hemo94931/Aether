@@ -87,6 +87,8 @@ class ParsedResponse:
     is_error: bool = False
     error_type: Optional[str] = None
     error_message: Optional[str] = None
+    # 从响应体解析出的嵌套状态码（当 HTTP 200 但响应体含错误时使用）
+    embedded_status_code: Optional[int] = None
 
 
 class ResponseParser(ABC):

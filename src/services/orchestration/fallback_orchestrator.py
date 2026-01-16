@@ -358,6 +358,8 @@ class FallbackOrchestrator:
         # 需要检查错误消息是否为客户端错误（如 prompt is too long），这类错误不应重试
         if isinstance(cause, EmbeddedErrorException):
             error_message = cause.error_message or ""
+            # 使用嵌入式状态码（如果有），否则默认 200
+            embedded_status = cause.error_code or 200
             if self._error_classifier.is_client_error(error_message):
                 logger.warning(
                     f"  [{request_id}] 嵌入式客户端错误，停止重试: {error_message[:200]}"
@@ -366,7 +368,7 @@ class FallbackOrchestrator:
                 client_error = UpstreamClientException(
                     message=error_message or "请求无效",
                     provider_name=str(provider.name),
-                    status_code=200,  # 嵌入式错误的 HTTP 状态码通常是 200
+                    status_code=embedded_status,
                     upstream_error=error_message,
                 )
                 RequestCandidateService.mark_candidate_failed(
@@ -374,7 +376,7 @@ class FallbackOrchestrator:
                     candidate_id=candidate_record_id,
                     error_type="UpstreamClientException",
                     error_message=error_message,
-                    status_code=200,
+                    status_code=embedded_status,
                     latency_ms=elapsed_ms,
                     concurrent_requests=captured_key_concurrent,
                 )
@@ -396,7 +398,7 @@ class FallbackOrchestrator:
                     candidate_id=candidate_record_id,
                     error_type="EmbeddedErrorException",
                     error_message=error_message,
-                    status_code=200,
+                    status_code=embedded_status,
                     latency_ms=elapsed_ms,
                     concurrent_requests=captured_key_concurrent,
                 )

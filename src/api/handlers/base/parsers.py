@@ -5,6 +5,7 @@
 不再经过 Protocol 抽象层。
 """
 
+import re
 from typing import Any, Dict, Optional, Tuple, Type
 
 from src.api.handlers.base.response_parser import (
@@ -56,6 +57,71 @@ def _check_nested_error(response: Dict[str, Any]) -> Tuple[bool, Optional[Dict[s
                     return True, chunk
 
     return False, None
+
+
+def _extract_embedded_status_code(error_info: Optional[Dict[str, Any]]) -> Optional[int]:
+    """
+    从错误信息中提取嵌套的状态码
+
+    支持多种格式:
+    1. 直接的 code 字段: {"code": 400}
+    2. status 字段: {"status": 400}
+    3. 从 message 中正则提取: "Request failed with status code 400"
+    4. 从 type 字段映射: "invalid_request_error" -> 400
+
+    Args:
+        error_info: 错误信息字典
+
+    Returns:
+        提取的状态码，如果无法提取则返回 None
+    """
+    if not error_info:
+        return None
+
+    # 1. 直接的 code 字段（Gemini 等）
+    code = error_info.get("code")
+    if isinstance(code, int) and 100 <= code < 600:
+        return code
+    if isinstance(code, str) and code.isdigit():
+        code_int = int(code)
+        if 100 <= code_int < 600:
+            return code_int
+
+    # 2. status 字段
+    status = error_info.get("status")
+    if isinstance(status, int) and 100 <= status < 600:
+        return status
+    if isinstance(status, str) and status.isdigit():
+        status_int = int(status)
+        if 100 <= status_int < 600:
+            return status_int
+
+    # 3. 从 message 中正则提取 (例如 "Request failed with status code 400")
+    message = error_info.get("message", "")
+    if message:
+        # 匹配 "status code XXX" 或 "status XXX" 或 "HTTP XXX"
+        match = re.search(r"(?:status\s*(?:code\s*)?|HTTP\s*)(\d{3})", message, re.IGNORECASE)
+        if match:
+            code_int = int(match.group(1))
+            if 100 <= code_int < 600:
+                return code_int
+
+    # 4. 从 type 字段映射常见的错误类型
+    error_type = error_info.get("type", "")
+    type_to_status = {
+        "invalid_request_error": 400,
+        "authentication_error": 401,
+        "permission_error": 403,
+        "not_found_error": 404,
+        "rate_limit_error": 429,
+        "overloaded_error": 503,
+        "api_error": 500,
+        "internal_error": 500,
+    }
+    if error_type and error_type.lower() in type_to_status:
+        return type_to_status[error_type.lower()]
+
+    return None
 
 
 class OpenAIResponseParser(ResponseParser):
@@ -141,6 +207,7 @@ class OpenAIResponseParser(ResponseParser):
             result.is_error = True
             result.error_type = error_info.get("type")
             result.error_message = error_info.get("message")
+            result.embedded_status_code = _extract_embedded_status_code(error_info)
 
         return result
 
@@ -273,6 +340,7 @@ class ClaudeResponseParser(ResponseParser):
             result.is_error = True
             result.error_type = error_info.get("type")
             result.error_message = error_info.get("message")
+            result.embedded_status_code = _extract_embedded_status_code(error_info)
 
         return result
 
@@ -417,6 +485,7 @@ class GeminiResponseParser(ResponseParser):
             result.is_error = True
             result.error_type = error_info.get("status")
             result.error_message = error_info.get("message")
+            result.embedded_status_code = _extract_embedded_status_code(error_info)
 
         return result
 

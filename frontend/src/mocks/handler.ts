@@ -425,9 +425,9 @@ const MOCK_ENDPOINT_KEYS = [
 
 // Mock Endpoints
 const MOCK_ENDPOINTS = [
-  { id: 'ep-001', provider_id: 'provider-001', provider_name: 'anthropic', api_format: 'CLAUDE', base_url: 'https://api.anthropic.com', timeout: 300, max_retries: 2, is_active: true, total_keys: 2, active_keys: 2, created_at: '2024-01-01T00:00:00Z', updated_at: new Date().toISOString() },
-  { id: 'ep-002', provider_id: 'provider-002', provider_name: 'openai', api_format: 'OPENAI', base_url: 'https://api.openai.com', timeout: 60, max_retries: 2, is_active: true, total_keys: 1, active_keys: 1, created_at: '2024-01-01T00:00:00Z', updated_at: new Date().toISOString() },
-  { id: 'ep-003', provider_id: 'provider-003', provider_name: 'google', api_format: 'GEMINI', base_url: 'https://generativelanguage.googleapis.com', timeout: 60, max_retries: 2, is_active: true, total_keys: 1, active_keys: 1, created_at: '2024-01-15T00:00:00Z', updated_at: new Date().toISOString() }
+  { id: 'ep-001', provider_id: 'provider-001', provider_name: 'anthropic', api_format: 'CLAUDE', base_url: 'https://api.anthropic.com', max_retries: 2, is_active: true, total_keys: 2, active_keys: 2, created_at: '2024-01-01T00:00:00Z', updated_at: new Date().toISOString() },
+  { id: 'ep-002', provider_id: 'provider-002', provider_name: 'openai', api_format: 'OPENAI', base_url: 'https://api.openai.com', max_retries: 2, is_active: true, total_keys: 1, active_keys: 1, created_at: '2024-01-01T00:00:00Z', updated_at: new Date().toISOString() },
+  { id: 'ep-003', provider_id: 'provider-003', provider_name: 'google', api_format: 'GEMINI', base_url: 'https://generativelanguage.googleapis.com', max_retries: 2, is_active: true, total_keys: 1, active_keys: 1, created_at: '2024-01-15T00:00:00Z', updated_at: new Date().toISOString() }
 ]
 
 // Mock 能力定义
@@ -1221,7 +1221,6 @@ function generateMockEndpointsForProvider(providerId: string) {
       base_url: format.includes('CLAUDE') ? 'https://api.anthropic.com' :
                 format.includes('OPENAI') ? 'https://api.openai.com' :
                 'https://generativelanguage.googleapis.com',
-      timeout: 300,
       max_retries: 2,
       is_active: healthDetail?.is_active ?? true,
       total_keys: Math.ceil(Math.random() * 3) + 1,
