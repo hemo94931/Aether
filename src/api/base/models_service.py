@@ -13,18 +13,15 @@
 from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from src.config.constants import CacheTTL
 from src.core.cache_service import CacheService
 from src.core.logger import logger
+from src.services.model.availability import ModelAvailabilityQuery
 from src.models.database import (
     ApiKey,
-    GlobalModel,
     Model,
-    Provider,
-    ProviderAPIKey,
-    ProviderEndpoint,
     User,
 )
 
@@ -201,57 +198,16 @@ def get_available_provider_ids(db: Session, api_formats: list[str]) -> set[str]:
     - 端点是活跃的
     - Provider 下有活跃的 Key 且支持该 api_format（Key 直属 Provider，通过 api_formats 过滤）
     """
-    target_formats = {f.upper() for f in api_formats}
-
-    # 1) 先找出有活跃端点的 Provider（记录每个 Provider 支持的格式集合）
-    endpoint_rows = (
-        db.query(ProviderEndpoint.provider_id, ProviderEndpoint.api_format)
-        .filter(
-            ProviderEndpoint.api_format.in_(list(target_formats)),
-            ProviderEndpoint.is_active.is_(True),
-        )
-        .all()
-    )
-
-    if not endpoint_rows:
+    provider_to_formats = ModelAvailabilityQuery.get_providers_with_active_endpoints(db, api_formats)
+    if not provider_to_formats:
         return set()
 
-    provider_to_formats: dict[str, set[str]] = {}
-    for provider_id, fmt in endpoint_rows:
-        if not provider_id or not fmt:
-            continue
-        provider_to_formats.setdefault(provider_id, set()).add(str(fmt).upper())
-
-    provider_ids_with_endpoints = set(provider_to_formats.keys())
-    if not provider_ids_with_endpoints:
-        return set()
-
-    # 2) 再检查这些 Provider 是否至少有一个活跃 Key 支持对应格式
-    key_rows = (
-        db.query(ProviderAPIKey.provider_id, ProviderAPIKey.api_formats)
-        .filter(
-            ProviderAPIKey.provider_id.in_(provider_ids_with_endpoints),
-            ProviderAPIKey.is_active.is_(True),
-        )
-        .all()
+    return ModelAvailabilityQuery.get_providers_with_active_keys(
+        db,
+        set(provider_to_formats.keys()),
+        api_formats,
+        provider_to_formats,
     )
-
-    available_provider_ids: set[str] = set()
-    for provider_id, key_formats in key_rows:
-        if not provider_id:
-            continue
-        endpoint_formats = provider_to_formats.get(provider_id)
-        if not endpoint_formats:
-            continue
-
-        formats_list = key_formats if isinstance(key_formats, list) else []
-        key_formats_upper = {str(f).upper() for f in formats_list}
-
-        # 只有同时满足：请求格式 ∩ Provider 端点格式 ∩ Key 支持格式 非空，才算可用
-        if key_formats_upper & endpoint_formats & target_formats:
-            available_provider_ids.add(provider_id)
-
-    return available_provider_ids
 
 
 def _get_available_model_ids_for_format(db: Session, api_formats: list[str]) -> set[str]:
@@ -264,74 +220,24 @@ def _get_available_model_ids_for_format(db: Session, api_formats: list[str]) -> 
     3. **该端点的 Provider 关联了该模型**
     4. Key 的 allowed_models 允许该模型（null = 允许该 Provider 关联的所有模型）
     """
-    target_formats = {f.upper() for f in api_formats}
-
-    # 1) 找出有活跃端点的 Provider（记录每个 Provider 支持的格式集合）
-    endpoint_rows = (
-        db.query(ProviderEndpoint.provider_id, ProviderEndpoint.api_format)
-        .filter(
-            ProviderEndpoint.api_format.in_(list(target_formats)),
-            ProviderEndpoint.is_active.is_(True),
-        )
-        .all()
-    )
-
-    if not endpoint_rows:
+    provider_to_formats = ModelAvailabilityQuery.get_providers_with_active_endpoints(db, api_formats)
+    if not provider_to_formats:
         return set()
 
-    provider_to_formats: dict[str, set[str]] = {}
-    for provider_id, fmt in endpoint_rows:
-        if not provider_id or not fmt:
-            continue
-        provider_to_formats.setdefault(provider_id, set()).add(str(fmt).upper())
-
-    provider_ids_with_endpoints = set(provider_to_formats.keys())
-    if not provider_ids_with_endpoints:
-        return set()
-
-    # 2) 收集每个 Provider 下「支持对应格式」的活跃 Key 的 allowed_models
-    # Key 直属 Provider，通过 key.api_formats 与 Provider 端点格式交集筛选
-    key_rows = (
-        db.query(ProviderAPIKey.provider_id, ProviderAPIKey.allowed_models, ProviderAPIKey.api_formats)
-        .filter(
-            ProviderAPIKey.provider_id.in_(provider_ids_with_endpoints),
-            ProviderAPIKey.is_active.is_(True),
-        )
-        .all()
+    provider_key_rules = ModelAvailabilityQuery.get_provider_key_rules(
+        db,
+        provider_ids=set(provider_to_formats.keys()),
+        api_formats=api_formats,
+        provider_to_endpoint_formats=provider_to_formats,
     )
-
-    # provider_id -> list[(allowed_models, usable_formats)]
-    provider_key_rules: dict[str, list[tuple[object, set[str]]]] = {}
-    for provider_id, allowed_models, key_formats in key_rows:
-        if not provider_id:
-            continue
-
-        endpoint_formats = provider_to_formats.get(provider_id)
-        if not endpoint_formats:
-            continue
-
-        formats_list = key_formats if isinstance(key_formats, list) else []
-        key_formats_upper = {str(f).upper() for f in formats_list}
-        usable_formats = key_formats_upper & endpoint_formats & target_formats
-        if not usable_formats:
-            continue
-
-        provider_key_rules.setdefault(provider_id, []).append((allowed_models, usable_formats))
 
     provider_ids_with_format = set(provider_key_rules.keys())
     if not provider_ids_with_format:
         return set()
 
-    # 只查询那些有匹配格式端点的 Provider 下的模型
     models = (
-        db.query(Model)
-        .options(joinedload(Model.global_model))
-        .join(Provider)
-        .filter(
-            Model.provider_id.in_(provider_ids_with_format),
-            Model.is_active.is_(True),
-            Provider.is_active.is_(True),
-        )
+        ModelAvailabilityQuery.base_active_models(db, eager_load=True)
+        .filter(Model.provider_id.in_(provider_ids_with_format))
         .all()
     )
 
@@ -340,9 +246,7 @@ def _get_available_model_ids_for_format(db: Session, api_formats: list[str]) -> 
     for model in models:
         model_provider_id = model.provider_id
         global_model = model.global_model
-        model_id = global_model.name if global_model else model.provider_model_name  # type: ignore
-
-        if not model_provider_id or not model_id:
+        if not model_provider_id or not global_model or not global_model.name:
             continue
 
         # 该模型的 Provider 必须有匹配格式的端点
@@ -350,32 +254,46 @@ def _get_available_model_ids_for_format(db: Session, api_formats: list[str]) -> 
             continue
 
         # 检查该 provider 下是否有 Key 允许这个模型
-        from src.core.model_permissions import check_model_allowed
+        from src.core.model_permissions import check_model_allowed_with_mappings
+
+        model_id = global_model.name
+        model_mappings = (global_model.config or {}).get("model_mappings")
 
         rules = provider_key_rules.get(model_provider_id, [])
-        for allowed_models, usable_formats in rules:
+        for allowed_models, _usable_formats in rules:
             # None = 不限制
             if allowed_models is None:
                 available_model_ids.add(model_id)
                 break
 
-            # 检查是否允许该模型
-            if check_model_allowed(
+            # 检查是否允许该模型（支持 model_mappings 正则匹配）
+            is_allowed, _ = check_model_allowed_with_mappings(
                 model_name=model_id,
-                allowed_models=allowed_models,  # type: ignore[arg-type]
-                resolved_model_name=(model.provider_model_name if global_model else None),
-            ):
+                allowed_models=allowed_models,
+                resolved_model_name=model.provider_model_name,
+                model_mappings=model_mappings,
+            )
+            if is_allowed:
                 available_model_ids.add(model_id)
                 break
 
     return available_model_ids
 
 
-def _extract_model_info(model: Any) -> ModelInfo:
-    """从 Model 对象提取 ModelInfo"""
+def _extract_model_info(model: Any) -> Optional[ModelInfo]:
+    """
+    从 Model 对象提取 ModelInfo
+
+    前置条件：model 必须关联 GlobalModel（由 base_active_models 内连接保证）
+    如果 global_model 为 None（不应发生），返回 None 并记录日志。
+    """
     global_model = model.global_model
-    model_id: str = global_model.name if global_model else model.provider_model_name
-    display_name: str = global_model.display_name if global_model else model.provider_model_name
+    if global_model is None:
+        logger.warning(f"[ModelService] Model {getattr(model, 'id', 'unknown')} 缺少 global_model，跳过")
+        return None
+
+    model_id: str = global_model.name
+    display_name: str = global_model.display_name
     created_at: Optional[str] = (
         model.created_at.strftime("%Y-%m-%dT%H:%M:%SZ") if model.created_at else None
     )
@@ -384,11 +302,8 @@ def _extract_model_info(model: Any) -> ModelInfo:
     provider_id: str = model.provider_id or ""
 
     # 从 GlobalModel.config 提取配置信息
-    config: dict = {}
-    description: Optional[str] = None
-    if global_model:
-        config = global_model.config or {}
-        description = config.get("description")
+    config: dict = global_model.config or {}
+    description: Optional[str] = config.get("description")
 
     return ModelInfo(
         id=model_id,
@@ -458,24 +373,20 @@ async def list_available_models(
         if not available_model_ids:
             return []
 
-    query = (
-        db.query(Model)
-        .options(joinedload(Model.global_model), joinedload(Model.provider))
-        .join(Provider)
-        .filter(
-            Model.is_active.is_(True),
-            Provider.is_active.is_(True),
-            Model.provider_id.in_(available_provider_ids),
-        )
+    all_models = (
+        ModelAvailabilityQuery.base_active_models(db, eager_load=True)
+        .filter(Model.provider_id.in_(available_provider_ids))
         .order_by(Model.created_at.desc())
+        .all()
     )
-    all_models = query.all()
 
     result: list[ModelInfo] = []
     seen_model_ids: set[str] = set()
 
     for model in all_models:
         info = _extract_model_info(model)
+        if info is None:
+            continue
 
         # 如果有 available_model_ids 限制，检查是否在其中
         if available_model_ids is not None and info.id not in available_model_ids:
@@ -507,12 +418,7 @@ def find_model_by_id(
     restrictions: Optional[AccessRestrictions] = None,
 ) -> Optional[ModelInfo]:
     """
-    按 ID 查找模型
-
-    查找顺序：
-    1. 先按 GlobalModel.name 查找
-    2. 如果没找到任何候选，再按 provider_model_name 查找
-    3. 如果有候选但都不可用，返回 None（不回退）
+    按 ID 查找模型（仅支持 GlobalModel.name）
 
     Args:
         db: 数据库会话
@@ -540,17 +446,8 @@ def find_model_by_id(
         if model_id not in restrictions.allowed_models:
             return None
 
-    # 先按 GlobalModel.name 查找
     models_by_global = (
-        db.query(Model)
-        .options(joinedload(Model.global_model), joinedload(Model.provider))
-        .join(Provider)
-        .join(GlobalModel, Model.global_model_id == GlobalModel.id)
-        .filter(
-            GlobalModel.name == model_id,
-            Model.is_active.is_(True),
-            Provider.is_active.is_(True),
-        )
+        ModelAvailabilityQuery.find_by_global_model_name(db, model_id, eager_load=True)
         .order_by(Model.created_at.desc())
         .all()
     )
@@ -566,34 +463,7 @@ def find_model_by_id(
                 return False
         return True
 
-    model = next(
-        (m for m in models_by_global if is_model_accessible(m)),
-        None,
-    )
-
-    # 如果有候选但都不可用，直接返回 None（不回退 provider_model_name）
-    if not model and models_by_global:
-        return None
-
-    # 如果找不到任何候选，按 provider_model_name 查找
-    if not model:
-        models_by_provider_name = (
-            db.query(Model)
-            .options(joinedload(Model.global_model), joinedload(Model.provider))
-            .join(Provider)
-            .filter(
-                Model.provider_model_name == model_id,
-                Model.is_active.is_(True),
-                Provider.is_active.is_(True),
-            )
-            .order_by(Model.created_at.desc())
-            .all()
-        )
-
-        model = next(
-            (m for m in models_by_provider_name if is_model_accessible(m)),
-            None,
-        )
+    model = next((m for m in models_by_global if is_model_accessible(m)), None)
 
     if not model:
         return None

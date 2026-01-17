@@ -235,6 +235,7 @@ class TestAPIKeyAuthentication:
 
         mock_api_key = MagicMock()
         mock_api_key.is_active = True
+        mock_api_key.is_locked = False
         mock_api_key.expires_at = None
         mock_api_key.user = mock_user
         mock_api_key.balance_used_usd = 0.0
@@ -271,6 +272,7 @@ class TestAPIKeyAuthentication:
         """测试 API Key 已禁用"""
         mock_api_key = MagicMock()
         mock_api_key.is_active = False
+        mock_api_key.is_locked = False
 
         mock_db = MagicMock()
         mock_db.query.return_value.options.return_value.filter.return_value.first.return_value = (
@@ -286,6 +288,7 @@ class TestAPIKeyAuthentication:
         """测试 API Key 已过期"""
         mock_api_key = MagicMock()
         mock_api_key.is_active = True
+        mock_api_key.is_locked = False
         mock_api_key.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
 
         mock_db = MagicMock()
