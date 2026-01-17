@@ -1,8 +1,8 @@
 <template>
-  <div class="flex flex-col sm:flex-row gap-4 border-t border-border/60 px-6 py-4 bg-muted/20">
+  <div class="flex flex-col sm:flex-row gap-3 sm:gap-4 border-t border-border/60 px-4 sm:px-6 py-3 sm:py-4 bg-muted/20">
     <!-- 左侧：记录范围和每页数量 -->
-    <div class="flex flex-col sm:flex-row items-start sm:items-center gap-3 text-sm text-muted-foreground">
-      <span class="font-medium">
+    <div class="flex items-center justify-between sm:justify-start gap-3 text-sm text-muted-foreground">
+      <span class="font-medium whitespace-nowrap">
         显示 <span class="text-foreground font-semibold">{{ recordRange.start }}-{{ recordRange.end }}</span> 条，共 <span class="text-foreground font-semibold">{{ total }}</span> 条
       </span>
       <Select
@@ -11,8 +11,10 @@
         :model-value="String(pageSize)"
         @update:model-value="handlePageSizeChange"
       >
-        <SelectTrigger class="w-36 h-9 border-border/60">
-          <SelectValue />
+        <SelectTrigger class="w-[120px] h-8 sm:h-9 border-border/60 text-xs sm:text-sm">
+          <span class="flex-1 text-center">
+            <SelectValue />
+          </span>
         </SelectTrigger>
         <SelectContent>
           <SelectItem
@@ -27,26 +29,7 @@
     </div>
 
     <!-- 右侧：分页按钮 -->
-    <div class="flex flex-wrap items-center gap-2 sm:ml-auto">
-      <Button
-        variant="outline"
-        size="sm"
-        class="h-9 px-3"
-        :disabled="current === 1"
-        @click="handlePageChange(1)"
-      >
-        首页
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        class="h-9 px-3"
-        :disabled="current === 1"
-        @click="handlePageChange(current - 1)"
-      >
-        上一页
-      </Button>
-
+    <div class="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 sm:ml-auto">
       <!-- 页码按钮（智能省略） -->
       <template
         v-for="page in pageNumbers"
@@ -68,24 +51,24 @@
         >{{ page }}</span>
       </template>
 
-      <Button
-        variant="outline"
-        size="sm"
-        class="h-9 px-3"
-        :disabled="current === totalPages"
-        @click="handlePageChange(current + 1)"
+      <!-- 页码跳转 -->
+      <div
+        v-if="totalPages > 7"
+        class="flex items-center gap-1.5 ml-2 text-sm text-muted-foreground"
       >
-        下一页
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        class="h-9 px-3"
-        :disabled="current === totalPages"
-        @click="handlePageChange(totalPages)"
-      >
-        末页
-      </Button>
+        <span class="hidden sm:inline">跳至</span>
+        <input
+          v-model="jumpPageInput"
+          type="text"
+          inputmode="numeric"
+          pattern="[0-9]*"
+          class="w-12 h-9 px-2 text-center text-sm border border-border/60 rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/60"
+          @keydown.enter="handleJumpPage"
+          @blur="handleJumpPage"
+          @input="filterNumericInput"
+        >
+        <span class="hidden sm:inline">页</span>
+      </div>
     </div>
   </div>
 </template>
@@ -116,6 +99,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<Emits>()
 
 const pageSizeSelectOpen = ref(false)
+const jumpPageInput = ref('')
 
 const totalPages = computed(() => Math.ceil(props.total / props.pageSize))
 
@@ -174,5 +158,19 @@ function handlePageSizeChange(value: string) {
     // 切换每页数量时，重置到第一页
     emit('update:current', 1)
   }
+}
+
+function handleJumpPage() {
+  const page = parseInt(jumpPageInput.value)
+  if (!isNaN(page) && page >= 1 && page <= totalPages.value && page !== props.current) {
+    emit('update:current', page)
+  }
+  jumpPageInput.value = ''
+}
+
+function filterNumericInput(event: Event) {
+  const input = event.target as HTMLInputElement
+  input.value = input.value.replace(/[^0-9]/g, '')
+  jumpPageInput.value = input.value
 }
 </script>

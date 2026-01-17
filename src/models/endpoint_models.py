@@ -639,6 +639,9 @@ class ProviderWithEndpointsSummary(BaseModel):
         default=0, description="不健康的端点数量（health_score < 0.5）"
     )
 
+    # Provider Ops 配置状态
+    ops_configured: bool = Field(default=False, description="是否配置了扩展操作（余额监控等）")
+
     # 时间戳
     created_at: datetime
     updated_at: datetime

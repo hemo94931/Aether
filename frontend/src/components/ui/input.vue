@@ -1,35 +1,151 @@
 <template>
+  <div v-if="masked" class="group relative">
+    <input
+      ref="inputRef"
+      :class="inputClass"
+      :style="inputStyle"
+      :value="modelValue"
+      :type="effectiveType"
+      :autocomplete="autocompleteAttr"
+      :data-lpignore="shouldDisableAutofill ? 'true' : undefined"
+      :data-1p-ignore="shouldDisableAutofill ? 'true' : undefined"
+      :data-form-type="shouldDisableAutofill ? 'other' : undefined"
+      :data-protonpass-ignore="shouldDisableAutofill ? 'true' : undefined"
+      :data-bwignore="shouldDisableAutofill ? 'true' : undefined"
+      :data-bitwarden-watching="shouldDisableAutofill ? 'false' : undefined"
+      :name="shouldDisableAutofill ? randomName : undefined"
+      v-bind="filteredAttrs"
+      @input="handleInput"
+    >
+    <button
+      v-if="hasValue"
+      type="button"
+      class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/20 hover:text-muted-foreground/50 transition-colors"
+      tabindex="-1"
+      :aria-label="isVisible ? '隐藏内容' : '显示内容'"
+      @click="toggleVisibility"
+    >
+      <EyeOff v-if="isVisible" class="h-4 w-4" />
+      <Eye v-else class="h-4 w-4" />
+    </button>
+  </div>
   <input
+    v-else
+    ref="inputRef"
     :class="inputClass"
+    :style="inputStyle"
     :value="modelValue"
+    :type="effectiveType"
     :autocomplete="autocompleteAttr"
-    :data-lpignore="disableAutofill ? 'true' : undefined"
-    :data-1p-ignore="disableAutofill ? 'true' : undefined"
-    :data-form-type="disableAutofill ? 'other' : undefined"
-    v-bind="$attrs"
+    :data-lpignore="shouldDisableAutofill ? 'true' : undefined"
+    :data-1p-ignore="shouldDisableAutofill ? 'true' : undefined"
+    :data-form-type="shouldDisableAutofill ? 'other' : undefined"
+    :data-protonpass-ignore="shouldDisableAutofill ? 'true' : undefined"
+    :data-bwignore="shouldDisableAutofill ? 'true' : undefined"
+    :data-bitwarden-watching="shouldDisableAutofill ? 'false' : undefined"
+    :name="shouldDisableAutofill ? randomName : undefined"
+    v-bind="filteredAttrs"
     @input="handleInput"
   >
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, useAttrs, ref } from 'vue'
+import { Eye, EyeOff } from 'lucide-vue-next'
 import { cn } from '@/lib/utils'
+
+// 开发环境警告：type="password" 已被弃用
+const warnPasswordType = import.meta.env.DEV
+  ? (() => {
+      let warned = false
+      return () => {
+        if (!warned) {
+          warned = true
+          console.warn(
+            '[Input] type="password" 已被弃用，请使用 masked 属性代替。\n' +
+              '示例：<Input v-model="apiKey" masked />\n' +
+              'masked 属性使用 CSS 遮蔽而非 password 类型，不会触发浏览器密码管理器。'
+          )
+        }
+      }
+    })()
+  : () => {}
 
 interface Props {
   modelValue?: string | number
   class?: string
   autocomplete?: string
+  /**
+   * 遮蔽显示内容（用于 API Key 等敏感信息）
+   * 使用 CSS -webkit-text-security 实现，不会触发浏览器密码管理器
+   * 同时会显示一个小眼睛按钮用于切换显示/隐藏
+   * 注意：Firefox 不支持 -webkit-text-security，会显示明文（但仍可通过按钮切换）
+   */
+  masked?: boolean
+  /**
+   * 禁用浏览器自动填充
+   * - true: 禁用自动填充
+   * - false: 允许自动填充（默认）
+   */
   disableAutofill?: boolean
 }
 
 const props = defineProps<Props>()
+const attrs = useAttrs()
 const emit = defineEmits<{
   'update:modelValue': [value: string]
 }>()
 
+const inputRef = ref<HTMLInputElement | null>(null)
+const isVisible = ref(false)
+
+// 判断是否有值
+const hasValue = computed(() => {
+  return props.modelValue !== undefined && props.modelValue !== null && props.modelValue !== ''
+})
+
+function toggleVisibility() {
+  isVisible.value = !isVisible.value
+}
+
+// 计算是否应该禁用自动填充
+const shouldDisableAutofill = computed(() => {
+  // masked 模式默认禁用自动填充
+  if (props.masked && props.disableAutofill === undefined) {
+    return true
+  }
+  return props.disableAutofill ?? false
+})
+
+// 始终使用 text 类型，永远不用 password
+const effectiveType = computed(() => {
+  const attrType = attrs.type as string | undefined
+  // 如果传入 password，强制转为 text（配合 masked 使用）
+  if (attrType === 'password') {
+    warnPasswordType()
+    return 'text'
+  }
+  return attrType
+})
+
+// 过滤掉 type 和 class 属性，因为我们会单独处理
+const filteredAttrs = computed(() => {
+  const { type, class: _, ...rest } = attrs
+  return rest
+})
+
+// 生成一个稳定的随机值（组件实例级别）
+const randomSuffix = Math.random().toString(36).substring(2, 8)
+const randomName = `field_${randomSuffix}`
+
 const autocompleteAttr = computed(() => {
-  if (props.disableAutofill) {
-    return 'one-time-code'
+  // 如果显式设置了 autocomplete 且不禁用自动填充，使用该值
+  if (props.autocomplete && !shouldDisableAutofill.value) {
+    return props.autocomplete
+  }
+  // 禁用自动填充时，使用浏览器无法识别的随机值
+  if (shouldDisableAutofill.value) {
+    return `off-${randomSuffix}`
   }
   return props.autocomplete ?? 'off'
 })
@@ -37,12 +153,25 @@ const autocompleteAttr = computed(() => {
 const inputClass = computed(() =>
   cn(
     'flex h-11 w-full rounded-2xl border border-border/60 bg-card/80 px-4 py-2 text-sm shadow-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:border-primary/60 text-foreground backdrop-blur transition-all',
+    props.masked && 'pr-10',
     props.class
   )
 )
+
+// 当 masked 为 true 且未显示时，用 CSS 遮蔽文字
+const inputStyle = computed(() => {
+  if (props.masked && !isVisible.value) {
+    // 使用 -webkit-text-security（Chrome, Safari, Edge 支持）
+    // Firefox 不支持此属性，会显示明文，但仍可通过小眼睛按钮切换
+    return { '-webkit-text-security': 'disc' }
+  }
+  return undefined
+})
 
 function handleInput(event: Event) {
   const target = event.target as HTMLInputElement
   emit('update:modelValue', target.value)
 }
+
+defineExpose({ inputRef })
 </script>

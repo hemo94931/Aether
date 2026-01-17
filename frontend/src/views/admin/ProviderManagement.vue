@@ -3,7 +3,6 @@
     <!-- 提供商表格 -->
     <Card
       variant="default"
-      class="overflow-hidden"
     >
       <!-- 标题和操作栏 -->
       <div class="px-4 sm:px-6 py-3 sm:py-3.5 border-b border-border/50">
@@ -99,23 +98,17 @@
         <Table>
           <TableHeader>
             <TableRow class="border-b border-border/40 hover:bg-transparent">
-              <TableHead class="w-[150px] h-11 font-medium text-foreground/80">
+              <TableHead class="w-[180px] h-11 font-medium text-foreground/80">
                 提供商信息
               </TableHead>
-              <TableHead class="w-[100px] h-11 font-medium text-foreground/80">
-                计费类型
-              </TableHead>
-              <TableHead class="w-[120px] h-11 font-medium text-foreground/80">
-                官网
+              <TableHead class="w-[140px] h-11 font-medium text-foreground/80 text-center">
+                余额监控
               </TableHead>
               <TableHead class="w-[120px] h-11 font-medium text-foreground/80 text-center">
                 资源统计
               </TableHead>
-              <TableHead class="w-[240px] h-11 font-medium text-foreground/80">
+              <TableHead class="w-[280px] h-11 font-medium text-foreground/80">
                 端点健康
-              </TableHead>
-              <TableHead class="w-[140px] h-11 font-medium text-foreground/80">
-                配额/限流
               </TableHead>
               <TableHead class="w-[80px] h-11 font-medium text-foreground/80 text-center">
                 状态
@@ -134,28 +127,49 @@
               @click="handleRowClick($event, provider.id)"
             >
               <TableCell class="py-3.5">
-                <span class="text-sm font-medium text-foreground">{{ provider.name }}</span>
+                <div class="space-y-0.5">
+                  <span class="text-sm font-medium text-foreground">{{ provider.name }}</span>
+                  <a
+                    v-if="provider.website"
+                    :href="provider.website"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="text-xs text-primary/80 hover:text-primary hover:underline truncate block max-w-[160px]"
+                    :title="provider.website"
+                    @click.stop
+                  >
+                    {{ formatWebsiteDisplay(provider.website) }}
+                  </a>
+                </div>
               </TableCell>
-              <TableCell class="py-3.5">
-                <Badge
-                  variant="outline"
-                  class="text-xs font-normal border-border/50"
+              <TableCell class="py-3.5 text-center">
+                <!-- 显示从上游 API 查询的余额 -->
+                <div
+                  v-if="provider.ops_configured && getProviderBalance(provider.id)"
+                  class="text-xs"
                 >
-                  {{ formatBillingType(provider.billing_type || 'pay_as_you_go') }}
-                </Badge>
-              </TableCell>
-              <TableCell class="py-3.5">
-                <a
-                  v-if="provider.website"
-                  :href="provider.website"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="text-xs text-primary/80 hover:text-primary hover:underline truncate block max-w-[100px]"
-                  :title="provider.website"
-                  @click.stop
+                  <span class="font-semibold text-foreground/90">
+                    {{ formatBalanceDisplay(getProviderBalance(provider.id)) }}
+                  </span>
+                </div>
+                <!-- 显示本地配置的月度配额 -->
+                <div
+                  v-else-if="provider.billing_type === 'monthly_quota'"
+                  class="space-y-0.5 text-xs"
                 >
-                  {{ formatWebsiteDisplay(provider.website) }}
-                </a>
+                  <Badge
+                    variant="outline"
+                    class="text-[10px] font-normal border-border/50"
+                  >
+                    {{ formatBillingType(provider.billing_type) }}
+                  </Badge>
+                  <div class="text-muted-foreground/70 pt-0.5">
+                    <span
+                      class="font-semibold"
+                      :class="getQuotaUsedColorClass(provider)"
+                    >${{ (provider.monthly_used_usd ?? 0).toFixed(2) }}</span> / <span class="font-medium">${{ (provider.monthly_quota_usd ?? 0).toFixed(2) }}</span>
+                  </div>
+                </div>
                 <span
                   v-else
                   class="text-xs text-muted-foreground/50"
@@ -204,25 +218,6 @@
                   class="text-xs text-muted-foreground/50"
                 >暂无端点</span>
               </TableCell>
-              <TableCell class="py-3.5">
-                <div class="space-y-0.5 text-xs">
-                  <div
-                    v-if="provider.billing_type === 'monthly_quota'"
-                    class="text-muted-foreground/70"
-                  >
-                    配额: <span
-                      class="font-semibold"
-                      :class="getQuotaUsedColorClass(provider)"
-                    >${{ (provider.monthly_used_usd ?? 0).toFixed(2) }}</span> / <span class="font-medium">${{ (provider.monthly_quota_usd ?? 0).toFixed(2) }}</span>
-                  </div>
-                  <div
-                    v-else
-                    class="text-muted-foreground/50"
-                  >
-                    按量付费
-                  </div>
-                </div>
-              </TableCell>
               <TableCell class="py-3.5 text-center">
                 <Badge
                   :variant="provider.is_active ? 'success' : 'secondary'"
@@ -253,6 +248,15 @@
                     @click="openEditProviderDialog(provider)"
                   >
                     <Edit class="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="h-7 w-7 text-muted-foreground/70 hover:text-foreground"
+                    title="扩展操作配置"
+                    @click="openOpsConfigDialog(provider)"
+                  >
+                    <KeyRound class="h-3.5 w-3.5" />
                   </Button>
                   <Button
                     variant="ghost"
@@ -311,9 +315,28 @@
                 variant="ghost"
                 size="icon"
                 class="h-7 w-7"
+                title="查看详情"
+                @click="openProviderDrawer(provider.id)"
+              >
+                <Eye class="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-7 w-7"
+                title="编辑"
                 @click="openEditProviderDialog(provider)"
               >
                 <Edit class="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-7 w-7"
+                title="扩展操作配置"
+                @click="openOpsConfigDialog(provider)"
+              >
+                <KeyRound class="h-3.5 w-3.5" />
               </Button>
               <Button
                 variant="ghost"
@@ -334,7 +357,7 @@
             </div>
           </div>
 
-          <!-- 第二行：计费类型 + 资源统计 -->
+          <!-- 第二行：计费类型 + 余额/配额 + 资源统计 -->
           <div class="flex flex-wrap items-center gap-3 text-xs">
             <Badge
               variant="outline"
@@ -342,6 +365,23 @@
             >
               {{ formatBillingType(provider.billing_type || 'pay_as_you_go') }}
             </Badge>
+            <!-- 余额（从上游 API 查询） -->
+            <span
+              v-if="provider.ops_configured && getProviderBalance(provider.id)"
+              class="text-muted-foreground"
+            >
+              余额 <span class="font-semibold text-foreground/90">{{ formatBalanceDisplay(getProviderBalance(provider.id)) }}</span>
+            </span>
+            <!-- 本地配额 -->
+            <span
+              v-else-if="provider.billing_type === 'monthly_quota'"
+              class="text-muted-foreground"
+            >
+              配额 <span
+                class="font-semibold"
+                :class="getQuotaUsedColorClass(provider)"
+              >${{ (provider.monthly_used_usd ?? 0).toFixed(2) }}</span>/<span class="font-medium">${{ (provider.monthly_quota_usd ?? 0).toFixed(2) }}</span>
+            </span>
             <span class="text-muted-foreground">
               端点 {{ provider.active_endpoints }}/{{ provider.total_endpoints }}
             </span>
@@ -369,19 +409,6 @@
                 :class="getEndpointDotColor(endpoint, provider)"
               />
               {{ endpoint.api_format }}
-            </span>
-          </div>
-
-          <!-- 第四行：配额 -->
-          <div
-            v-if="provider.billing_type === 'monthly_quota'"
-            class="flex items-center gap-3 text-xs text-muted-foreground"
-          >
-            <span>
-              配额: <span
-                class="font-semibold"
-                :class="getQuotaUsedColorClass(provider)"
-              >${{ (provider.monthly_used_usd ?? 0).toFixed(2) }}</span> / ${{ (provider.monthly_quota_usd ?? 0).toFixed(2) }}
             </span>
           </div>
         </div>
@@ -421,6 +448,13 @@
     @toggle-status="toggleProviderStatus"
     @refresh="loadProviders"
   />
+
+  <ProviderAuthDialog
+    v-model:open="opsConfigDialogOpen"
+    :provider-id="opsConfigProviderId"
+    :provider-website="opsConfigProviderWebsite"
+    @saved="handleOpsConfigSaved"
+  />
 </template>
 
 <script setup lang="ts">
@@ -432,7 +466,8 @@ import {
   Eye,
   Trash2,
   ChevronDown,
-  Power
+  Power,
+  KeyRound
 } from 'lucide-vue-next'
 import Button from '@/components/ui/button.vue'
 import Badge from '@/components/ui/badge.vue'
@@ -446,7 +481,7 @@ import TableHead from '@/components/ui/table-head.vue'
 import TableCell from '@/components/ui/table-cell.vue'
 import Pagination from '@/components/ui/pagination.vue'
 import RefreshButton from '@/components/ui/refresh-button.vue'
-import { ProviderFormDialog, PriorityManagementDialog } from '@/features/providers/components'
+import { ProviderFormDialog, PriorityManagementDialog, ProviderAuthDialog } from '@/features/providers/components'
 import ProviderDetailDrawer from '@/features/providers/components/ProviderDetailDrawer.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -458,6 +493,7 @@ import {
   type ProviderWithEndpointsSummary
 } from '@/api/endpoints'
 import { adminApi } from '@/api/admin'
+import { batchQueryBalance, type ActionResultResponse } from '@/api/providerOps'
 import { formatBillingType } from '@/utils/format'
 
 const { error: showError, success: showSuccess } = useToast()
@@ -472,6 +508,17 @@ const priorityDialogOpen = ref(false)
 const priorityMode = ref<'provider' | 'global_key'>('provider')
 const providerDrawerOpen = ref(false)
 const selectedProviderId = ref<string | null>(null)
+
+// 扩展操作配置对话框
+const opsConfigDialogOpen = ref(false)
+const opsConfigProviderId = ref('')
+const opsConfigProviderWebsite = ref('')
+
+// 余额数据缓存 {providerId: ActionResultResponse}
+const balanceCache = ref<Record<string, ActionResultResponse>>({})
+// 余额加载请求版本计数器（用于防止竞态条件）
+// 使用普通变量而非 ref，因为不需要响应式，仅用于比较请求版本
+let balanceLoadVersion = 0
 
 // 搜索
 const searchQuery = ref('')
@@ -542,13 +589,81 @@ async function loadPriorityMode() {
 // 加载提供商列表
 async function loadProviders() {
   loading.value = true
+  // 清空旧的余额缓存，避免数据累积
+  balanceCache.value = {}
   try {
     providers.value = await getProvidersSummary()
+    // 异步加载配置了 ops 的 provider 的余额数据
+    loadBalances()
   } catch (err: any) {
     showError(err.response?.data?.detail || '加载提供商列表失败', '错误')
   } finally {
     loading.value = false
   }
+}
+
+// 异步加载余额数据（使用批量接口）
+async function loadBalances() {
+  const currentVersion = ++balanceLoadVersion
+  try {
+    const opsProviderIds = providers.value
+      .filter(p => p.ops_configured)
+      .map(p => p.id)
+    if (opsProviderIds.length === 0) return
+
+    const results = await batchQueryBalance(opsProviderIds)
+
+    // 检查是否有新的请求已经开始，如果有则丢弃当前结果
+    if (currentVersion !== balanceLoadVersion) return
+
+    // 将成功的结果存入缓存
+    for (const [providerId, result] of Object.entries(results)) {
+      if (result.status === 'success') {
+        balanceCache.value[providerId] = result
+      }
+    }
+  } catch (e) {
+    console.warn('[loadBalances] 加载余额数据失败:', e)
+  }
+}
+
+/**
+ * 类型守卫：检查是否为 BalanceInfo（简化版）
+ * 只检查余额显示所需的字段，完整的 BalanceInfo 还包含 total_granted, total_used, expires_at, extra
+ */
+function isBalanceInfo(data: unknown): data is { total_available: number | null; currency: string } {
+  if (typeof data !== 'object' || data === null) return false
+  if (!('total_available' in data) || !('currency' in data)) return false
+  const d = data as Record<string, unknown>
+  // total_available 必须是 number 或 null
+  if (d.total_available !== null && typeof d.total_available !== 'number') return false
+  // currency 必须是 string
+  if (typeof d.currency !== 'string') return false
+  return true
+}
+
+// 获取 provider 的余额显示
+function getProviderBalance(providerId: string): { available: number | null; currency: string } | null {
+  const result = balanceCache.value[providerId]
+  if (!result || result.status !== 'success' || !result.data) {
+    return null
+  }
+  if (!isBalanceInfo(result.data)) {
+    return null
+  }
+  return {
+    available: result.data.total_available,
+    currency: result.data.currency || 'USD'
+  }
+}
+
+// 格式化余额显示
+function formatBalanceDisplay(balance: { available: number | null; currency: string } | null): string {
+  if (!balance || balance.available == null) {
+    return '-'
+  }
+  const symbol = balance.currency === 'USD' ? '$' : balance.currency
+  return `${symbol}${balance.available.toFixed(2)}`
 }
 
 
@@ -658,6 +773,19 @@ function openProviderDrawer(providerId: string) {
 function openEditProviderDialog(provider: ProviderWithEndpointsSummary) {
   providerToEdit.value = provider
   providerDialogOpen.value = true
+}
+
+// 打开扩展操作配置对话框
+function openOpsConfigDialog(provider: ProviderWithEndpointsSummary) {
+  opsConfigProviderId.value = provider.id
+  opsConfigProviderWebsite.value = provider.website || ''
+  opsConfigDialogOpen.value = true
+}
+
+// 扩展操作配置保存回调
+function handleOpsConfigSaved() {
+  opsConfigDialogOpen.value = false
+  loadProviders()
 }
 
 // 处理提供商编辑完成

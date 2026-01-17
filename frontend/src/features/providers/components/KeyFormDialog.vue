@@ -38,19 +38,9 @@
             :id="apiKeyInputId"
             v-model="form.api_key"
             :name="apiKeyFieldName"
-            :type="apiKeyInputType"
+            masked
             :required="!editingKey"
             :placeholder="editingKey ? editingKey.api_key_masked : 'sk-...'"
-            :class="getApiKeyInputClass()"
-            autocomplete="new-password"
-            autocapitalize="none"
-            autocorrect="off"
-            spellcheck="false"
-            data-form-type="other"
-            data-lpignore="true"
-            data-1p-ignore="true"
-            @focus="apiKeyFocused = true"
-            @blur="apiKeyFocused = form.api_key.trim().length > 0"
           />
           <p
             v-if="apiKeyError"
@@ -329,10 +319,6 @@ const keyNameInputId = computed(() => `key-name-${formNonce.value}`)
 const apiKeyInputId = computed(() => `api-key-${formNonce.value}`)
 const keyNameFieldName = computed(() => `key-name-field-${formNonce.value}`)
 const apiKeyFieldName = computed(() => `api-key-field-${formNonce.value}`)
-const apiKeyFocused = ref(false)
-const apiKeyInputType = computed(() =>
-  apiKeyFocused.value || form.value.api_key.trim().length > 0 ? 'password' : 'text'
-)
 
 // 可用的能力列表
 const availableCapabilities = ref<CapabilityDefinition[]>([])
@@ -397,18 +383,6 @@ function updateRateMultiplier(format: string, value: string | number) {
   form.value.rate_multipliers = newMultipliers
 }
 
-// API 密钥输入框样式计算
-function getApiKeyInputClass(): string {
-  const classes = []
-  if (apiKeyError.value) {
-    classes.push('border-destructive')
-  }
-  if (!apiKeyFocused.value && !form.value.api_key) {
-    classes.push('text-transparent caret-transparent selection:bg-transparent selection:text-transparent')
-  }
-  return classes.join(' ')
-}
-
 
 // API 密钥验证错误信息
 const apiKeyError = computed(() => {
@@ -433,7 +407,6 @@ const apiKeyError = computed(() => {
 // 重置表单
 function resetForm() {
   formNonce.value = createFieldNonce()
-  apiKeyFocused.value = false
   form.value = {
     name: '',
     api_key: '',
@@ -453,7 +426,6 @@ function resetForm() {
 // 添加成功后清除部分字段以便继续添加
 function clearForNextAdd() {
   formNonce.value = createFieldNonce()
-  apiKeyFocused.value = false
   form.value.name = ''
   form.value.api_key = ''
 }
@@ -462,7 +434,6 @@ function clearForNextAdd() {
 function loadKeyData() {
   if (!props.editingKey) return
   formNonce.value = createFieldNonce()
-  apiKeyFocused.value = false
   form.value = {
     name: props.editingKey.name,
     api_key: '',

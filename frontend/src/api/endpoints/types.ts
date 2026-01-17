@@ -310,6 +310,7 @@ export interface ProviderWithEndpointsSummary {
   unhealthy_endpoints: number
   api_formats: string[]
   endpoint_health_details: EndpointHealthDetail[]
+  ops_configured: boolean  // 是否配置了扩展操作（余额监控等）
   created_at: string
   updated_at: string
 }
