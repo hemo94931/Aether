@@ -3,7 +3,7 @@ import type { ActivityHeatmap } from '@/types/activity'
 
 export interface Profile {
   id: string // UUID
-  email: string
+  email?: string | null
   username: string
   role: string
   is_active: boolean
@@ -13,7 +13,8 @@ export interface Profile {
   created_at: string
   updated_at?: string
   last_login_at?: string
-  auth_source?: 'local' | 'ldap'
+  auth_source?: 'local' | 'ldap' | 'oauth'
+  has_password?: boolean
   preferences?: UserPreferences
 }
 
@@ -132,7 +133,7 @@ export interface ApiKey {
 // 不再需要 ProviderBinding 接口
 
 export interface ChangePasswordRequest {
-  old_password: string
+  old_password?: string  // 可选：首次设置密码时不需要
   new_password: string
 }
 

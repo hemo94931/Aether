@@ -3,17 +3,7 @@
     <PageHeader
       title="系统设置"
       description="管理系统级别的配置和参数"
-    >
-      <template #actions>
-        <Button
-          :disabled="loading"
-          class="shadow-none hover:shadow-none"
-          @click="saveSystemConfig"
-        >
-          {{ loading ? '保存中...' : '保存所有配置' }}
-        </Button>
-      </template>
-    </PageHeader>
+    />
 
     <div class="mt-6 space-y-6">
       <!-- 配置导出/导入 -->
@@ -109,6 +99,15 @@
         title="基础配置"
         description="配置系统默认参数"
       >
+        <template #actions>
+          <Button
+            size="sm"
+            :disabled="basicConfigLoading || !hasBasicConfigChanges"
+            @click="saveBasicConfig"
+          >
+            {{ basicConfigLoading ? '保存中...' : '保存' }}
+          </Button>
+        </template>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <Label
@@ -148,49 +147,27 @@
               0 表示不限制
             </p>
           </div>
-        </div>
-      </CardSection>
 
-      <!-- 用户注册配置 -->
-      <CardSection
-        title="用户注册"
-        description="控制用户注册和验证"
-      >
-        <div class="space-y-4">
-          <div class="flex items-center space-x-2">
-            <Checkbox
-              id="enable-registration"
-              v-model:checked="systemConfig.enable_registration"
-            />
-            <Label
-              for="enable-registration"
-              class="cursor-pointer"
-            >
-              开放用户注册
-            </Label>
+          <div class="flex items-center h-full">
+            <div class="flex items-center space-x-2">
+              <Checkbox
+                id="enable-registration"
+                v-model:checked="systemConfig.enable_registration"
+              />
+              <div>
+                <Label
+                  for="enable-registration"
+                  class="cursor-pointer"
+                >
+                  开放用户注册
+                </Label>
+                <p class="text-xs text-muted-foreground">
+                  允许新用户自助注册账户
+                </p>
+              </div>
+            </div>
           </div>
 
-          <div class="flex items-center space-x-2">
-            <Checkbox
-              id="require-email-verification"
-              v-model:checked="systemConfig.require_email_verification"
-            />
-            <Label
-              for="require-email-verification"
-              class="cursor-pointer"
-            >
-              需要邮箱验证
-            </Label>
-          </div>
-        </div>
-      </CardSection>
-
-      <!-- 独立余额 Key 过期管理 -->
-      <CardSection
-        title="独立余额 Key 过期管理"
-        description="独立余额 Key 的过期处理策略（普通用户 Key 不会过期）"
-      >
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div class="flex items-center h-full">
             <div class="flex items-center space-x-2">
               <Checkbox
@@ -205,7 +182,7 @@
                   自动删除过期 Key
                 </Label>
                 <p class="text-xs text-muted-foreground">
-                  关闭时仅禁用过期 Key，不会物理删除
+                  关闭时仅禁用过期的独立余额 Key
                 </p>
               </div>
             </div>
@@ -218,6 +195,15 @@
         title="日志记录"
         description="控制请求日志的记录方式和内容"
       >
+        <template #actions>
+          <Button
+            size="sm"
+            :disabled="logConfigLoading || !hasLogConfigChanges"
+            @click="saveLogConfig"
+          >
+            {{ logConfigLoading ? '保存中...' : '保存' }}
+          </Button>
+        </template>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <Label
@@ -316,25 +302,36 @@
         title="日志清理策略"
         description="配置日志的分级保留和自动清理"
       >
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div class="md:col-span-2">
-            <div class="flex items-center space-x-2 mb-4">
-              <Checkbox
+        <template #actions>
+          <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2">
+              <Switch
                 id="enable-auto-cleanup"
-                v-model:checked="systemConfig.enable_auto_cleanup"
+                :model-value="systemConfig.enable_auto_cleanup"
+                @update:model-value="handleAutoCleanupToggle"
               />
-              <Label
-                for="enable-auto-cleanup"
-                class="cursor-pointer"
-              >
-                启用自动清理任务
-              </Label>
-              <span class="text-xs text-muted-foreground ml-2">
-                (每天凌晨执行)
-              </span>
+              <div>
+                <Label
+                  for="enable-auto-cleanup"
+                  class="text-sm cursor-pointer"
+                >
+                  启用自动清理
+                </Label>
+                <p class="text-xs text-muted-foreground">
+                  每天凌晨执行
+                </p>
+              </div>
             </div>
+            <Button
+              size="sm"
+              :disabled="cleanupConfigLoading || !hasCleanupConfigChanges"
+              @click="saveCleanupConfig"
+            >
+              {{ cleanupConfigLoading ? '保存中...' : '保存' }}
+            </Button>
           </div>
-
+        </template>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <Label
               for="detail-log-retention-days"
@@ -814,6 +811,7 @@ import Button from '@/components/ui/button.vue'
 import Input from '@/components/ui/input.vue'
 import Label from '@/components/ui/label.vue'
 import Checkbox from '@/components/ui/checkbox.vue'
+import Switch from '@/components/ui/switch.vue'
 import Select from '@/components/ui/select.vue'
 import SelectTrigger from '@/components/ui/select-trigger.vue'
 import SelectValue from '@/components/ui/select-value.vue'
@@ -833,9 +831,7 @@ interface SystemConfig {
   // 基础配置
   default_user_quota_usd: number
   rate_limit_per_minute: number
-  // 用户注册
   enable_registration: boolean
-  require_email_verification: boolean
   // 独立余额 Key 过期管理
   auto_delete_expired_keys: boolean
   // 日志记录
@@ -853,7 +849,9 @@ interface SystemConfig {
   audit_log_retention_days: number
 }
 
-const loading = ref(false)
+const basicConfigLoading = ref(false)
+const logConfigLoading = ref(false)
+const cleanupConfigLoading = ref(false)
 const logLevelSelectOpen = ref(false)
 
 // 导出/导入相关
@@ -885,9 +883,7 @@ const systemConfig = ref<SystemConfig>({
   // 基础配置
   default_user_quota_usd: 10.0,
   rate_limit_per_minute: 0,
-  // 用户注册
   enable_registration: false,
-  require_email_verification: false,
   // 独立余额 Key 过期管理
   auto_delete_expired_keys: false,
   // 日志记录
@@ -903,6 +899,42 @@ const systemConfig = ref<SystemConfig>({
   log_retention_days: 365,
   cleanup_batch_size: 1000,
   audit_log_retention_days: 30,
+})
+
+// 原始配置值（用于检测变动）
+const originalConfig = ref<SystemConfig | null>(null)
+
+// 检测各模块是否有变动
+const hasBasicConfigChanges = computed(() => {
+  if (!originalConfig.value) return false
+  return (
+    systemConfig.value.default_user_quota_usd !== originalConfig.value.default_user_quota_usd ||
+    systemConfig.value.rate_limit_per_minute !== originalConfig.value.rate_limit_per_minute ||
+    systemConfig.value.enable_registration !== originalConfig.value.enable_registration ||
+    systemConfig.value.auto_delete_expired_keys !== originalConfig.value.auto_delete_expired_keys
+  )
+})
+
+const hasLogConfigChanges = computed(() => {
+  if (!originalConfig.value) return false
+  return (
+    systemConfig.value.request_log_level !== originalConfig.value.request_log_level ||
+    systemConfig.value.max_request_body_size !== originalConfig.value.max_request_body_size ||
+    systemConfig.value.max_response_body_size !== originalConfig.value.max_response_body_size ||
+    JSON.stringify(systemConfig.value.sensitive_headers) !== JSON.stringify(originalConfig.value.sensitive_headers)
+  )
+})
+
+const hasCleanupConfigChanges = computed(() => {
+  if (!originalConfig.value) return false
+  return (
+    systemConfig.value.detail_log_retention_days !== originalConfig.value.detail_log_retention_days ||
+    systemConfig.value.compressed_log_retention_days !== originalConfig.value.compressed_log_retention_days ||
+    systemConfig.value.header_retention_days !== originalConfig.value.header_retention_days ||
+    systemConfig.value.log_retention_days !== originalConfig.value.log_retention_days ||
+    systemConfig.value.cleanup_batch_size !== originalConfig.value.cleanup_batch_size ||
+    systemConfig.value.audit_log_retention_days !== originalConfig.value.audit_log_retention_days
+  )
 })
 
 // 计算属性：KB 和 字节 之间的转换
@@ -934,7 +966,7 @@ const sensitiveHeadersStr = computed({
 onMounted(async () => {
   await Promise.all([
     loadSystemConfig(),
-    loadSystemVersion()
+    loadSystemVersion(),
   ])
 })
 
@@ -953,9 +985,7 @@ async function loadSystemConfig() {
       // 基础配置
       'default_user_quota_usd',
       'rate_limit_per_minute',
-      // 用户注册
       'enable_registration',
-      'require_email_verification',
       // 独立余额 Key 过期管理
       'auto_delete_expired_keys',
       // 日志记录
@@ -983,17 +1013,18 @@ async function loadSystemConfig() {
         // 配置不存在时使用默认值，无需处理
       }
     }
+    // 保存原始值用于变动检测
+    originalConfig.value = JSON.parse(JSON.stringify(systemConfig.value))
   } catch (err) {
     error('加载系统配置失败')
     log.error('加载系统配置失败:', err)
   }
 }
 
-async function saveSystemConfig() {
-  loading.value = true
+async function saveBasicConfig() {
+  basicConfigLoading.value = true
   try {
     const configItems = [
-      // 基础配置
       {
         key: 'default_user_quota_usd',
         value: systemConfig.value.default_user_quota_usd,
@@ -1004,24 +1035,43 @@ async function saveSystemConfig() {
         value: systemConfig.value.rate_limit_per_minute,
         description: '每分钟请求限制'
       },
-      // 用户注册
       {
         key: 'enable_registration',
         value: systemConfig.value.enable_registration,
         description: '是否开放用户注册'
       },
       {
-        key: 'require_email_verification',
-        value: systemConfig.value.require_email_verification,
-        description: '是否需要邮箱验证'
-      },
-      // 独立余额 Key 过期管理
-      {
         key: 'auto_delete_expired_keys',
         value: systemConfig.value.auto_delete_expired_keys,
         description: '是否自动删除过期的API Key'
       },
-      // 日志记录
+    ]
+
+    await Promise.all(
+      configItems.map(item =>
+        adminApi.updateSystemConfig(item.key, item.value, item.description)
+      )
+    )
+    // 更新原始值
+    if (originalConfig.value) {
+      originalConfig.value.default_user_quota_usd = systemConfig.value.default_user_quota_usd
+      originalConfig.value.rate_limit_per_minute = systemConfig.value.rate_limit_per_minute
+      originalConfig.value.enable_registration = systemConfig.value.enable_registration
+      originalConfig.value.auto_delete_expired_keys = systemConfig.value.auto_delete_expired_keys
+    }
+    success('基础配置已保存')
+  } catch (err) {
+    error('保存配置失败')
+    log.error('保存基础配置失败:', err)
+  } finally {
+    basicConfigLoading.value = false
+  }
+}
+
+async function saveLogConfig() {
+  logConfigLoading.value = true
+  try {
+    const configItems = [
       {
         key: 'request_log_level',
         value: systemConfig.value.request_log_level,
@@ -1042,12 +1092,51 @@ async function saveSystemConfig() {
         value: systemConfig.value.sensitive_headers,
         description: '敏感请求头列表'
       },
-      // 日志清理
-      {
-        key: 'enable_auto_cleanup',
-        value: systemConfig.value.enable_auto_cleanup,
-        description: '是否启用自动清理任务'
-      },
+    ]
+
+    await Promise.all(
+      configItems.map(item =>
+        adminApi.updateSystemConfig(item.key, item.value, item.description)
+      )
+    )
+    // 更新原始值
+    if (originalConfig.value) {
+      originalConfig.value.request_log_level = systemConfig.value.request_log_level
+      originalConfig.value.max_request_body_size = systemConfig.value.max_request_body_size
+      originalConfig.value.max_response_body_size = systemConfig.value.max_response_body_size
+      originalConfig.value.sensitive_headers = [...systemConfig.value.sensitive_headers]
+    }
+    success('日志配置已保存')
+  } catch (err) {
+    error('保存配置失败')
+    log.error('保存日志配置失败:', err)
+  } finally {
+    logConfigLoading.value = false
+  }
+}
+
+async function handleAutoCleanupToggle(enabled: boolean) {
+  const previousValue = systemConfig.value.enable_auto_cleanup
+  systemConfig.value.enable_auto_cleanup = enabled
+  try {
+    await adminApi.updateSystemConfig(
+      'enable_auto_cleanup',
+      enabled,
+      '是否启用自动清理任务'
+    )
+    success(enabled ? '已启用自动清理' : '已禁用自动清理')
+  } catch (err) {
+    error('保存配置失败')
+    log.error('保存自动清理配置失败:', err)
+    // 回滚状态
+    systemConfig.value.enable_auto_cleanup = previousValue
+  }
+}
+
+async function saveCleanupConfig() {
+  cleanupConfigLoading.value = true
+  try {
+    const configItems = [
       {
         key: 'detail_log_retention_days',
         value: systemConfig.value.detail_log_retention_days,
@@ -1080,17 +1169,26 @@ async function saveSystemConfig() {
       },
     ]
 
-    const promises = configItems.map(item =>
-      adminApi.updateSystemConfig(item.key, item.value, item.description)
+    await Promise.all(
+      configItems.map(item =>
+        adminApi.updateSystemConfig(item.key, item.value, item.description)
+      )
     )
-
-    await Promise.all(promises)
-    success('系统配置已保存')
+    // 更新原始值
+    if (originalConfig.value) {
+      originalConfig.value.detail_log_retention_days = systemConfig.value.detail_log_retention_days
+      originalConfig.value.compressed_log_retention_days = systemConfig.value.compressed_log_retention_days
+      originalConfig.value.header_retention_days = systemConfig.value.header_retention_days
+      originalConfig.value.log_retention_days = systemConfig.value.log_retention_days
+      originalConfig.value.cleanup_batch_size = systemConfig.value.cleanup_batch_size
+      originalConfig.value.audit_log_retention_days = systemConfig.value.audit_log_retention_days
+    }
+    success('日志清理配置已保存')
   } catch (err) {
     error('保存配置失败')
-    log.error('保存配置失败:', err)
+    log.error('保存日志清理配置失败:', err)
   } finally {
-    loading.value = false
+    cleanupConfigLoading.value = false
   }
 }
 

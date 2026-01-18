@@ -175,6 +175,34 @@ class ModuleRegistry:
 
         return True
 
+    # ========== 配置验证 ==========
+
+    def validate_config(self, name: str, db: "Session") -> tuple[bool, str]:
+        """
+        验证模块配置是否有效
+
+        Args:
+            name: 模块名称
+            db: 数据库会话
+
+        Returns:
+            (validated, error_message) - validated 为 True 表示配置有效
+        """
+        if name not in self._modules:
+            return False, "模块不存在"
+
+        module = self._modules[name]
+
+        # 没有配置验证函数的模块，默认配置有效
+        if not module.validate_config:
+            return True, ""
+
+        try:
+            return module.validate_config(db)
+        except Exception as e:
+            logger.warning(f"Module [{name}] config validation error: {e}")
+            return False, f"配置验证出错: {str(e)}"
+
     # ========== 状态查询 ==========
 
     def get_module_status(
@@ -195,11 +223,28 @@ class ModuleRegistry:
         meta = module.metadata
         available = self.is_available(name)
 
+        # 获取配置验证状态
+        config_validated = False
+        config_error: Optional[str] = None
+        if available:
+            config_validated, config_error = self.validate_config(name, db)
+            if config_validated:
+                config_error = None  # 验证通过时清空错误信息
+
+        # 获取启用状态
+        enabled = self.is_enabled(name, db) if available else False
+
+        # 注意：配置验证失败时不自动禁用模块
+        # 自动禁用会在查询方法中产生写操作副作用，违反幂等性原则
+        # 配置验证状态通过 config_validated/config_error 字段返回，由调用方决定如何处理
+
         return ModuleStatus(
             name=name,
             available=available,
-            enabled=self.is_enabled(name, db) if available else False,
+            enabled=enabled,
             active=self.is_active(name, db) if available else False,
+            config_validated=config_validated,
+            config_error=config_error,
             display_name=meta.display_name,
             description=meta.description,
             category=meta.category,

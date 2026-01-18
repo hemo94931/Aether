@@ -341,11 +341,15 @@ class TestPipelineAdminAuth:
     @pytest.mark.asyncio
     async def test_authenticate_admin_success(self, pipeline: ApiRequestPipeline) -> None:
         """测试管理员认证成功"""
+        created_at = datetime.now(timezone.utc)
+
         mock_user = MagicMock()
         mock_user.id = "admin-123"
         mock_user.is_active = True
+        mock_user.is_deleted = False
         mock_user.role = UserRole.ADMIN
         mock_user.email = "admin@example.com"
+        mock_user.created_at = created_at
 
         mock_request = MagicMock()
         mock_request.headers = {"authorization": "Bearer valid-token"}
@@ -358,7 +362,7 @@ class TestPipelineAdminAuth:
             pipeline.auth_service,
             "verify_token",
             new_callable=AsyncMock,
-            return_value={"user_id": "admin-123"},
+            return_value={"user_id": "admin-123", "created_at": created_at.isoformat()},
         ):
             user, management_token = await pipeline._authenticate_admin(mock_request, mock_db)
 
@@ -369,11 +373,15 @@ class TestPipelineAdminAuth:
     @pytest.mark.asyncio
     async def test_authenticate_admin_lowercase_bearer(self, pipeline: ApiRequestPipeline) -> None:
         """测试 bearer (小写) 前缀也能正确解析"""
+        created_at = datetime.now(timezone.utc)
+
         mock_user = MagicMock()
         mock_user.id = "admin-123"
         mock_user.is_active = True
+        mock_user.is_deleted = False
         mock_user.role = UserRole.ADMIN
         mock_user.email = "admin@example.com"
+        mock_user.created_at = created_at
 
         mock_request = MagicMock()
         mock_request.headers = {"authorization": "bearer valid-token"}
@@ -386,7 +394,7 @@ class TestPipelineAdminAuth:
             pipeline.auth_service,
             "verify_token",
             new_callable=AsyncMock,
-            return_value={"user_id": "admin-123"},
+            return_value={"user_id": "admin-123", "created_at": created_at.isoformat()},
         ) as mock_verify:
             user, management_token = await pipeline._authenticate_admin(mock_request, mock_db)
 
@@ -405,10 +413,14 @@ class TestPipelineUserAuth:
     @pytest.mark.asyncio
     async def test_authenticate_user_lowercase_bearer(self, pipeline: ApiRequestPipeline) -> None:
         """测试 bearer (小写) 前缀也能正确解析"""
+        created_at = datetime.now(timezone.utc)
+
         mock_user = MagicMock()
         mock_user.id = "user-123"
         mock_user.is_active = True
+        mock_user.is_deleted = False
         mock_user.email = "user@example.com"
+        mock_user.created_at = created_at
 
         mock_request = MagicMock()
         mock_request.headers = {"authorization": "bearer valid-token"}
@@ -421,7 +433,7 @@ class TestPipelineUserAuth:
             pipeline.auth_service,
             "verify_token",
             new_callable=AsyncMock,
-            return_value={"user_id": "user-123"},
+            return_value={"user_id": "user-123", "created_at": created_at.isoformat()},
         ) as mock_verify:
             user, management_token = await pipeline._authenticate_user(mock_request, mock_db)
 

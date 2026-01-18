@@ -59,16 +59,12 @@ async def get_current_user(
             raise ForbiddenException("无效的Token")
 
         user_id = payload.get("user_id")
-        token_email = payload.get("email")
-        token_created_at = payload.get("created_at")
 
         if not user_id:
-            logger.error(f"Token缺少user_id字段: payload={payload}")
+            logger.error("Token缺少user_id字段: payload={}", payload)
             raise ForbiddenException("无效的认证凭据")
 
-        if not token_email:
-            logger.error(f"Token缺少email字段: payload={payload}")
-            raise ForbiddenException("无效的认证凭据")
+        # 兼容旧 token：email 字段可能存在；新 token 不再包含 email（支持无邮箱用户）
 
         # 仅在DEBUG模式下记录详细信息
         token_fp = hashlib.sha256(token.encode()).hexdigest()[:12]
@@ -76,7 +72,7 @@ async def get_current_user(
 
         # 确保user_id是字符串格式（UUID）
         if not isinstance(user_id, str):
-            logger.error(f"Token中user_id格式错误: {type(user_id)} - {user_id}")
+            logger.error("Token中user_id格式错误: {} - {}", type(user_id), user_id)
             raise ForbiddenException("认证信息格式错误，请重新登录")
 
         # 使用新的数据库会话获取用户，避免会话状态问题
@@ -85,46 +81,35 @@ async def get_current_user(
 
             user = UserService.get_user(db, user_id)
         except Exception as db_error:
-            logger.error(f"数据库查询失败: user_id={user_id}, error={db_error}")
+            logger.error("数据库查询失败: user_id={}, error={}", user_id, db_error)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="数据库查询失败，请稍后重试",
             )
 
         if not user:
-            logger.error(f"用户不存在: user_id={user_id}")
+            logger.error("用户不存在: user_id={}", user_id)
             raise ForbiddenException("用户不存在或已禁用")
 
         if not user.is_active:
-            logger.error(f"用户已禁用: user_id={user_id}")
+            logger.error("用户已禁用: user_id={}", user_id)
             raise ForbiddenException("用户不存在或已禁用")
 
-        # 验证邮箱是否匹配（防止用户ID重用导致的身份混淆）
-        if user.email != token_email:
-            logger.error(f"Token邮箱不匹配: Token中的邮箱={token_email}, 数据库中的邮箱={user.email}")
+        if user.is_deleted:
+            logger.error("用户已删除: user_id={}", user_id)
+            raise ForbiddenException("用户不存在或已禁用")
+
+        if not AuthService.token_identity_matches_user(payload, user):
+            logger.error("Token身份校验失败: user_id={}, token_fp={}", user_id, token_fp)
             raise ForbiddenException("身份验证失败")
 
-        # 验证用户创建时间是否匹配（防止ID重用）
-        if token_created_at and user.created_at:
-            try:
-                from datetime import datetime
-
-                token_created = datetime.fromisoformat(token_created_at.replace("Z", "+00:00"))
-                # 允许1秒的时间差异（考虑到时间精度问题）
-                time_diff = abs((user.created_at - token_created).total_seconds())
-                if time_diff > 1:
-                    logger.error(f"Token创建时间不匹配: Token时间={token_created_at}, 用户创建时间={user.created_at}")
-                    raise ForbiddenException("身份验证失败")
-            except ValueError as e:
-                logger.warning(f"Token时间格式解析失败: {e}")
-
-        logger.debug(f"成功获取用户: user_id={user_id}, email={user.email}")
+        logger.debug("成功获取用户: user_id={}, email={}", user_id, user.email)
         return user
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"认证失败，未预期的错误: {e}")
+        logger.error("认证失败，未预期的错误: {}", e)
         # 返回500而不是401，避免触发前端的退出逻辑
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="认证服务暂时不可用"
@@ -165,6 +150,12 @@ async def get_current_user_from_header(
 
         if not user.is_active:
             raise ForbiddenException("用户已被禁用")
+
+        if user.is_deleted:
+            raise ForbiddenException("用户不存在或已禁用")
+
+        if not AuthService.token_identity_matches_user(payload, user):
+            raise ForbiddenException("身份验证失败")
 
         return user
     except HTTPException:

@@ -118,14 +118,13 @@
             <Label
               for="form-email"
               class="text-sm font-medium"
-            >邮箱 <span class="text-muted-foreground">*</span></Label>
+            >邮箱</Label>
             <Input
               id="form-email"
               v-model="form.email"
               type="email"
               autocomplete="off"
               data-form-type="other"
-              required
               class="h-10"
             />
           </div>
@@ -472,11 +471,10 @@ const { isEditMode, handleDialogUpdate, handleCancel } = useFormDialog({
 // 表单验证
 const isFormValid = computed(() => {
   const hasUsername = form.value.username.trim().length > 0
-  const hasEmail = form.value.email.trim().length > 0
   const hasPassword = isEditMode.value || form.value.password.length >= 6
   // 编辑模式下如果填写了密码，必须确认密码一致
   const passwordConfirmed = !isEditMode.value || form.value.password.length === 0 || form.value.password === form.value.confirmPassword
-  return hasUsername && hasEmail && hasPassword && passwordConfirmed
+  return hasUsername && hasPassword && passwordConfirmed
 })
 
 // 加载访问控制选项
@@ -508,16 +506,11 @@ function toggleSelection(field: 'allowed_providers' | 'allowed_api_formats' | 'a
 
 // 提交表单
 async function handleSubmit() {
-  // 验证邮箱必填
-  if (!form.value.email || !form.value.email.trim()) {
-    return
-  }
-
   saving.value = true
   try {
     const data: UserFormData & { password?: string; unlimited?: boolean } = {
       username: form.value.username,
-      email: form.value.email.trim(),
+      email: form.value.email.trim() || '',
       quota_usd: form.value.unlimited ? null : form.value.quota,
       role: form.value.role,
       allowed_providers: form.value.allowed_providers.length > 0 ? form.value.allowed_providers : null,

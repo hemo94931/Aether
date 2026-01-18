@@ -52,6 +52,7 @@ export const useModuleStore = defineStore('modules', () => {
 
   /**
    * 设置模块启用状态
+   * @throws 如果设置失败会抛出错误
    */
   async function setEnabled(moduleName: string, enabled: boolean) {
     try {
@@ -62,7 +63,8 @@ export const useModuleStore = defineStore('modules', () => {
     } catch (err: any) {
       log.error(`Failed to set module ${moduleName} enabled=${enabled}`, err)
       error.value = err.response?.data?.detail || '设置模块状态失败'
-      return false
+      // 重新抛出错误，让调用方可以获取详细错误信息
+      throw err
     }
   }
 

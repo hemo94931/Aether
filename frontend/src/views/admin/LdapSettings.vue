@@ -76,44 +76,14 @@
             >
               绑定密码
             </Label>
-            <div class="relative mt-1">
+            <div class="mt-1">
               <Input
                 id="bind-password"
                 v-model="ldapConfig.bind_password"
-                type="password"
+                masked
                 :placeholder="hasPassword ? '已设置（留空保持不变）' : '请输入密码'"
-                :class="(hasPassword || ldapConfig.bind_password) ? 'pr-10' : ''"
                 autocomplete="new-password"
               />
-              <button
-                v-if="hasPassword || ldapConfig.bind_password"
-                type="button"
-                class="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
-                title="清除密码"
-                @click="handleClearPassword"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                ><line
-                  x1="18"
-                  y1="6"
-                  x2="6"
-                  y2="18"
-                /><line
-                  x1="6"
-                  y1="6"
-                  x2="18"
-                  y2="18"
-                /></svg>
-              </button>
             </div>
             <p class="mt-1 text-xs text-muted-foreground">
               绑定账号的密码
@@ -280,7 +250,6 @@ const loading = ref(false)
 const saveLoading = ref(false)
 const testLoading = ref(false)
 const hasPassword = ref(false)
-const clearPassword = ref(false) // 标记是否要清除密码
 
 const ldapConfig = ref({
   server_url: '',
@@ -320,7 +289,6 @@ async function loadConfig() {
       connect_timeout: response.connect_timeout || 10,
     }
     hasPassword.value = !!response.has_bind_password
-    clearPassword.value = false
   } catch (err) {
     error('加载 LDAP 配置失败')
     console.error('加载 LDAP 配置失败:', err)
@@ -346,25 +314,16 @@ async function handleSave() {
       connect_timeout: ldapConfig.value.connect_timeout,
     }
 
-    // 优先使用输入的新密码；否则如果标记清除则发送空字符串
-    let passwordAction: 'unchanged' | 'updated' | 'cleared' = 'unchanged'
+    // 只有输入了新密码才更新密码
     if (ldapConfig.value.bind_password) {
       payload.bind_password = ldapConfig.value.bind_password
-      passwordAction = 'updated'
-    } else if (clearPassword.value) {
-      payload.bind_password = ''
-      passwordAction = 'cleared'
     }
 
     await adminApi.updateLdapConfig(payload)
     success('LDAP 配置保存成功')
 
-    if (passwordAction === 'cleared') {
-      hasPassword.value = false
-      clearPassword.value = false
-    } else if (passwordAction === 'updated') {
+    if (ldapConfig.value.bind_password) {
       hasPassword.value = true
-      clearPassword.value = false
     }
     ldapConfig.value.bind_password = ''
   } catch (err) {
@@ -376,11 +335,6 @@ async function handleSave() {
 }
 
 async function handleTestConnection() {
-  if (clearPassword.value && !ldapConfig.value.bind_password) {
-    error('已标记清除绑定密码，请先保存或输入新的绑定密码再测试')
-    return
-  }
-
   testLoading.value = true
   try {
     const payload: LdapConfigUpdateRequest = {
@@ -408,19 +362,6 @@ async function handleTestConnection() {
     console.error('LDAP 连接测试失败:', err)
   } finally {
     testLoading.value = false
-  }
-}
-
-function handleClearPassword() {
-  // 如果有输入内容，先清空输入框
-  if (ldapConfig.value.bind_password) {
-    ldapConfig.value.bind_password = ''
-    return
-  }
-  // 标记要清除服务端密码（保存时生效）
-  if (hasPassword.value) {
-    clearPassword.value = true
-    hasPassword.value = false
   }
 }
 </script>

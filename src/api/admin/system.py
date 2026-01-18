@@ -1486,8 +1486,17 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                     stats["users"]["skipped"] += 1
                     continue
 
+                # 导入必须有邮箱（email 是导入的主键）
+                import_email = user_data.get("email")
+                if not import_email:
+                    stats["errors"].append(
+                        f"跳过无邮箱用户: {user_data.get('username', '未知')}"
+                    )
+                    stats["users"]["skipped"] += 1
+                    continue
+
                 existing_user = (
-                    db.query(User).filter(User.email == user_data["email"]).first()
+                    db.query(User).filter(User.email == import_email).first()
                 )
 
                 if existing_user:
@@ -1496,7 +1505,7 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                         stats["users"]["skipped"] += 1
                     elif merge_mode == "error":
                         raise InvalidRequestException(
-                            f"用户 '{user_data['email']}' 已存在"
+                            f"用户 '{import_email}' 已存在"
                         )
                     elif merge_mode == "overwrite":
                         # 更新现有用户
@@ -1527,8 +1536,9 @@ class AdminImportUsersAdapter(AdminApiAdapter):
 
                     new_user = User(
                         id=str(uuid.uuid4()),
-                        email=user_data["email"],
-                        username=user_data.get("username", user_data["email"].split("@")[0]),
+                        email=import_email,
+                        email_verified=user_data.get("email_verified", True),
+                        username=user_data.get("username") or import_email.split("@")[0],
                         password_hash=user_data.get("password_hash", ""),
                         role=role,
                         allowed_providers=user_data.get("allowed_providers"),

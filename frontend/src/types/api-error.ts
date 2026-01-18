@@ -12,6 +12,7 @@ export interface ApiErrorResponse {
   error?: {
     type?: string
     message?: string
+    details?: Record<string, unknown>
   }
   detail?: string
   message?: string
@@ -57,9 +58,12 @@ export function getErrorMessage(error: unknown, defaultMessage = '操作失败')
     if (error.response?.data?.message) {
       return error.response.data.message
     }
+    // API 错误但没有可用的错误消息，返回默认消息
+    // 不使用 error.message，因为那是 Axios 的默认消息如 "Request failed with status code 400"
+    return defaultMessage
   }
 
-  // Error 实例
+  // 非 API 错误的 Error 实例
   if (error instanceof Error) {
     return error.message
   }

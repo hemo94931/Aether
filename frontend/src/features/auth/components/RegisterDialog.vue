@@ -17,7 +17,7 @@
           注册新账户
         </h2>
         <p class="mt-1 text-sm text-muted-foreground">
-          请填写您的邮箱和个人信息完成注册
+          {{ emailConfigured ? '请填写您的信息完成注册' : '请填写用户名和密码完成注册' }}
         </p>
       </div>
 
@@ -28,27 +28,40 @@
         data-form-type="other"
         @submit.prevent="handleSubmit"
       >
-        <!-- Email -->
-        <div class="space-y-2">
-          <Label for="reg-email">邮箱 <span class="text-muted-foreground">*</span></Label>
+        <!-- Email (仅当邮箱服务已配置时显示) -->
+        <div
+          v-if="emailConfigured"
+          class="space-y-2"
+        >
+          <Label for="reg-email">
+            邮箱
+            <span
+              v-if="requireEmailVerification"
+              class="text-destructive"
+            >*</span>
+            <span
+              v-else
+              class="text-muted-foreground text-xs"
+            >（可选）</span>
+          </Label>
           <Input
             id="reg-email"
             v-model="formData.email"
             type="email"
             placeholder="hello@example.com"
-            required
+            :required="requireEmailVerification"
             disable-autofill
             :disabled="isLoading || emailVerified"
           />
         </div>
 
-        <!-- Verification Code Section -->
+        <!-- Verification Code Section (仅当需要邮箱验证时显示) -->
         <div
-          v-if="requireEmailVerification"
+          v-if="emailConfigured && requireEmailVerification"
           class="space-y-3"
         >
           <div class="flex items-center justify-between">
-            <Label>验证码 <span class="text-muted-foreground">*</span></Label>
+            <Label>验证码 <span class="text-destructive">*</span></Label>
             <Button
               type="button"
               variant="link"
@@ -113,7 +126,7 @@
 
         <!-- Username -->
         <div class="space-y-2">
-          <Label for="reg-uname">用户名 <span class="text-muted-foreground">*</span></Label>
+          <Label for="reg-uname">用户名 <span class="text-destructive">*</span></Label>
           <Input
             id="reg-uname"
             v-model="formData.username"
@@ -127,7 +140,7 @@
 
         <!-- Password -->
         <div class="space-y-2">
-          <Label :for="`pwd-${formNonce}`">密码 <span class="text-muted-foreground">*</span></Label>
+          <Label :for="`pwd-${formNonce}`">密码 <span class="text-destructive">*</span></Label>
           <Input
             :id="`pwd-${formNonce}`"
             v-model="formData.password"
@@ -146,7 +159,7 @@
 
         <!-- Confirm Password -->
         <div class="space-y-2">
-          <Label :for="`pwd-confirm-${formNonce}`">确认密码 <span class="text-muted-foreground">*</span></Label>
+          <Label :for="`pwd-confirm-${formNonce}`">确认密码 <span class="text-destructive">*</span></Label>
           <Input
             :id="`pwd-confirm-${formNonce}`"
             v-model="formData.confirmPassword"
@@ -210,6 +223,7 @@ import Label from '@/components/ui/label.vue'
 interface Props {
   open?: boolean
   requireEmailVerification?: boolean
+  emailConfigured?: boolean
 }
 
 interface Emits {
@@ -220,7 +234,8 @@ interface Emits {
 
 const props = withDefaults(defineProps<Props>(), {
   open: false,
-  requireEmailVerification: false
+  requireEmailVerification: false,
+  emailConfigured: true
 })
 
 const emit = defineEmits<Emits>()
@@ -353,17 +368,19 @@ const sendCodeButtonText = computed(() => {
 })
 
 const canSubmit = computed(() => {
+  // 基本信息：用户名和密码必填
   const hasBasicInfo =
-    formData.value.email &&
     formData.value.username &&
     formData.value.password &&
     formData.value.confirmPassword
 
   if (!hasBasicInfo) return false
 
-  // If email verification is required, check if verified
-  if (props.requireEmailVerification && !emailVerified.value) {
-    return false
+  // 如果需要邮箱验证，邮箱和验证都必须完成
+  if (props.requireEmailVerification) {
+    if (!formData.value.email || !emailVerified.value) {
+      return false
+    }
   }
 
   // Check password match
@@ -608,11 +625,17 @@ const handleSubmit = async () => {
   loadingText.value = '注册中...'
 
   try {
-    const response = await authApi.register({
-      email: formData.value.email,
+    // 构建请求数据：邮箱可选
+    const registerData: { email?: string; username: string; password: string } = {
       username: formData.value.username,
       password: formData.value.password
-    })
+    }
+    // 只有当邮箱有值时才添加
+    if (formData.value.email && formData.value.email.trim()) {
+      registerData.email = formData.value.email
+    }
+
+    const response = await authApi.register(registerData)
 
     success(response.message || '欢迎加入！请登录以继续', '注册成功')
 

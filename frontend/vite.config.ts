@@ -60,11 +60,6 @@ export default defineConfig(({ mode }) => ({
         changeOrigin: true,
         secure: false,
       },
-      '/auth/': {
-        target: 'http://localhost:8084',  // 本地开发端口
-        changeOrigin: true,
-        secure: false,
-      },
       '/v1/': {
         target: 'http://localhost:8084',  // 本地开发端口
         changeOrigin: true,

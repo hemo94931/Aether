@@ -446,16 +446,31 @@ class ChangePasswordAdapter(AuthenticatedApiAdapter):
                 raise InvalidRequestException(translate_pydantic_error(errors[0]))
             raise InvalidRequestException("请求数据验证失败")
 
-        if not user.verify_password(request.old_password):
-            raise InvalidRequestException("旧密码错误")
+        # LDAP 用户不能修改密码
+        from src.core.enums import AuthSource
+        if user.auth_source == AuthSource.LDAP:
+            raise ForbiddenException("LDAP 用户不能在此修改密码")
+
+        # 判断用户是否已有密码
+        has_password = bool(user.password_hash)
+
+        if has_password:
+            # 已有密码：需要验证旧密码
+            if not request.old_password:
+                raise InvalidRequestException("请输入当前密码")
+            if not user.verify_password(request.old_password):
+                raise InvalidRequestException("旧密码错误")
+        # 无密码（如 OAuth 用户首次设置）：无需旧密码
+
         if len(request.new_password) < 6:
             raise InvalidRequestException("密码长度至少6位")
 
         user.set_password(request.new_password)
         user.updated_at = datetime.now(timezone.utc)
         db.commit()
-        logger.info(f"用户修改密码: {user.email}")
-        return {"message": "密码修改成功"}
+        action = "修改" if has_password else "设置"
+        logger.info(f"用户{action}密码: {user.email}")
+        return {"message": f"密码{action}成功"}
 
 
 class ListMyApiKeysAdapter(AuthenticatedApiAdapter):

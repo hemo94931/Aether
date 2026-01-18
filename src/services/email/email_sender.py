@@ -99,6 +99,21 @@ class EmailSenderService:
         return True, None
 
     @staticmethod
+    def is_smtp_configured(db: Session) -> bool:
+        """
+        检查 SMTP 是否已配置（用于前端显示判断）
+
+        Args:
+            db: 数据库会话
+
+        Returns:
+            是否已配置有效的 SMTP
+        """
+        config = EmailSenderService._get_smtp_config(db)
+        valid, _ = EmailSenderService._validate_smtp_config(config)
+        return valid
+
+    @staticmethod
     async def send_verification_code(
         db: Session, to_email: str, code: str, expire_minutes: int = 30
     ) -> Tuple[bool, Optional[str]]:

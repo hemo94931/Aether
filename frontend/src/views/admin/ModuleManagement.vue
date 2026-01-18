@@ -55,25 +55,17 @@
           </div>
 
           <!-- 模块图标和名称 -->
-          <div class="flex items-start gap-4 mb-4">
+          <div class="flex items-start gap-4 mb-3">
             <div
-              class="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 transition-colors"
+              class="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 transition-colors"
               :class="module.active
                 ? 'bg-primary/15 text-primary'
                 : 'bg-muted text-muted-foreground group-hover:bg-muted/80'"
             >
-              <component :is="getCategoryIcon(module.category)" class="w-6 h-6" />
+              <component :is="getCategoryIcon(module.category)" class="w-5 h-5" />
             </div>
-            <div class="flex-1 min-w-0 pt-0.5">
+            <div class="flex-1 min-w-0 pt-1">
               <h4 class="font-semibold text-base truncate">{{ module.display_name }}</h4>
-              <div class="mt-1.5">
-                <Badge
-                  :variant="getStatusBadgeVariant(module)"
-                  class="text-xs"
-                >
-                  {{ getStatusText(module) }}
-                </Badge>
-              </div>
             </div>
           </div>
 
@@ -81,21 +73,6 @@
           <p class="text-sm text-muted-foreground leading-relaxed line-clamp-2 min-h-[2.5rem]">
             {{ module.description }}
           </p>
-
-          <!-- 模块信息 -->
-          <div class="mt-4 pt-4 border-t border-border/50 space-y-2">
-            <div class="flex items-center gap-2 text-xs text-muted-foreground">
-              <span class="font-mono bg-muted/50 px-1.5 py-0.5 rounded">{{ module.name }}</span>
-              <span class="text-border">|</span>
-              <span :class="{
-                'text-green-600': module.health === 'healthy',
-                'text-amber-600': module.health === 'degraded',
-                'text-red-600': module.health === 'unhealthy',
-              }">
-                {{ getHealthText(module.health) }}
-              </span>
-            </div>
-          </div>
 
           <!-- 不可用提示 -->
           <div
@@ -110,15 +87,24 @@
             <div class="flex items-center gap-3">
               <Switch
                 :model-value="module.enabled"
-                :disabled="!module.available || toggling[module.name]"
+                :disabled="!module.available || !module.config_validated || toggling[module.name]"
                 @update:model-value="(val: boolean) => toggleModule(module.name, val)"
               />
-              <span class="text-sm" :class="module.enabled ? 'text-foreground' : 'text-muted-foreground'">
-                {{ module.enabled ? '已启用' : '已禁用' }}
-              </span>
+              <div class="flex flex-col">
+                <span class="text-sm" :class="module.enabled ? 'text-foreground' : 'text-muted-foreground'">
+                  {{ module.enabled ? '已启用' : '已禁用' }}
+                </span>
+                <!-- 配置未验证提示（小字） -->
+                <span
+                  v-if="module.available && !module.config_validated"
+                  class="text-xs text-muted-foreground"
+                >
+                  {{ module.config_error || '请先完成配置' }}
+                </span>
+              </div>
             </div>
             <Button
-              v-if="module.admin_route && module.active"
+              v-if="module.admin_route"
               variant="outline"
               size="sm"
               class="gap-1.5"
@@ -157,14 +143,13 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { RefreshCw, Puzzle, Users, Shield, Gauge, Link, Search, Settings } from 'lucide-vue-next'
 import Button from '@/components/ui/button.vue'
-import Badge from '@/components/ui/badge.vue'
 import Switch from '@/components/ui/switch.vue'
 import Input from '@/components/ui/input.vue'
 import { PageHeader, PageContainer } from '@/components/layout'
 import { useToast } from '@/composables/useToast'
 import { useModuleStore } from '@/stores/modules'
-import type { ModuleStatus } from '@/api/modules'
 import { log } from '@/utils/logger'
+import { getErrorMessage } from '@/types/api-error'
 
 const router = useRouter()
 const { success, error } = useToast()
@@ -183,33 +168,6 @@ function getCategoryIcon(category: string) {
     integration: Link,
   }
   return icons[category] || Puzzle
-}
-
-// 获取状态文本
-function getStatusText(module: ModuleStatus): string {
-  if (!module.available) return '不可用'
-  if (module.active) return '已激活'
-  if (module.enabled) return '已启用'
-  return '已禁用'
-}
-
-// 获取状态徽章样式
-function getStatusBadgeVariant(module: ModuleStatus): 'default' | 'secondary' | 'outline' | 'destructive' {
-  if (!module.available) return 'destructive'
-  if (module.active) return 'default'
-  if (module.enabled) return 'secondary'
-  return 'outline'
-}
-
-// 获取健康状态文本
-function getHealthText(health: string): string {
-  const texts: Record<string, string> = {
-    healthy: '健康',
-    degraded: '降级',
-    unhealthy: '异常',
-    unknown: '未知',
-  }
-  return texts[health] || health
 }
 
 // 所有模块列表（按 admin_menu_order 排序）
@@ -249,14 +207,10 @@ async function fetchModules() {
 async function toggleModule(moduleName: string, enabled: boolean) {
   toggling.value[moduleName] = true
   try {
-    const result = await moduleStore.setEnabled(moduleName, enabled)
-    if (result) {
-      success(enabled ? '模块已启用' : '模块已禁用')
-    } else {
-      error('操作失败')
-    }
+    await moduleStore.setEnabled(moduleName, enabled)
+    success(enabled ? '模块已启用' : '模块已禁用')
   } catch (err) {
-    error('操作失败')
+    error(getErrorMessage(err, '操作失败'))
     log.error('切换模块状态失败:', err)
   } finally {
     toggling.value[moduleName] = false

@@ -27,6 +27,8 @@ class ModuleStatusResponse(BaseModel):
     available: bool
     enabled: bool
     active: bool
+    config_validated: bool
+    config_error: Optional[str]
     display_name: str
     description: str
     category: str
@@ -43,6 +45,8 @@ class ModuleStatusResponse(BaseModel):
             available=status.available,
             enabled=status.enabled,
             active=status.active,
+            config_validated=status.config_validated,
+            config_error=status.config_error,
             display_name=status.display_name,
             description=status.description,
             category=status.category.value,
@@ -179,6 +183,12 @@ class AdminSetModuleEnabledAdapter(AdminApiAdapter):
             req = SetModuleEnabledRequest.model_validate(payload)
         except Exception:
             raise InvalidRequestException("请求体格式错误，需要 enabled 字段")
+
+        # 如果是启用模块，必须先通过配置验证
+        if req.enabled:
+            config_validated, config_error = registry.validate_config(self.module_name, context.db)
+            if not config_validated:
+                raise InvalidRequestException(f"模块配置未验证通过: {config_error}")
 
         # 设置启用状态
         registry.set_enabled(self.module_name, req.enabled, context.db)

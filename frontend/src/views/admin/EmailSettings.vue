@@ -99,40 +99,13 @@
             >
               SMTP 密码
             </Label>
-            <div class="relative mt-1">
+            <div class="mt-1">
               <Input
                 id="smtp-password"
                 v-model="emailConfig.smtp_password"
-                type="text"
+                masked
                 :placeholder="smtpPasswordIsSet ? '已设置（留空保持不变）' : '请输入密码'"
-                class="-webkit-text-security-disc"
-                :class="(smtpPasswordIsSet || emailConfig.smtp_password) ? 'pr-10' : ''"
-                autocomplete="one-time-code"
-                data-lpignore="true"
-                data-1p-ignore="true"
-                data-form-type="other"
               />
-              <button
-                v-if="smtpPasswordIsSet || emailConfig.smtp_password"
-                type="button"
-                class="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
-                title="清除密码"
-                @click="handleClearSmtpPassword"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-                </svg>
-              </button>
             </div>
             <p class="mt-1 text-xs text-muted-foreground">
               邮箱密码或应用专用密码
@@ -213,6 +186,116 @@
         </div>
       </CardSection>
 
+      <!-- 注册邮箱验证 -->
+      <CardSection
+        title="注册邮箱验证"
+        description="控制用户注册时的邮箱验证要求和后缀限制"
+      >
+        <template #actions>
+          <Button
+            size="sm"
+            :disabled="emailVerificationSaveLoading"
+            @click="saveEmailVerificationConfig"
+          >
+            {{ emailVerificationSaveLoading ? '保存中...' : '保存' }}
+          </Button>
+        </template>
+        <div class="space-y-6">
+          <!-- 第一行：需要邮箱验证 + 后缀限制模式 -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- 需要邮箱验证 -->
+            <div class="flex items-center justify-between h-full">
+              <div>
+                <Label
+                  for="require-email-verification"
+                  class="block text-sm font-medium cursor-pointer"
+                  :class="{ 'text-muted-foreground': !smtpConfigured }"
+                >
+                  需要邮箱验证
+                </Label>
+                <p class="mt-1 text-xs text-muted-foreground">
+                  <template v-if="!smtpConfigured">
+                    需先配置 SMTP 服务
+                  </template>
+                  <template v-else>
+                    开启后，用户注册时必须验证邮箱
+                  </template>
+                </p>
+              </div>
+              <Switch
+                id="require-email-verification"
+                v-model="requireEmailVerification"
+                :disabled="!smtpConfigured"
+              />
+            </div>
+
+            <!-- 后缀限制模式 -->
+            <div>
+              <Label
+                for="email-suffix-mode"
+                class="block text-sm font-medium mb-2"
+              >
+                后缀限制模式
+              </Label>
+              <Select
+                v-model="emailConfig.email_suffix_mode"
+                v-model:open="emailSuffixModeSelectOpen"
+                :disabled="!requireEmailVerification"
+              >
+                <SelectTrigger
+                  id="email-suffix-mode"
+                  class="mt-1"
+                  :disabled="!requireEmailVerification"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">
+                    不限制 - 允许所有邮箱
+                  </SelectItem>
+                  <SelectItem value="whitelist">
+                    白名单 - 仅允许列出的后缀
+                  </SelectItem>
+                  <SelectItem value="blacklist">
+                    黑名单 - 拒绝列出的后缀
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p class="mt-1 text-xs text-muted-foreground">
+                <template v-if="emailConfig.email_suffix_mode === 'none'">
+                  不限制邮箱后缀，所有邮箱均可注册
+                </template>
+                <template v-else-if="emailConfig.email_suffix_mode === 'whitelist'">
+                  仅允许列出后缀的邮箱注册
+                </template>
+                <template v-else>
+                  拒绝列出后缀的邮箱注册
+                </template>
+              </p>
+            </div>
+          </div>
+
+          <!-- 第二行：邮箱后缀列表 -->
+          <div v-if="emailConfig.email_suffix_mode !== 'none'">
+            <Label
+              for="email-suffix-list"
+              class="block text-sm font-medium mb-2"
+            >
+              邮箱后缀列表
+            </Label>
+            <Input
+              id="email-suffix-list"
+              v-model="emailSuffixListStr"
+              placeholder="gmail.com, outlook.com, qq.com"
+              class="mt-1"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              逗号分隔，例如: gmail.com, outlook.com, qq.com
+            </p>
+          </div>
+        </div>
+      </CardSection>
+
       <!-- 邮件模板配置 -->
       <CardSection
         title="邮件模板"
@@ -227,38 +310,43 @@
             {{ templateSaveLoading ? '保存中...' : '保存' }}
           </Button>
         </template>
-        <!-- 模板类型选择 -->
-        <div class="flex items-center gap-2 mb-4">
-          <button
-            v-for="tpl in templateTypes"
-            :key="tpl.type"
-            class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors"
-            :class="activeTemplateType === tpl.type
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-muted text-muted-foreground hover:text-foreground'"
-            @click="handleTemplateTypeChange(tpl.type)"
-          >
-            {{ tpl.name }}
-            <span
-              v-if="tpl.is_custom"
-              class="ml-1 text-xs opacity-70"
-            >(已自定义)</span>
-          </button>
-        </div>
 
         <!-- 当前模板编辑区 -->
         <div
           v-if="currentTemplate"
           class="space-y-4"
         >
-          <!-- 可用变量提示 -->
-          <div class="text-xs text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
-            可用变量:
-            <code
-              v-for="(v, i) in currentTemplate.variables"
-              :key="v"
-              class="mx-1 px-1.5 py-0.5 bg-background rounded text-foreground"
-            >{{ formatVariable(v) }}<span v-if="i < currentTemplate.variables.length - 1">,</span></code>
+          <!-- 模板类型选择 + 可用变量 -->
+          <div class="flex items-center justify-between gap-4 flex-wrap">
+            <div class="flex items-center border-b border-border">
+              <button
+                v-for="tpl in templateTypes"
+                :key="tpl.type"
+                class="px-4 py-2 text-sm font-medium transition-colors relative"
+                :class="activeTemplateType === tpl.type
+                  ? 'text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'"
+                @click="handleTemplateTypeChange(tpl.type)"
+              >
+                {{ tpl.name }}
+                <span
+                  v-if="tpl.is_custom"
+                  class="ml-1 text-xs opacity-70"
+                >(已自定义)</span>
+                <span
+                  v-if="activeTemplateType === tpl.type"
+                  class="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"
+                />
+              </button>
+            </div>
+            <div class="text-xs text-muted-foreground">
+              可用变量:
+              <code
+                v-for="(v, i) in currentTemplate.variables"
+                :key="v"
+                class="mx-0.5 px-1.5 py-0.5 bg-muted rounded text-foreground"
+              >{{ formatVariable(v) }}<span v-if="i < currentTemplate.variables.length - 1">,</span></code>
+            </div>
           </div>
 
           <!-- 邮件主题 -->
@@ -289,7 +377,7 @@
             <textarea
               id="template-html"
               v-model="templateHtml"
-              rows="16"
+              rows="12"
               class="mt-1 w-full font-mono text-sm bg-muted/30 border border-border rounded-md p-3 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-y"
               :placeholder="currentTemplate.default_html || '<!DOCTYPE html>...'"
               spellcheck="false"
@@ -300,6 +388,7 @@
           <div class="flex gap-2">
             <Button
               variant="outline"
+              size="sm"
               :disabled="previewLoading"
               @click="handlePreviewTemplate"
             >
@@ -307,6 +396,7 @@
             </Button>
             <Button
               variant="outline"
+              size="sm"
               :disabled="!currentTemplate.is_custom"
               @click="handleResetTemplate"
             >
@@ -378,83 +468,6 @@
           </div>
         </div>
       </Dialog>
-
-      <!-- 注册邮箱限制 -->
-      <CardSection
-        title="注册邮箱限制"
-        description="控制允许注册的邮箱后缀，支持白名单或黑名单模式"
-      >
-        <template #actions>
-          <Button
-            size="sm"
-            :disabled="emailSuffixSaveLoading"
-            @click="saveEmailSuffixConfig"
-          >
-            {{ emailSuffixSaveLoading ? '保存中...' : '保存' }}
-          </Button>
-        </template>
-        <div class="space-y-4">
-          <div>
-            <Label
-              for="email-suffix-mode"
-              class="block text-sm font-medium mb-2"
-            >
-              限制模式
-            </Label>
-            <Select
-              v-model="emailConfig.email_suffix_mode"
-              v-model:open="emailSuffixModeSelectOpen"
-            >
-              <SelectTrigger
-                id="email-suffix-mode"
-                class="mt-1"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">
-                  不限制 - 允许所有邮箱
-                </SelectItem>
-                <SelectItem value="whitelist">
-                  白名单 - 仅允许列出的后缀
-                </SelectItem>
-                <SelectItem value="blacklist">
-                  黑名单 - 拒绝列出的后缀
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <p class="mt-1 text-xs text-muted-foreground">
-              <template v-if="emailConfig.email_suffix_mode === 'none'">
-                不限制邮箱后缀，所有邮箱均可注册
-              </template>
-              <template v-else-if="emailConfig.email_suffix_mode === 'whitelist'">
-                仅允许下方列出后缀的邮箱注册
-              </template>
-              <template v-else>
-                拒绝下方列出后缀的邮箱注册
-              </template>
-            </p>
-          </div>
-
-          <div v-if="emailConfig.email_suffix_mode !== 'none'">
-            <Label
-              for="email-suffix-list"
-              class="block text-sm font-medium"
-            >
-              邮箱后缀列表
-            </Label>
-            <Input
-              id="email-suffix-list"
-              v-model="emailSuffixListStr"
-              placeholder="gmail.com, outlook.com, qq.com"
-              class="mt-1"
-            />
-            <p class="mt-1 text-xs text-muted-foreground">
-              逗号分隔，例如: gmail.com, outlook.com, qq.com
-            </p>
-          </div>
-        </div>
-      </CardSection>
     </div>
   </PageContainer>
 </template>
@@ -464,6 +477,7 @@ import { ref, computed, onMounted } from 'vue'
 import Button from '@/components/ui/button.vue'
 import Input from '@/components/ui/input.vue'
 import Label from '@/components/ui/label.vue'
+import Switch from '@/components/ui/switch.vue'
 import Select from '@/components/ui/select.vue'
 import SelectTrigger from '@/components/ui/select-trigger.vue'
 import SelectValue from '@/components/ui/select-value.vue'
@@ -473,6 +487,7 @@ import Dialog from '@/components/ui/dialog/Dialog.vue'
 import { PageHeader, PageContainer, CardSection } from '@/components/layout'
 import { useToast } from '@/composables/useToast'
 import { adminApi, type EmailTemplateInfo } from '@/api/admin'
+import { authApi } from '@/api/auth'
 import { log } from '@/utils/logger'
 
 const { success, error } = useToast()
@@ -493,12 +508,13 @@ interface EmailConfig {
 }
 
 const smtpSaveLoading = ref(false)
-const emailSuffixSaveLoading = ref(false)
+const emailVerificationSaveLoading = ref(false)
 const smtpEncryptionSelectOpen = ref(false)
 const emailSuffixModeSelectOpen = ref(false)
 const testSmtpLoading = ref(false)
 const smtpPasswordIsSet = ref(false)
-const clearSmtpPassword = ref(false) // 标记是否要清除密码
+const requireEmailVerification = ref(false) // 是否开启了邮箱验证
+const smtpConfigured = ref(false) // SMTP 是否已配置
 
 // 邮件模板相关状态
 const templateLoading = ref(false)
@@ -583,9 +599,56 @@ const smtpEncryption = computed({
 onMounted(async () => {
   await Promise.all([
     loadEmailConfig(),
-    loadEmailTemplates()
+    loadEmailTemplates(),
+    loadRequireEmailVerification(),
   ])
 })
+
+async function loadRequireEmailVerification() {
+  try {
+    const settings = await authApi.getRegistrationSettings()
+    requireEmailVerification.value = !!settings.require_email_verification
+    smtpConfigured.value = !!settings.email_configured
+  } catch {
+    requireEmailVerification.value = false
+    smtpConfigured.value = false
+  }
+}
+
+async function saveEmailVerificationConfig() {
+  emailVerificationSaveLoading.value = true
+  try {
+    const configItems = [
+      {
+        key: 'require_email_verification',
+        value: requireEmailVerification.value,
+        description: '是否需要邮箱验证'
+      },
+      {
+        key: 'email_suffix_mode',
+        value: emailConfig.value.email_suffix_mode,
+        description: '邮箱后缀限制模式'
+      },
+      {
+        key: 'email_suffix_list',
+        value: emailConfig.value.email_suffix_list,
+        description: '邮箱后缀列表'
+      },
+    ]
+
+    await Promise.all(
+      configItems.map(item =>
+        adminApi.updateSystemConfig(item.key, item.value, item.description)
+      )
+    )
+    success('配置已保存')
+  } catch (err) {
+    error('保存配置失败')
+    log.error('保存邮箱验证配置失败:', err)
+  } finally {
+    emailVerificationSaveLoading.value = false
+  }
+}
 
 async function loadEmailTemplates() {
   templateLoading.value = true
@@ -711,7 +774,6 @@ async function loadEmailConfig() {
         // 配置不存在时使用默认值，无需处理
       }
     }
-    clearSmtpPassword.value = false
   } catch (err) {
     error('加载邮件配置失败')
     log.error('加载邮件配置失败:', err)
@@ -722,12 +784,6 @@ async function loadEmailConfig() {
 async function saveSmtpConfig() {
   smtpSaveLoading.value = true
   try {
-    const passwordAction: 'unchanged' | 'updated' | 'cleared' = emailConfig.value.smtp_password
-      ? 'updated'
-      : clearSmtpPassword.value
-        ? 'cleared'
-        : 'unchanged'
-
     const configItems = [
       {
         key: 'smtp_host',
@@ -745,7 +801,7 @@ async function saveSmtpConfig() {
         description: 'SMTP 用户名'
       },
       // 只有输入了新密码才提交（空值表示保持原密码）
-      ...(passwordAction === 'updated'
+      ...(emailConfig.value.smtp_password
         ? [{
             key: 'smtp_password',
             value: emailConfig.value.smtp_password,
@@ -774,24 +830,15 @@ async function saveSmtpConfig() {
       },
     ]
 
-    const promises = configItems.map(item =>
-      adminApi.updateSystemConfig(item.key, item.value, item.description)
+    await Promise.all(
+      configItems.map(item =>
+        adminApi.updateSystemConfig(item.key, item.value, item.description)
+      )
     )
-
-    // 如果标记了清除密码，删除密码配置
-    if (passwordAction === 'cleared') {
-      promises.push(adminApi.deleteSystemConfig('smtp_password'))
-    }
-
-    await Promise.all(promises)
     success('SMTP 配置已保存')
 
     // 更新状态
-    if (passwordAction === 'cleared') {
-      clearSmtpPassword.value = false
-      smtpPasswordIsSet.value = false
-    } else if (passwordAction === 'updated') {
-      clearSmtpPassword.value = false
+    if (emailConfig.value.smtp_password) {
       smtpPasswordIsSet.value = true
     }
     emailConfig.value.smtp_password = null
@@ -800,51 +847,6 @@ async function saveSmtpConfig() {
     log.error('保存 SMTP 配置失败:', err)
   } finally {
     smtpSaveLoading.value = false
-  }
-}
-
-// 保存邮箱后缀限制配置
-async function saveEmailSuffixConfig() {
-  emailSuffixSaveLoading.value = true
-  try {
-    const configItems = [
-      {
-        key: 'email_suffix_mode',
-        value: emailConfig.value.email_suffix_mode,
-        description: '邮箱后缀限制模式（none/whitelist/blacklist）'
-      },
-      {
-        key: 'email_suffix_list',
-        value: emailConfig.value.email_suffix_list,
-        description: '邮箱后缀列表'
-      },
-    ]
-
-    const promises = configItems.map(item =>
-      adminApi.updateSystemConfig(item.key, item.value, item.description)
-    )
-
-    await Promise.all(promises)
-    success('邮箱限制配置已保存')
-  } catch (err) {
-    error('保存配置失败')
-    log.error('保存邮箱限制配置失败:', err)
-  } finally {
-    emailSuffixSaveLoading.value = false
-  }
-}
-
-// 清除 SMTP 密码
-function handleClearSmtpPassword() {
-  // 如果有输入内容，先清空输入框
-  if (emailConfig.value.smtp_password) {
-    emailConfig.value.smtp_password = null
-    return
-  }
-  // 标记要清除服务端密码（保存时生效）
-  if (smtpPasswordIsSet.value) {
-    clearSmtpPassword.value = true
-    smtpPasswordIsSet.value = false
   }
 }
 

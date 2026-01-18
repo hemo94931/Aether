@@ -37,3 +37,4 @@ class AuthSource(str, Enum):
 
     LOCAL = "local"  # 本地认证
     LDAP = "ldap"  # LDAP 认证
+    OAUTH = "oauth"  # OAuth 认证（账号首创来源）

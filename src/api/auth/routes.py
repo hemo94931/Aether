@@ -299,13 +299,12 @@ class AuthLoginAdapter(AuthPublicAdapter):
         access_token = AuthService.create_access_token(
             data={
                 "user_id": user.id,
-                "email": user.email,
                 "role": user.role.value,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
             }
         )
         refresh_token = AuthService.create_refresh_token(
-            data={"user_id": user.id, "email": user.email}
+            data={"user_id": user.id, "created_at": user.created_at.isoformat() if user.created_at else None}
         )
         response = LoginResponse(
             access_token=access_token,
@@ -345,19 +344,23 @@ class AuthRefreshAdapter(AuthPublicAdapter):
                 )
             if not user.is_active:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="用户已禁用")
+            if user.is_deleted:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="用户不存在或已禁用")
+
+            if not AuthService.token_identity_matches_user(token_payload, user):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的刷新令牌")
 
             new_access_token = AuthService.create_access_token(
                 data={
                     "user_id": user.id,
-                    "email": user.email,
                     "role": user.role.value,
                     "created_at": user.created_at.isoformat() if user.created_at else None,
                 }
             )
             new_refresh_token = AuthService.create_refresh_token(
-                data={"user_id": user.id, "email": user.email}
+                data={"user_id": user.id, "created_at": user.created_at.isoformat() if user.created_at else None}
             )
-            logger.info(f"令牌刷新成功: {user.email}")
+            logger.info(f"令牌刷新成功: user_id={user.id}")
             return RefreshTokenResponse(
                 access_token=new_access_token,
                 refresh_token=new_refresh_token,
@@ -378,10 +381,16 @@ class AuthRegistrationSettingsAdapter(AuthPublicAdapter):
 
         enable_registration = SystemConfigService.get_config(db, "enable_registration", default=False)
         require_verification = SystemConfigService.get_config(db, "require_email_verification", default=False)
+        email_configured = EmailSenderService.is_smtp_configured(db)
+
+        # 如果邮箱服务未配置，强制 require_email_verification 为 False
+        if not email_configured:
+            require_verification = False
 
         return RegistrationSettingsResponse(
             enable_registration=bool(enable_registration),
             require_email_verification=bool(require_verification),
+            email_configured=email_configured,
         ).model_dump()
 
 
@@ -430,61 +439,78 @@ class AuthRegisterAdapter(AuthPublicAdapter):
             AuditService.log_event(
                 db=db,
                 event_type=AuditEventType.UNAUTHORIZED_ACCESS,
-                description=f"Registration attempt rejected - registration disabled: {register_request.email}",
+                description=f"Registration attempt rejected - registration disabled: {register_request.username}",
                 ip_address=client_ip,
                 user_agent=user_agent,
-                metadata={"email": register_request.email, "reason": "registration_disabled"},
+                metadata={"username": register_request.username, "reason": "registration_disabled"},
             )
             db.commit()
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="系统暂不开放注册")
 
-        # 检查邮箱后缀是否允许
-        suffix_allowed, suffix_error = validate_email_suffix(db, register_request.email)
-        if not suffix_allowed:
-            logger.warning(f"注册失败：邮箱后缀不允许: {register_request.email}")
-            AuditService.log_event(
-                db=db,
-                event_type=AuditEventType.UNAUTHORIZED_ACCESS,
-                description=f"Registration attempt rejected - email suffix not allowed: {register_request.email}",
-                ip_address=client_ip,
-                user_agent=user_agent,
-                metadata={"email": register_request.email, "reason": "email_suffix_not_allowed"},
-            )
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=suffix_error,
-            )
-
-        # 检查是否需要邮箱验证
+        email = register_request.email
+        email_configured = EmailSenderService.is_smtp_configured(db)
         require_verification = SystemConfigService.get_config(db, "require_email_verification", default=False)
 
+        # 如果邮箱服务未配置，强制不要求邮箱验证
+        if not email_configured:
+            require_verification = False
+
+        # 如果系统要求邮箱验证，则必须提供邮箱
         if require_verification:
+            if not email:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="系统要求邮箱验证，请填写邮箱",
+                )
             # 检查邮箱是否已验证
-            is_verified = await EmailVerificationService.is_email_verified(register_request.email)
+            is_verified = await EmailVerificationService.is_email_verified(email)
             if not is_verified:
-                logger.warning(f"注册失败：邮箱未验证: {register_request.email}")
+                logger.warning(f"注册失败：邮箱未验证: {email}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="请先完成邮箱验证。请发送验证码并验证后再注册。",
+                )
+
+        # 如果提供了邮箱，进行后缀验证
+        if email:
+            suffix_allowed, suffix_error = validate_email_suffix(db, email)
+            if not suffix_allowed:
+                logger.warning(f"注册失败：邮箱后缀不允许: {email}")
+                AuditService.log_event(
+                    db=db,
+                    event_type=AuditEventType.UNAUTHORIZED_ACCESS,
+                    description=f"Registration attempt rejected - email suffix not allowed: {email}",
+                    ip_address=client_ip,
+                    user_agent=user_agent,
+                    metadata={"email": email, "reason": "email_suffix_not_allowed"},
+                )
+                db.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=suffix_error,
                 )
 
         try:
             # 读取系统配置的默认配额
             default_quota = SystemConfigService.get_config(db, "default_user_quota_usd", default=10.0)
 
+            # email_verified 逻辑：
+            # - 要求邮箱验证且已通过验证：True
+            # - 提供了邮箱但不要求验证：False（用户可后续自行验证）
+            # - 未提供邮箱：False
             user = UserService.create_user(
                 db=db,
-                email=register_request.email,
+                email=email,  # 可以为 None
                 username=register_request.username,
                 password=register_request.password,
                 role=UserRole.USER,
                 quota_usd=default_quota,
+                email_verified=bool(require_verification and email),
             )
             AuditService.log_event(
                 db=db,
                 event_type=AuditEventType.USER_CREATED,
-                description=f"User registered: {user.email}",
+                description=f"User registered: {user.username}" + (f" ({user.email})" if user.email else ""),
                 user_id=user.id,
                 ip_address=client_ip,
                 user_agent=user_agent,
@@ -494,9 +520,9 @@ class AuthRegisterAdapter(AuthPublicAdapter):
             db.commit()
 
             # 注册成功后清除验证状态（在 commit 后清理，即使清理失败也不影响注册结果）
-            if require_verification:
+            if require_verification and email:
                 try:
-                    await EmailVerificationService.clear_verification(register_request.email)
+                    await EmailVerificationService.clear_verification(email)
                 except Exception as e:
                     logger.warning(f"清理验证状态失败: {e}")
 
@@ -510,10 +536,10 @@ class AuthRegisterAdapter(AuthPublicAdapter):
             AuditService.log_event(
                 db=db,
                 event_type=AuditEventType.UNAUTHORIZED_ACCESS,
-                description=f"Registration failed: {register_request.email} - {exc}",
+                description=f"Registration failed: {register_request.username} - {exc}",
                 ip_address=client_ip,
                 user_agent=user_agent,
-                metadata={"email": register_request.email, "error": str(exc)},
+                metadata={"username": register_request.username, "error": str(exc)},
             )
             db.commit()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

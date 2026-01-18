@@ -65,14 +65,14 @@ export interface VerificationStatusResponse {
 }
 
 export interface RegisterRequest {
-  email: string
+  email?: string
   username: string
   password: string
 }
 
 export interface RegisterResponse {
   user_id: string
-  email: string
+  email?: string
   username: string
   message: string
 }
@@ -80,6 +80,7 @@ export interface RegisterResponse {
 export interface RegistrationSettingsResponse {
   enable_registration: boolean
   require_email_verification: boolean
+  email_configured: boolean
 }
 
 export interface AuthSettingsResponse {

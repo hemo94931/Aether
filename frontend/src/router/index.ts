@@ -19,6 +19,12 @@ const routes: RouteRecordRaw[] = [
     component: () => importWithRetry(() => import('@/views/public/LogoColorDemo.vue')),
     meta: { requiresAuth: false }
   },
+  {
+    path: '/auth/callback',
+    name: 'AuthCallback',
+    component: () => importWithRetry(() => import('@/views/public/AuthCallback.vue')),
+    meta: { requiresAuth: false }
+  },
 
   {
     path: '/dashboard',
@@ -134,6 +140,12 @@ const routes: RouteRecordRaw[] = [
         meta: { module: 'ldap' }
       },
       {
+        path: 'oauth',
+        name: 'OAuthSettings',
+        component: () => importWithRetry(() => import('@/views/admin/OAuthSettings.vue')),
+        meta: { module: 'oauth' }
+      },
+      {
         path: 'audit-logs',
         name: 'AuditLogs',
         component: () => importWithRetry(() => import('@/views/admin/AuditLogs.vue'))
@@ -234,9 +246,10 @@ router.beforeEach(async (to, from, next) => {
               return
             }
           }
-          // 如果模块未激活（available && enabled），重定向到管理员首页
-          if (!moduleStore.isActive(moduleName)) {
-            log.warn(`Module ${moduleName} is not active, redirecting to admin dashboard`)
+          // 如果模块不可用（未部署），重定向到管理员首页
+          // 注意：只检查 available，不检查 enabled/active，允许管理员配置未启用的模块
+          if (!moduleStore.isAvailable(moduleName)) {
+            log.warn(`Module ${moduleName} is not available, redirecting to admin dashboard`)
             next('/admin/dashboard')
             return
           }

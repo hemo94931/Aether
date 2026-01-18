@@ -74,6 +74,13 @@ class JwtAuthPlugin(AuthPlugin):
             if not user.is_active:
                 logger.warning(f"JWT认证失败 - 用户已禁用: {user.email}")
                 return None
+            if user.is_deleted:
+                logger.warning(f"JWT认证失败 - 用户已删除: {user.email}")
+                return None
+
+            if not AuthService.token_identity_matches_user(payload, user):
+                logger.warning("JWT认证失败 - Token身份校验失败")
+                return None
 
             # 创建认证上下文
             auth_context = AuthContext(

@@ -6,10 +6,11 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from fastapi import APIRouter
+    from sqlalchemy.orm import Session
 
 
 class ModuleCategory(str, Enum):
@@ -84,6 +85,9 @@ class ModuleDefinition:
     # 自定义依赖检测（可选，用于检测 ldap3 等库是否安装）
     check_dependencies: Optional[Callable[[], bool]] = None
 
+    # 配置验证（可选，启用模块时调用，返回 (success, error_message)）
+    validate_config: Optional[Callable[["Session"], Tuple[bool, str]]] = None
+
 
 @dataclass
 class ModuleStatus:
@@ -97,6 +101,8 @@ class ModuleStatus:
     available: bool  # 部署级可用（环境变量 + 依赖库）
     enabled: bool  # 运行级启用（数据库配置）
     active: bool  # 最终激活状态 (available && enabled && dependencies_ok)
+    config_validated: bool  # 配置验证通过（只有验证通过才允许启用）
+    config_error: Optional[str]  # 配置验证失败的错误信息
 
     # 显示信息
     display_name: str

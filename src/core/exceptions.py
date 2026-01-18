@@ -81,6 +81,13 @@ FIELD_NAME_TRANSLATIONS = {
     "is_pinned": "置顶状态",
     "start_time": "开始时间",
     "end_time": "结束时间",
+    # OAuth 相关字段
+    "client_id": "Client ID",
+    "client_secret": "Client Secret",
+    "redirect_uri": "回调地址",
+    "frontend_callback_url": "前端回调地址",
+    "display_name": "显示名称",
+    "scopes": "授权范围",
 }
 
 
@@ -337,6 +344,18 @@ class NotFoundException(ProxyException):
             error_type="not_found",
             message=message,
             details={"resource_type": resource_type} if resource_type else {},
+        )
+
+
+class ConfirmationRequiredException(ProxyException):
+    """需要用户确认的操作"""
+
+    def __init__(self, message: str, affected_count: int, action: str = "disable"):
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            error_type="confirmation_required",
+            message=message,
+            details={"affected_count": affected_count, "action": action},
         )
 
 

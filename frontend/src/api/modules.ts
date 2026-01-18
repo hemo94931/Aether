@@ -5,6 +5,8 @@ export interface ModuleStatus {
   available: boolean
   enabled: boolean
   active: boolean
+  config_validated: boolean
+  config_error: string | null
   display_name: string
   description: string
   category: 'auth' | 'monitoring' | 'security' | 'integration'

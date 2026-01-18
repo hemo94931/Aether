@@ -362,7 +362,9 @@ import {
   X,
   Mail,
   Puzzle,
+  type LucideIcon,
 } from 'lucide-vue-next'
+
 import GithubIcon from '@/components/icons/GithubIcon.vue'
 
 const router = useRouter()
@@ -497,7 +499,7 @@ const navigation = computed(() => {
   ]
 
   // 系统菜单项（静态部分）
-  const systemItems = [
+  const systemItems: { name: string; href: string; icon: LucideIcon }[] = [
     { name: '公告管理', href: '/admin/announcements', icon: Megaphone },
     { name: '缓存监控', href: '/admin/cache-monitoring', icon: Gauge },
     { name: 'IP 安全', href: '/admin/ip-security', icon: Shield },

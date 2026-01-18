@@ -109,6 +109,8 @@ class PreferenceService:
             "is_active": user.is_active,
             "created_at": user.created_at,
             "last_login_at": user.last_login_at,
+            "auth_source": user.auth_source.value if user.auth_source else "local",
+            "has_password": bool(user.password_hash),
             "preferences": {
                 "avatar_url": preferences.avatar_url,
                 "bio": preferences.bio,

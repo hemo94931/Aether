@@ -364,6 +364,7 @@ def init_admin_user(db: Session) -> None:
         # 创建管理员账户
         admin = User(
             email=config.admin_email,
+            email_verified=True,
             username=config.admin_username,
             role=UserRole.ADMIN,
             is_active=True,

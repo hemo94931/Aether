@@ -238,8 +238,11 @@ class ApiRequestPipeline:
 
         # 直接查询数据库，确保返回的是当前 Session 绑定的对象
         user = db.query(User).filter(User.id == user_id).first()
-        if not user or not user.is_active:
+        if not user or not user.is_active or user.is_deleted:
             raise HTTPException(status_code=403, detail="用户不存在或已禁用")
+
+        if not self.auth_service.token_identity_matches_user(payload, user):
+            raise HTTPException(status_code=403, detail="无效的管理员令牌")
 
         # 检查管理员权限
         if user.role != UserRole.ADMIN:
@@ -291,8 +294,11 @@ class ApiRequestPipeline:
             raise HTTPException(status_code=401, detail="无效的用户令牌")
 
         user = db.query(User).filter(User.id == user_id).first()
-        if not user or not user.is_active:
+        if not user or not user.is_active or user.is_deleted:
             raise HTTPException(status_code=403, detail="用户不存在或已禁用")
+
+        if not self.auth_service.token_identity_matches_user(payload, user):
+            raise HTTPException(status_code=403, detail="无效的用户令牌")
 
         request.state.user_id = user.id
         return user, None

@@ -266,8 +266,21 @@ class AnnouncementOptionalAuthAdapter(ApiAdapter):
             if not user_id:
                 return None
             user = (
-                context.db.query(User).filter(User.id == user_id, User.is_active.is_(True)).first()
+                context.db.query(User)
+                .filter(
+                    User.id == user_id,
+                    User.is_active.is_(True),
+                    User.is_deleted.is_(False),
+                )
+                .first()
             )
+
+            if not user:
+                return None
+
+            if not AuthService.token_identity_matches_user(payload, user):
+                return None
+
             return user
         except Exception:
             return None

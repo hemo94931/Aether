@@ -55,7 +55,7 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int = 86400  # Token有效期（秒），默认24小时
     user_id: str
-    email: str
+    email: Optional[str] = None
     username: str
     role: str
 
@@ -78,14 +78,19 @@ class RefreshTokenResponse(BaseModel):
 class RegisterRequest(BaseModel):
     """注册请求"""
 
-    email: str = Field(..., min_length=3, max_length=255, description="邮箱地址")
+    email: Optional[str] = Field(None, max_length=255, description="邮箱地址（可选）")
     username: str = Field(..., min_length=2, max_length=50, description="用户名")
     password: str = Field(..., min_length=6, max_length=128, description="密码")
 
-    @classmethod
     @field_validator("email")
+    @classmethod
     def validate_email(cls, v):
-        """验证邮箱格式"""
+        """验证邮箱格式（如果提供）"""
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
         email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
         if not re.match(email_pattern, v):
             raise ValueError("邮箱格式无效")
@@ -121,7 +126,7 @@ class RegisterResponse(BaseModel):
     """注册响应"""
 
     user_id: str
-    email: str
+    email: Optional[str] = None
     username: str
     message: str
 
@@ -223,6 +228,7 @@ class RegistrationSettingsResponse(BaseModel):
 
     enable_registration: bool
     require_email_verification: bool
+    email_configured: bool = Field(description="是否配置了邮箱服务")
 
 
 # ========== 用户管理 ==========
@@ -335,7 +341,7 @@ class UserResponse(BaseModel):
     """用户响应"""
 
     id: str
-    email: str
+    email: Optional[str] = None
     username: str
     role: UserRole
     allowed_providers: Optional[List[str]] = None  # 允许使用的提供商 ID 列表
@@ -699,7 +705,7 @@ class UpdatePreferencesRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     """修改密码请求"""
 
-    old_password: str
+    old_password: Optional[str] = None  # 可选：首次设置密码时不需要
     new_password: str
 
 

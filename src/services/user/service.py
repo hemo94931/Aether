@@ -25,18 +25,23 @@ class UserService:
     @retry_on_database_error(max_retries=3)
     def create_user(
         db: Session,
-        email: str,
+        email: Optional[str],
         username: str,
         password: str,
         role: UserRole = UserRole.USER,
         quota_usd: Optional[float] = 10.0,
+        email_verified: bool = False,
     ) -> User:
-        """创建新用户，quota_usd 为 None 表示无限制"""
+        """创建新用户，quota_usd 为 None 表示无限制，email 为 None 表示无邮箱"""
 
-        # 验证邮箱格式
-        valid, error_msg = EmailValidator.validate(email)
-        if not valid:
-            raise ValueError(error_msg)
+        # 验证邮箱格式（仅当提供邮箱时）
+        if email is not None:
+            valid, error_msg = EmailValidator.validate(email)
+            if not valid:
+                raise ValueError(error_msg)
+            # 检查邮箱是否已存在
+            if db.query(User).filter(User.email == email).first():
+                raise ValueError(f"邮箱已存在: {email}")
 
         # 验证用户名格式
         valid, error_msg = UsernameValidator.validate(username)
@@ -48,16 +53,13 @@ class UserService:
         if not valid:
             raise ValueError(error_msg)
 
-        # 检查邮箱是否已存在
-        if db.query(User).filter(User.email == email).first():
-            raise ValueError(f"邮箱已存在: {email}")
-
         # 检查用户名是否已存在
         if db.query(User).filter(User.username == username).first():
             raise ValueError(f"用户名已存在: {username}")
 
         user = User(
             email=email,
+            email_verified=email_verified if email else False,
             username=username,
             role=role,
             quota_usd=quota_usd,
@@ -69,7 +71,8 @@ class UserService:
         db.commit()  # 立即提交事务,释放数据库锁
         db.refresh(user)
 
-        logger.info(f"创建新用户: {email} (ID: {user.id}, 角色: {role.value})")
+        log_identifier = email if email else username
+        logger.info(f"创建新用户: {log_identifier} (ID: {user.id}, 角色: {role.value})")
         return user
 
     @staticmethod

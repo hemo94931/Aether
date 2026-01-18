@@ -9,13 +9,23 @@
       <div class="lg:col-span-2 space-y-6">
         <!-- 基本信息 -->
         <Card class="p-6">
-          <h3 class="text-lg font-medium text-foreground mb-4">
-            基本信息
-          </h3>
           <form
             class="space-y-4"
             @submit.prevent="updateProfile"
           >
+            <div class="flex items-center justify-between">
+              <h3 class="text-lg font-medium text-foreground">
+                基本信息
+              </h3>
+              <Button
+                type="submit"
+                :disabled="savingProfile || !hasProfileChanges"
+                class="shadow-none hover:shadow-none"
+              >
+                {{ savingProfile ? '保存中...' : '保存' }}
+              </Button>
+            </div>
+
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <Label for="username">用户名</Label>
@@ -26,11 +36,11 @@
                 />
               </div>
               <div>
-                <Label for="email">邮箱</Label>
+                <Label for="avatar">头像 URL</Label>
                 <Input
-                  id="email"
-                  v-model="profileForm.email"
-                  type="email"
+                  id="avatar"
+                  v-model="preferencesForm.avatar_url"
+                  type="url"
                   class="mt-1"
                 />
               </div>
@@ -46,42 +56,53 @@
               />
             </div>
 
-            <div>
-              <Label for="avatar">头像 URL</Label>
-              <Input
-                id="avatar"
-                v-model="preferencesForm.avatar_url"
-                type="url"
-                class="mt-1"
-              />
-              <p class="mt-1 text-sm text-muted-foreground">
-                输入头像图片的 URL 地址
-              </p>
-            </div>
-
-            <Button
-              type="submit"
-              :disabled="savingProfile"
-              class="shadow-none hover:shadow-none"
+            <!-- 邮箱字段：当系统配置了邮箱服务或用户已有邮箱时显示 -->
+            <div
+              v-if="emailConfigured || profileForm.email"
+              class="grid grid-cols-1 md:grid-cols-2 gap-4"
             >
-              {{ savingProfile ? '保存中...' : '保存修改' }}
-            </Button>
+              <div>
+                <Label for="email">邮箱</Label>
+                <Input
+                  id="email"
+                  v-model="profileForm.email"
+                  type="email"
+                  class="mt-1"
+                  :disabled="!emailConfigured"
+                />
+                <p
+                  v-if="!emailConfigured && profileForm.email"
+                  class="mt-1 text-xs text-muted-foreground"
+                >
+                  邮箱服务未配置，暂不可修改
+                </p>
+              </div>
+            </div>
           </form>
         </Card>
 
-        <!-- 修改密码 (LDAP 用户不显示) -->
+        <!-- 密码设置（LDAP 用户不显示） -->
         <Card
           v-if="profile?.auth_source !== 'ldap'"
           class="p-6"
         >
-          <h3 class="text-lg font-medium text-foreground mb-4">
-            修改密码
-          </h3>
           <form
             class="space-y-4"
             @submit.prevent="changePassword"
           >
-            <div>
+            <div class="flex items-center justify-between">
+              <h3 class="text-lg font-medium text-foreground">
+                {{ profile?.has_password ? '修改密码' : '设置密码' }}
+              </h3>
+              <Button
+                type="submit"
+                :disabled="changingPassword || !hasPasswordChanges"
+                class="shadow-none hover:shadow-none"
+              >
+                {{ changingPassword ? '保存中...' : '保存' }}
+              </Button>
+            </div>
+            <div v-if="profile?.has_password">
               <Label for="old-password">当前密码</Label>
               <Input
                 id="old-password"
@@ -91,7 +112,7 @@
               />
             </div>
             <div>
-              <Label for="new-password">新密码</Label>
+              <Label for="new-password">{{ profile?.has_password ? '新密码' : '密码' }}</Label>
               <Input
                 id="new-password"
                 v-model="passwordForm.new_password"
@@ -100,7 +121,7 @@
               />
             </div>
             <div>
-              <Label for="confirm-password">确认新密码</Label>
+              <Label for="confirm-password">确认{{ profile?.has_password ? '新' : '' }}密码</Label>
               <Input
                 id="confirm-password"
                 v-model="passwordForm.confirm_password"
@@ -108,14 +129,93 @@
                 class="mt-1"
               />
             </div>
-            <Button
-              type="submit"
-              :disabled="changingPassword"
-              class="shadow-none hover:shadow-none"
-            >
-              {{ changingPassword ? '修改中...' : '修改密码' }}
-            </Button>
           </form>
+        </Card>
+
+        <!-- OAuth 绑定 -->
+        <Card class="p-6">
+          <h3 class="text-lg font-medium text-foreground mb-4">
+            OAuth 绑定
+          </h3>
+
+          <div
+            v-if="profile?.auth_source === 'ldap'"
+            class="text-sm text-muted-foreground"
+          >
+            LDAP 用户不支持 OAuth 绑定
+          </div>
+
+          <div
+            v-else-if="oauthUnavailable"
+            class="text-sm text-muted-foreground"
+          >
+            OAuth 模块未启用或暂不可用
+          </div>
+
+          <div
+            v-else
+            class="space-y-4"
+          >
+            <!-- 合并已绑定和可绑定为卡片网格 -->
+            <div
+              v-if="oauthLinks.length === 0 && bindableProviders.length === 0"
+              class="text-sm text-muted-foreground"
+            >
+              暂无可用的 OAuth Provider
+            </div>
+            <div
+              v-else
+              class="grid grid-cols-1 sm:grid-cols-2 gap-3"
+            >
+              <!-- 已绑定的 Provider -->
+              <div
+                v-for="link in oauthLinks"
+                :key="link.provider_type"
+                class="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 p-4"
+              >
+                <div class="min-w-0 flex-1">
+                  <div class="text-sm font-medium truncate">
+                    {{ link.display_name }}
+                  </div>
+                  <div class="text-xs text-muted-foreground truncate">
+                    {{ link.provider_username || link.provider_email || '已绑定' }}
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="oauthActionLoading"
+                  @click="handleUnbind(link.provider_type)"
+                >
+                  解绑
+                </Button>
+              </div>
+
+              <!-- 可绑定的 Provider -->
+              <div
+                v-for="p in bindableProviders"
+                :key="p.provider_type"
+                class="flex items-center justify-between gap-3 rounded-lg border border-dashed border-border p-4 hover:border-primary/50 transition-colors"
+              >
+                <div class="min-w-0 flex-1">
+                  <div class="text-sm font-medium truncate">
+                    {{ p.display_name }}
+                  </div>
+                  <div class="text-xs text-muted-foreground">
+                    未绑定
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="oauthActionLoading"
+                  @click="handleBind(p.provider_type)"
+                >
+                  绑定
+                </Button>
+              </div>
+            </div>
+          </div>
         </Card>
 
         <!-- 偏好设置 -->
@@ -192,7 +292,11 @@
                 通知设置
               </h4>
               <div class="space-y-3">
-                <div class="flex items-center justify-between py-2 border-b border-border/40 last:border-0">
+                <!-- 邮件通知：仅当系统配置了邮箱服务时显示 -->
+                <div
+                  v-if="emailConfigured"
+                  class="flex items-center justify-between py-2 border-b border-border/40 last:border-0"
+                >
                   <div class="flex-1">
                     <Label
                       for="email-notifications"
@@ -322,9 +426,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { meApi, type Profile } from '@/api/me'
+import { authApi } from '@/api/auth'
+import { oauthApi, type OAuthLinkInfo, type OAuthProviderInfo } from '@/api/oauth'
 import { useDarkMode, type ThemeMode } from '@/composables/useDarkMode'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
@@ -340,9 +447,12 @@ import SelectItem from '@/components/ui/select-item.vue'
 import Switch from '@/components/ui/switch.vue'
 import { useToast } from '@/composables/useToast'
 import { formatCurrency } from '@/utils/format'
+import { getApiUrl } from '@/utils/url'
 import { log } from '@/utils/logger'
+import { getErrorMessage } from '@/types/api-error'
 
 const authStore = useAuthStore()
+const route = useRoute()
 const { success, error: showError } = useToast()
 const { setThemeMode } = useDarkMode()
 
@@ -377,6 +487,38 @@ const changingPassword = ref(false)
 const themeSelectOpen = ref(false)
 const languageSelectOpen = ref(false)
 
+const oauthUnavailable = ref(false)
+const oauthActionLoading = ref(false)
+const oauthLinks = ref<OAuthLinkInfo[]>([])
+const bindableProviders = ref<OAuthProviderInfo[]>([])
+const emailConfigured = ref(false) // 系统是否配置了邮箱服务
+
+// 原始值，用于检测是否有修改
+const originalProfileForm = ref({ email: '', username: '' })
+const originalPreferencesForm = ref({ avatar_url: '', bio: '' })
+
+// 检测基本信息是否有修改
+const hasProfileChanges = computed(() => {
+  return (
+    profileForm.value.username !== originalProfileForm.value.username ||
+    profileForm.value.email !== originalProfileForm.value.email ||
+    preferencesForm.value.avatar_url !== originalPreferencesForm.value.avatar_url ||
+    preferencesForm.value.bio !== originalPreferencesForm.value.bio
+  )
+})
+
+// 检测密码表单是否有内容
+const hasPasswordChanges = computed(() => {
+  const hasPassword = profile.value?.has_password
+  if (hasPassword) {
+    // 已有密码：需要填写旧密码和新密码
+    return !!(passwordForm.value.old_password && passwordForm.value.new_password && passwordForm.value.confirm_password)
+  } else {
+    // 设置密码：只需要填写新密码
+    return !!(passwordForm.value.new_password && passwordForm.value.confirm_password)
+  }
+})
+
 function handleThemeChange(value: string) {
   preferencesForm.value.theme = value
   themeSelectOpen.value = false
@@ -395,18 +537,83 @@ function handleLanguageChange(value: string) {
 onMounted(async () => {
   await loadProfile()
   await loadPreferences()
+  await loadOAuthBindings()
+  await loadEmailConfigured()
 })
+
+async function loadEmailConfigured() {
+  try {
+    const settings = await authApi.getRegistrationSettings()
+    emailConfigured.value = !!settings.email_configured
+  } catch {
+    emailConfigured.value = false
+  }
+}
 
 async function loadProfile() {
   try {
     profile.value = await meApi.getProfile()
     profileForm.value = {
-      email: profile.value.email,
+      email: profile.value.email || '',
       username: profile.value.username
     }
+    // 保存原始值
+    originalProfileForm.value = { ...profileForm.value }
   } catch (error) {
     log.error('加载个人信息失败:', error)
     showError('加载个人信息失败')
+  }
+}
+
+async function loadOAuthBindings() {
+  oauthUnavailable.value = false
+  oauthLinks.value = []
+  bindableProviders.value = []
+
+  // profile 加载失败时跳过
+  if (!profile.value) {
+    oauthUnavailable.value = true
+    return
+  }
+
+  // LDAP 用户不支持绑定
+  if (profile.value.auth_source === 'ldap') {
+    return
+  }
+
+  try {
+    const [links, providers] = await Promise.all([
+      oauthApi.getMyLinks(),
+      oauthApi.getBindableProviders(),
+    ])
+    oauthLinks.value = links
+    bindableProviders.value = providers
+  } catch (err: any) {
+    if (err?.response?.status === 503) {
+      oauthUnavailable.value = true
+      return
+    }
+    log.error('加载 OAuth 绑定信息失败:', err)
+    oauthUnavailable.value = true
+  }
+}
+
+function handleBind(providerType: string) {
+  // 保存返回路径（OAuth callback 会读取）
+  sessionStorage.setItem('redirectPath', route.fullPath)
+  window.location.href = getApiUrl(`/api/user/oauth/${providerType}/bind`)
+}
+
+async function handleUnbind(providerType: string) {
+  oauthActionLoading.value = true
+  try {
+    await oauthApi.unbind(providerType)
+    success('解绑成功')
+    await loadOAuthBindings()
+  } catch (err) {
+    showError(getErrorMessage(err, '解绑失败'))
+  } finally {
+    oauthActionLoading.value = false
   }
 }
 
@@ -430,6 +637,12 @@ async function loadPreferences() {
         usage_alerts: prefs.notifications?.usage_alerts ?? true,
         announcements: prefs.notifications?.announcements ?? true
       }
+    }
+
+    // 保存原始值
+    originalPreferencesForm.value = {
+      avatar_url: preferencesForm.value.avatar_url,
+      bio: preferencesForm.value.bio
     }
 
     // 如果本地主题和服务端不一致，同步到服务端（静默更新，不提示用户）
@@ -463,12 +676,18 @@ async function updateProfile() {
       }
     })
 
+    // 更新原始值
+    originalProfileForm.value = { ...profileForm.value }
+    originalPreferencesForm.value = {
+      avatar_url: preferencesForm.value.avatar_url,
+      bio: preferencesForm.value.bio
+    }
+
     success('个人信息已更新')
-    await loadProfile()
     authStore.fetchCurrentUser()
-  } catch (error) {
-    log.error('更新个人信息失败:', error)
-    showError('更新个人信息失败')
+  } catch (err) {
+    log.error('更新个人信息失败:', err)
+    showError(getErrorMessage(err), '更新个人信息失败')
   } finally {
     savingProfile.value = false
   }
@@ -476,30 +695,37 @@ async function updateProfile() {
 
 async function changePassword() {
   if (passwordForm.value.new_password !== passwordForm.value.confirm_password) {
-    showError('两次输入的密码不一致')
+    showError('两次输入的密码不一致', '密码错误')
     return
   }
 
   if (passwordForm.value.new_password.length < 6) {
-    showError('密码长度至少6位')
+    showError('密码长度至少6位', '密码错误')
     return
   }
 
+  const isSettingPassword = !profile.value?.has_password
   changingPassword.value = true
   try {
     await meApi.changePassword({
-      old_password: passwordForm.value.old_password,
+      old_password: isSettingPassword ? undefined : passwordForm.value.old_password,
       new_password: passwordForm.value.new_password
     })
-    success('密码修改成功')
+    success(isSettingPassword ? '密码设置成功' : '密码修改成功')
     passwordForm.value = {
       old_password: '',
       new_password: '',
       confirm_password: ''
     }
-  } catch (error) {
-    log.error('修改密码失败:', error)
-    showError('修改密码失败，请检查当前密码是否正确')
+    // 刷新 profile 以更新 has_password 状态
+    if (isSettingPassword) {
+      await loadProfile()
+    }
+  } catch (err) {
+    log.error('修改密码失败:', err)
+    const title = isSettingPassword ? '密码设置失败' : '密码修改失败'
+    const defaultMsg = isSettingPassword ? '请稍后重试' : '请检查当前密码是否正确'
+    showError(getErrorMessage(err, defaultMsg), title)
   } finally {
     changingPassword.value = false
   }

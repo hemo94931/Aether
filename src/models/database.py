@@ -42,9 +42,13 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
-    email = Column(String(255), unique=True, index=True, nullable=False)
+    # OAuth 用户可能没有邮箱；Postgres unique 允许多个 NULL
+    email = Column(String(255), unique=True, index=True, nullable=True)
+    # 注意：所有创建用户的入口必须显式写入 true/false，禁止依赖默认值
+    email_verified = Column(Boolean, nullable=False)
     username = Column(String(100), unique=True, index=True, nullable=False)
-    password_hash = Column(String(255), nullable=False)
+    # OAuth 用户可能没有本地密码（v1 仅做字段兼容）
+    password_hash = Column(String(255), nullable=True)
     role = Column(
         Enum(
             UserRole,
@@ -507,6 +511,95 @@ class LDAPConfig(Base):
         if not self.bind_password_encrypted:
             return ""
         return crypto_service.decrypt(self.bind_password_encrypted)
+
+
+class OAuthProvider(Base):
+    """OAuth Provider 配置表（按 provider_type 唯一）"""
+
+    __tablename__ = "oauth_providers"
+
+    # 使用 provider_type 作为主键，便于通过 URL 参数直接定位配置
+    provider_type = Column(String(50), primary_key=True)
+    display_name = Column(String(100), nullable=False)
+
+    client_id = Column(String(255), nullable=False)
+    client_secret_encrypted = Column(Text, nullable=True)  # 允许 NULL 表示尚未配置/已清除
+
+    # 可选覆盖端点（需在业务层做白名单校验）
+    authorization_url_override = Column(String(500), nullable=True)
+    token_url_override = Column(String(500), nullable=True)
+    userinfo_url_override = Column(String(500), nullable=True)
+
+    # 可选覆盖 scopes（JSON 列表）
+    scopes = Column(JSON, nullable=True)
+
+    # 服务端控制 redirect_uri 与前端回调 URL
+    redirect_uri = Column(String(500), nullable=False)
+    frontend_callback_url = Column(String(500), nullable=False)
+
+    # Provider 特定配置/映射
+    attribute_mapping = Column(JSON, nullable=True)
+    extra_config = Column(JSON, nullable=True)
+
+    is_enabled = Column(Boolean, default=False, nullable=False)
+
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def set_client_secret(self, secret: str) -> None:
+        """设置并加密 client_secret"""
+        from src.core.crypto import crypto_service
+
+        self.client_secret_encrypted = crypto_service.encrypt(secret)
+
+    def get_client_secret(self) -> str:
+        """获取解密后的 client_secret（未配置时返回空串）"""
+        from src.core.crypto import crypto_service
+
+        if not self.client_secret_encrypted:
+            return ""
+        return crypto_service.decrypt(self.client_secret_encrypted)
+
+
+class UserOAuthLink(Base):
+    """用户与 OAuth Provider 的绑定关系"""
+
+    __tablename__ = "user_oauth_links"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider_type = Column(
+        String(50),
+        ForeignKey("oauth_providers.provider_type", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider_user_id = Column(String(255), nullable=False)
+    provider_username = Column(String(255), nullable=True)
+    provider_email = Column(String(255), nullable=True)
+    extra_data = Column(JSON, nullable=True)
+
+    linked_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("provider_type", "provider_user_id", name="uq_oauth_provider_user"),
+        UniqueConstraint("user_id", "provider_type", name="uq_user_oauth_provider"),
+    )
 
 
 class Provider(Base):

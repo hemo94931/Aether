@@ -15,15 +15,17 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-import httpx
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.cache_service import CacheService
 from src.core.crypto import crypto_service
-from src.core.headers import get_extra_headers_from_endpoint
 from src.core.logger import logger
 from src.database import create_session
-from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint
+from src.models.database import Provider, ProviderAPIKey
+from src.services.model.upstream_fetcher import (
+    build_all_format_configs,
+    fetch_models_from_endpoints,
+)
 from src.services.system.scheduler import get_scheduler
 
 # 从环境变量读取间隔，默认 1440 分钟（1 天），限制在 60-10080 分钟之间
@@ -64,21 +66,6 @@ async def set_upstream_models_to_cache(
     cache_key = _get_upstream_models_cache_key(provider_id, api_key_id)
     await CacheService.set(cache_key, models, UPSTREAM_MODELS_CACHE_TTL_SECONDS)
     logger.debug(f"上游模型已缓存: {cache_key}, 数量={len(models)}")
-
-
-def _get_adapter_for_format(api_format: str) -> Optional[type]:
-    """根据 API 格式获取对应的 Adapter 类"""
-    # 延迟导入避免循环依赖
-    from src.api.handlers.base.chat_adapter_base import get_adapter_class
-    from src.api.handlers.base.cli_adapter_base import get_cli_adapter_class
-
-    adapter_class = get_adapter_class(api_format)
-    if adapter_class:
-        return adapter_class
-    cli_adapter_class = get_cli_adapter_class(api_format)
-    if cli_adapter_class:
-        return cli_adapter_class
-    return None
 
 
 class ModelFetchScheduler:
@@ -277,7 +264,7 @@ class ModelFetchScheduler:
             return "error"
 
         # 构建 api_format -> endpoint 映射
-        format_to_endpoint: dict[str, ProviderEndpoint] = {}
+        format_to_endpoint: dict[str, object] = {}
         for endpoint in provider.endpoints:  # type: ignore[attr-defined]
             if endpoint.is_active:
                 format_to_endpoint[endpoint.api_format] = endpoint
@@ -288,29 +275,11 @@ class ModelFetchScheduler:
             key.last_models_fetch_at = now
             return "error"
 
-        # 收集端点配置
-        endpoint_configs: list[dict] = []
-        key_formats = key.api_formats or []
-        for fmt in key_formats:
-            endpoint = format_to_endpoint.get(fmt)
-            if endpoint:
-                endpoint_configs.append(
-                    {
-                        "api_key": api_key_value,
-                        "base_url": endpoint.base_url,
-                        "api_format": fmt,
-                        "extra_headers": get_extra_headers_from_endpoint(endpoint),
-                    }
-                )
-
-        if not endpoint_configs:
-            logger.warning(f"Provider {provider.name} 没有匹配 Key {key.id} 格式的端点配置")
-            key.last_models_fetch_error = "No matching endpoints for key formats"
-            key.last_models_fetch_at = now
-            return "error"
+        # 使用公共函数构建所有格式的端点配置
+        endpoint_configs = build_all_format_configs(api_key_value, format_to_endpoint)  # type: ignore[arg-type]
 
         # 并发获取模型
-        all_models, errors, has_success = await self._fetch_models_from_endpoints(endpoint_configs)
+        all_models, errors, has_success = await fetch_models_from_endpoints(endpoint_configs)
 
         # 记录获取结果
         error_msg = "; ".join(errors) if errors else None
@@ -400,62 +369,6 @@ class ModelFetchScheduler:
         else:
             logger.debug(f"Key {key.id} 模型列表无变化")
             return False
-
-    async def _fetch_models_from_endpoints(
-        self, endpoint_configs: list[dict]
-    ) -> tuple[list[dict], list[str], bool]:
-        """从多个端点并发获取模型，返回 (模型列表, 错误列表, 是否有成功)"""
-        all_models: list[dict] = []
-        errors: list[str] = []
-        has_success = False
-        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-
-        async def fetch_one(
-            client: httpx.AsyncClient, config: dict
-        ) -> tuple[list, Optional[str], bool]:
-            base_url = config["base_url"]
-            if not base_url:
-                return [], None, False
-            base_url = base_url.rstrip("/")
-            api_format = config["api_format"]
-            api_key_value = config["api_key"]
-            extra_headers = config.get("extra_headers")
-
-            try:
-                adapter_class = _get_adapter_for_format(api_format)
-                if not adapter_class:
-                    return [], f"Unknown API format: {api_format}", False
-
-                async with semaphore:
-                    models, error = await adapter_class.fetch_models(  # type: ignore[attr-defined]
-                        client, base_url, api_key_value, extra_headers
-                    )
-
-                for m in models:
-                    if "api_format" not in m:
-                        m["api_format"] = api_format
-
-                # 即使返回空列表，只要没有错误也算成功
-                success = error is None
-                return models, error, success
-            except httpx.TimeoutException:
-                logger.warning(f"获取 {api_format} 模型超时")
-                return [], f"{api_format}: timeout", False
-            except Exception as e:
-                # 只记录异常类型，避免泄露敏感信息
-                logger.exception(f"获取 {api_format} 模型出错")
-                return [], f"{api_format}: {type(e).__name__}", False
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            results = await asyncio.gather(*[fetch_one(client, c) for c in endpoint_configs])
-            for models, error, success in results:
-                all_models.extend(models)
-                if error:
-                    errors.append(error)
-                if success:
-                    has_success = True
-
-        return all_models, errors, has_success
 
 
 # 单例模式
