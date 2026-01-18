@@ -217,19 +217,19 @@ async def get_provider_ops_config(
             is_configured=False,
         )
 
-    # 获取 base_url
-    provider = db.query(Provider).filter(Provider.id == provider_id).first()
-    base_url = None
-    if provider:
-        provider_config = provider.config or {}
-        # base_url 可能存储在 provider_ops 配置中，也可能从 provider 获取
-        if provider.endpoints:
-            for endpoint in provider.endpoints:
-                if endpoint.base_url:
-                    base_url = endpoint.base_url
-                    break
-        if not base_url:
-            base_url = provider_config.get("base_url") or provider.website
+    # 获取 base_url：优先从 provider_ops 配置读取，否则回退到 endpoint/provider
+    base_url = config.base_url
+    if not base_url:
+        provider = db.query(Provider).filter(Provider.id == provider_id).first()
+        if provider:
+            if provider.endpoints:
+                for endpoint in provider.endpoints:
+                    if endpoint.base_url:
+                        base_url = endpoint.base_url
+                        break
+            if not base_url:
+                provider_config = provider.config or {}
+                base_url = provider_config.get("base_url") or provider.website
 
     # 获取脱敏后的凭据
     masked_credentials = service.get_masked_credentials(config.connector_credentials)
@@ -265,6 +265,7 @@ async def save_provider_ops_config(
     # 构建配置对象
     config = ProviderOpsConfig(
         architecture_id=request.architecture_id,
+        base_url=request.base_url,
         connector_auth_type=ConnectorAuthType(request.connector.auth_type),
         connector_config=request.connector.config,
         connector_credentials=credentials,

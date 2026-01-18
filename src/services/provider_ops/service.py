@@ -177,8 +177,8 @@ class ProviderOpsService:
         registry = get_registry()
         architecture = registry.get_or_default(config.architecture_id)
 
-        # 获取 base_url
-        base_url = self._get_provider_base_url(provider)
+        # 获取 base_url：优先从 config 读取
+        base_url = config.base_url or self._get_provider_base_url(provider)
         if not base_url:
             return False, "Provider 未配置 base_url"
 

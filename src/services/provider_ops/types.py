@@ -114,6 +114,7 @@ class ProviderOpsConfig:
     """Provider 操作配置（存储在 Provider.config['provider_ops'] 中）"""
 
     architecture_id: str = "generic_api"
+    base_url: Optional[str] = None  # API 基础地址
 
     # 连接器配置
     connector_auth_type: ConnectorAuthType = ConnectorAuthType.API_KEY
@@ -134,6 +135,7 @@ class ProviderOpsConfig:
 
         return cls(
             architecture_id=data.get("architecture_id", "generic_api"),
+            base_url=data.get("base_url"),
             connector_auth_type=ConnectorAuthType(
                 data.get("connector", {}).get("auth_type", "api_key")
             ),
@@ -147,6 +149,7 @@ class ProviderOpsConfig:
         """转换为字典（用于存储）"""
         return {
             "architecture_id": self.architecture_id,
+            "base_url": self.base_url,
             "connector": {
                 "auth_type": self.connector_auth_type.value,
                 "config": self.connector_config,
