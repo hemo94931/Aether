@@ -28,6 +28,7 @@ class ArchitectureRegistry:
 
     _instance: Optional["ArchitectureRegistry"] = None
     _lock = threading.Lock()
+    _initialized: bool = False
 
     def __new__(cls) -> "ArchitectureRegistry":
         if cls._instance is None:
@@ -49,7 +50,7 @@ class ArchitectureRegistry:
 
     def _register_builtin_architectures(self) -> None:
         """注册内置架构"""
-        builtin = [
+        builtin: List[Type[ProviderArchitecture]] = [
             AnyrouterArchitecture,
             CubenceArchitecture,
             GenericApiArchitecture,

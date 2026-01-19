@@ -213,7 +213,7 @@ class VerifyResult:
 
 class ProviderArchitecture(ABC):
     """
-    提供商架构基类
+    提供商架构抽象基类
 
     架构 = Connector（鉴权方式） + Actions（支持的操作）
 
@@ -226,7 +226,8 @@ class ProviderArchitecture(ABC):
     2. 继承 ProviderArchitecture 和 ProviderConnector
     3. 定义类属性：architecture_id, display_name, description
     4. 实现连接器子类和架构类
-    5. 重写认证相关方法：
+    5. 实现认证相关的抽象方法：
+       - get_credentials_schema(): 返回凭据字段定义
        - get_verify_endpoint(): 返回验证端点
        - build_verify_headers(): 构建验证请求 headers
        - parse_verify_response(): 解析验证响应
@@ -256,13 +257,14 @@ class ProviderArchitecture(ABC):
         """
         self.config = config or {}
 
-    # ==================== 认证验证相关方法 ====================
+    # ==================== 认证验证相关方法（子类必须实现） ====================
 
+    @abstractmethod
     def get_credentials_schema(self) -> Dict[str, Any]:
         """
         获取凭据字段定义（JSON Schema 格式）
 
-        子类应重写此方法定义需要的凭据字段。
+        子类必须实现此方法定义需要的凭据字段。
         这个 schema 可用于：
         1. 前端表单生成（如果需要动态渲染）
         2. 凭据验证
@@ -280,37 +282,65 @@ class ProviderArchitecture(ABC):
                         "title": "API Key",
                         "description": "访问令牌",
                     },
-                    "user_id": {
-                        "type": "string",
-                        "title": "用户 ID",
-                        "description": "New API 用户 ID",
-                    },
                 },
-                "required": ["api_key", "user_id"],
+                "required": ["api_key"],
             }
         """
-        return {
-            "type": "object",
-            "properties": {
-                "api_key": {
-                    "type": "string",
-                    "title": "API Key",
-                    "description": "访问令牌",
-                },
-            },
-            "required": ["api_key"],
-        }
+        pass
 
+    @abstractmethod
     def get_verify_endpoint(self) -> str:
         """
         获取认证验证端点
 
-        子类可重写以自定义验证端点。
+        子类必须实现此方法返回验证端点。
 
         Returns:
-            验证端点路径（如 /api/user/self）
+            验证端点路径（如 /api/user/self, /api/v1/auth/profile）
         """
-        return "/api/user/self"
+        pass
+
+    @abstractmethod
+    def build_verify_headers(
+        self,
+        config: Dict[str, Any],
+        credentials: Dict[str, Any],
+    ) -> Dict[str, str]:
+        """
+        构建认证验证请求的 Headers
+
+        子类必须实现此方法构建认证 Headers。
+
+        Args:
+            config: 连接器配置（可能包含 prepare_verify_config 返回的额外配置）
+            credentials: 凭据信息
+
+        Returns:
+            Headers 字典
+        """
+        pass
+
+    @abstractmethod
+    def parse_verify_response(
+        self,
+        status_code: int,
+        data: Dict[str, Any],
+    ) -> VerifyResult:
+        """
+        解析认证验证响应
+
+        子类必须实现此方法解析响应。
+
+        Args:
+            status_code: HTTP 状态码
+            data: 响应 JSON 数据
+
+        Returns:
+            验证结果
+        """
+        pass
+
+    # ==================== 可选的钩子方法 ====================
 
     async def prepare_verify_config(
         self,
@@ -319,7 +349,7 @@ class ProviderArchitecture(ABC):
         credentials: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        验证前的异步预处理
+        验证前的异步预处理（可选）
 
         子类可重写以执行异步操作（如获取动态 Cookie）。
         返回的配置会传递给 build_verify_headers。
@@ -333,95 +363,6 @@ class ProviderArchitecture(ABC):
             处理后的配置（会与原 config 合并）
         """
         return {}
-
-    def build_verify_headers(
-        self,
-        config: Dict[str, Any],
-        credentials: Dict[str, Any],
-    ) -> Dict[str, str]:
-        """
-        构建认证验证请求的 Headers
-
-        子类可重写以添加特定的 Headers。
-
-        Args:
-            config: 连接器配置
-            credentials: 凭据信息
-
-        Returns:
-            Headers 字典
-        """
-        headers: Dict[str, str] = {}
-
-        # 处理 API Key 认证
-        api_key = credentials.get("api_key", "")
-        if api_key:
-            auth_method = config.get("auth_method", "bearer")
-            if auth_method == "bearer":
-                headers["Authorization"] = f"Bearer {api_key}"
-            elif auth_method == "header":
-                header_name = config.get("header_name", "X-API-Key")
-                headers[header_name] = api_key
-
-        return headers
-
-    def parse_verify_response(
-        self,
-        status_code: int,
-        data: Dict[str, Any],
-    ) -> VerifyResult:
-        """
-        解析认证验证响应
-
-        子类可重写以处理特定的响应格式。
-
-        Args:
-            status_code: HTTP 状态码
-            data: 响应 JSON 数据
-
-        Returns:
-            验证结果
-        """
-        if status_code == 401:
-            return VerifyResult(success=False, message="认证失败：无效的凭据")
-        if status_code == 403:
-            return VerifyResult(success=False, message="认证失败：权限不足")
-        if status_code != 200:
-            return VerifyResult(success=False, message=f"验证失败：HTTP {status_code}")
-
-        # 尝试解析通用响应格式
-        # 格式1: {"success": true, "data": {...}}
-        # 格式2: 直接返回用户数据 {...}
-        if data.get("success") is True and "data" in data:
-            user_data = data["data"]
-        elif data.get("success") is False:
-            message = data.get("message", "验证失败")
-            return VerifyResult(success=False, message=message)
-        else:
-            user_data = data
-
-        return VerifyResult(
-            success=True,
-            username=user_data.get("username"),
-            display_name=user_data.get("display_name") or user_data.get("username"),
-            email=user_data.get("email"),
-            quota=user_data.get("quota"),
-            used_quota=user_data.get("used_quota"),
-            request_count=user_data.get("request_count"),
-            extra={
-                k: v
-                for k, v in user_data.items()
-                if k
-                not in (
-                    "username",
-                    "display_name",
-                    "email",
-                    "quota",
-                    "used_quota",
-                    "request_count",
-                )
-            },
-        )
 
     # ==================== 连接器和操作相关方法 ====================
 

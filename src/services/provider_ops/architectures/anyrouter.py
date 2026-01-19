@@ -12,7 +12,10 @@ import httpx
 
 from src.core.logger import logger
 from src.utils.ssl_utils import get_ssl_context
-from src.services.provider_ops.actions import AnyrouterBalanceAction, ProviderAction
+from src.services.provider_ops.actions import (
+    AnyrouterBalanceAction,
+    ProviderAction,
+)
 from src.services.provider_ops.architectures.base import (
     ProviderArchitecture,
     ProviderConnector,
@@ -123,8 +126,8 @@ def _parse_session_user_id(cookie_input: str) -> Tuple[Optional[str], Optional[s
     base64(timestamp|gob_base64|signature)
 
     gob 数据中包含:
-    - id: 内部数字 ID
-    - username: 用户名 (如 linuxdo_129083)
+    - id: 内部数字 ID (gob 编码的整数)
+    - username: 用户名
     - role, status, group 等
 
     Args:
@@ -157,24 +160,53 @@ def _parse_session_user_id(cookie_input: str) -> Tuple[Optional[str], Optional[s
 
         gob_data = base64.urlsafe_b64decode(gob_b64)
 
-        # 4. 从 gob 数据中提取用户名
-        gob_text = gob_data.decode("utf-8", errors="ignore")
+        # 4. 从 gob 数据中解析 id 字段
+        # 查找 "\x02id\x03int" 模式，后面跟着 gob 编码的整数
+        id_pattern = b"\x02id\x03int"
+        id_idx = gob_data.find(id_pattern)
+        user_id = None
+        if id_idx != -1:
+            # 跳过 "\x02id\x03int" (7字节) 和类型标记 (2字节)
+            value_start = id_idx + 7 + 2
+            if value_start < len(gob_data):
+                # 读取第一个字节，检查是否是 00（正数标记）
+                first_byte = gob_data[value_start]
+                if first_byte == 0:
+                    # 下一个字节是长度标记
+                    marker = gob_data[value_start + 1]
+                    if marker >= 0x80:
+                        # 负的表示长度: 256 - marker = 字节数
+                        length = 256 - marker
+                        if value_start + 2 + length <= len(gob_data):
+                            # 读取 length 字节，大端序转整数
+                            val = int.from_bytes(
+                                gob_data[value_start + 2 : value_start + 2 + length],
+                                "big",
+                            )
+                            # gob zigzag 解码：正整数用 2*n 编码
+                            user_id = str(val >> 1)
 
-        # 查找 linuxdo_xxx 模式 (LinuxDo OAuth)
-        linuxdo_match = re.search(r"linuxdo_(\d+)", gob_text)
-        if linuxdo_match:
-            user_id = linuxdo_match.group(1)
-            username = linuxdo_match.group(0)
-            return user_id, username
+        # 5. 从 gob 数据中提取用户名
+        username = None
 
-        # 查找其他 OAuth 格式 (github_xxx, google_xxx 等)
-        oauth_match = re.search(r"(github|google|discord|twitter)_(\d+)", gob_text, re.IGNORECASE)
-        if oauth_match:
-            user_id = oauth_match.group(2)
-            username = oauth_match.group(0)
-            return user_id, username
+        # 查找 username 字段后的值
+        # 格式: \x08username\x06string\x0c\x10\x00\x0elinuxdo_129083
+        # 其中 \x0e (14) 是用户名的长度
+        username_pattern = b"\x08username\x06string"
+        username_idx = gob_data.find(username_pattern)
+        if username_idx != -1:
+            # 跳过模式本身 (17字节) 和 \x0c\x10\x00 (3字节)
+            # 第 4 个字节是长度
+            length_pos = username_idx + len(username_pattern) + 3
+            if length_pos < len(gob_data):
+                length_byte = gob_data[length_pos]
+                value_start = length_pos + 1
+                if length_byte < 128 and value_start + length_byte <= len(gob_data):
+                    username = gob_data[value_start : value_start + length_byte].decode(
+                        "utf-8", errors="ignore"
+                    )
 
-        return None, None
+        return user_id, username
     except Exception as e:
         logger.debug(f"解析 Anyrouter session cookie 失败: {e}")
         return None, None
@@ -340,9 +372,7 @@ class AnyrouterArchitecture(ProviderArchitecture):
         AnyrouterConnector,
     ]
 
-    supported_actions: List[Type[ProviderAction]] = [
-        AnyrouterBalanceAction,
-    ]
+    supported_actions: List[Type[ProviderAction]] = [AnyrouterBalanceAction]
 
     default_action_configs: Dict[ProviderActionType, Dict[str, Any]] = {
         ProviderActionType.QUERY_BALANCE: {
@@ -350,11 +380,6 @@ class AnyrouterArchitecture(ProviderArchitecture):
             "method": "GET",
             "quota_divisor": 500000,  # 与 New API 相同
             "checkin_endpoint": "/api/user/sign_in",  # 自动签到端点
-            "response_mapping": {
-                "total_granted": "data.quota",
-                "total_used": "data.used_quota",
-                "total_available": "data.quota",
-            },
         },
     }
 

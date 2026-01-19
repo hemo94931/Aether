@@ -132,6 +132,11 @@ class ProviderAction(ABC):
             return self._make_error_result(
                 ActionStatus.AUTH_FAILED, "无权限访问", raw_response=raw_data
             )
+        elif status_code == 404:
+            # 404 表示接口不存在，通常意味着该功能未开放
+            return self._make_error_result(
+                ActionStatus.NOT_SUPPORTED, "功能未开放", raw_response=raw_data
+            )
         elif status_code == 429:
             retry_after = response.headers.get("Retry-After")
             return self._make_error_result(

@@ -36,6 +36,8 @@ export interface AuthTemplateField {
   options?: Array<{ value: string; label: string }>
   /** 默认值 */
   defaultValue?: string
+  /** inline 布局时的 flex 比例（默认 1） */
+  flex?: number
 }
 
 /**
@@ -54,6 +56,8 @@ export interface AuthTemplateFieldGroup {
   hasToggle?: boolean
   /** 启用开关对应的表单字段 key */
   toggleKey?: string
+  /** 布局方式：'vertical'(默认) 或 'inline'(同行显示) */
+  layout?: 'vertical' | 'inline'
 }
 
 /**
@@ -118,6 +122,14 @@ export interface AuthTemplate {
    * @param extra 余额 extra 字段
    */
   formatBalanceExtra?(extra: Record<string, any>): BalanceExtraItem[]
+
+  /**
+   * 字段值变化时的回调，可用于联动填充其他字段
+   * @param fieldKey 变化的字段 key
+   * @param value 新值
+   * @param formData 当前表单数据（可修改）
+   */
+  onFieldChange?(fieldKey: string, value: any, formData: Record<string, any>): void
 }
 
 /**

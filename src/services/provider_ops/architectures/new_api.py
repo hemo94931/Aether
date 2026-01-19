@@ -8,8 +8,15 @@ from typing import Any, Dict, List, Optional, Type
 
 import httpx
 
-from src.services.provider_ops.actions import BalanceAction, CheckinAction, ProviderAction
-from src.services.provider_ops.architectures.base import ProviderArchitecture, ProviderConnector
+from src.services.provider_ops.actions import (
+    NewApiBalanceAction,
+    ProviderAction,
+)
+from src.services.provider_ops.architectures.base import (
+    ProviderArchitecture,
+    ProviderConnector,
+    VerifyResult,
+)
 from src.services.provider_ops.types import ConnectorAuthType, ProviderActionType
 
 
@@ -29,21 +36,27 @@ class NewApiConnector(ProviderConnector):
         super().__init__(base_url, config)
         self._api_key: Optional[str] = None
         self._user_id: Optional[str] = None
+        self._cookie: Optional[str] = None
 
     async def connect(self, credentials: Dict[str, Any]) -> bool:
         """建立连接"""
         api_key = credentials.get("api_key")
-        if not api_key:
-            self._set_error("API Key 不能为空")
+        cookie = credentials.get("cookie")
+        user_id = credentials.get("user_id")
+
+        # api_key 和 cookie 至少需要一个
+        if not api_key and not cookie:
+            self._set_error("访问令牌和 Cookie 至少需要填写一个")
             return False
 
-        user_id = credentials.get("user_id")
-        if not user_id:
-            self._set_error("用户 ID 不能为空")
+        # 使用 api_key 时必须提供 user_id，使用 cookie 时 user_id 可选
+        if api_key and not cookie and not user_id:
+            self._set_error("使用访问令牌时，用户 ID 不能为空")
             return False
 
         self._api_key = api_key
-        self._user_id = str(user_id)
+        self._user_id = str(user_id) if user_id else None
+        self._cookie = cookie
         self._set_connected()
         return True
 
@@ -51,10 +64,14 @@ class NewApiConnector(ProviderConnector):
         """断开连接"""
         self._api_key = None
         self._user_id = None
+        self._cookie = None
         self._set_disconnected()
 
     async def is_authenticated(self) -> bool:
         """检查是否已认证"""
+        # 有 cookie 就行，或者有 api_key + user_id
+        if self._cookie:
+            return True
         return self._api_key is not None and self._user_id is not None
 
     def _apply_auth(self, request: httpx.Request) -> httpx.Request:
@@ -63,6 +80,8 @@ class NewApiConnector(ProviderConnector):
             request.headers["Authorization"] = f"Bearer {self._api_key}"
         if self._user_id:
             request.headers["New-Api-User"] = self._user_id
+        if self._cookie:
+            request.headers["Cookie"] = self._cookie
         return request
 
     @classmethod
@@ -74,15 +93,20 @@ class NewApiConnector(ProviderConnector):
                 "api_key": {
                     "type": "string",
                     "title": "访问令牌 (API Key)",
-                    "description": "New API 的访问令牌",
+                    "description": "New API 的访问令牌，与 Cookie 二选一",
                 },
                 "user_id": {
                     "type": "string",
                     "title": "用户 ID",
-                    "description": "New API 用户 ID，用于 New-Api-User Header",
+                    "description": "使用访问令牌时必填，使用 Cookie 时可选",
+                },
+                "cookie": {
+                    "type": "string",
+                    "title": "Cookie",
+                    "description": "用于 Cookie 认证，与访问令牌二选一",
                 },
             },
-            "required": ["api_key", "user_id"],
+            "required": [],
         }
 
 
@@ -108,8 +132,7 @@ class NewApiArchitecture(ProviderArchitecture):
     ]
 
     supported_actions: List[Type[ProviderAction]] = [
-        BalanceAction,
-        CheckinAction,
+        NewApiBalanceAction,
     ]
 
     default_action_configs: Dict[ProviderActionType, Dict[str, Any]] = {
@@ -117,23 +140,17 @@ class NewApiArchitecture(ProviderArchitecture):
             "endpoint": "/api/user/self",
             "method": "GET",
             "quota_divisor": 500000,  # New API 的 quota 单位是 1/500000 美元
-            "response_mapping": {
-                "total_granted": "data.quota",
-                "total_used": "data.used_quota",
-                "total_available": "data.quota",  # New API 通常只返回剩余额度
-            },
-        },
-        ProviderActionType.CHECKIN: {
-            "endpoint": "/api/user/checkin",
-            "method": "POST",
-            "success_field": "success",
-            "message_field": "message",
+            "checkin_endpoint": "/api/user/checkin",  # 签到端点
         },
     }
 
     def get_credentials_schema(self) -> Dict[str, Any]:
         """New API 需要 api_key 和 user_id"""
         return NewApiConnector.get_credentials_schema()
+
+    def get_verify_endpoint(self) -> str:
+        """New API 验证端点"""
+        return "/api/user/self"
 
     def build_verify_headers(
         self,
@@ -145,11 +162,66 @@ class NewApiArchitecture(ProviderArchitecture):
 
         New API 特有：需要 New-Api-User Header 传递用户 ID
         """
-        headers = super().build_verify_headers(config, credentials)
+        headers: Dict[str, str] = {}
+
+        # Bearer Token 认证
+        api_key = credentials.get("api_key", "")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         # New API 特有的 header
         user_id = credentials.get("user_id", "")
         if user_id:
             headers["New-Api-User"] = str(user_id)
 
+        # 可选的 Cookie
+        cookie = credentials.get("cookie", "")
+        if cookie:
+            headers["Cookie"] = cookie
+
         return headers
+
+    def parse_verify_response(
+        self,
+        status_code: int,
+        data: Dict[str, Any],
+    ) -> VerifyResult:
+        """解析 New API 验证响应"""
+        if status_code == 401:
+            return VerifyResult(success=False, message="认证失败：无效的凭据")
+        if status_code == 403:
+            return VerifyResult(success=False, message="认证失败：权限不足")
+        if status_code != 200:
+            return VerifyResult(success=False, message=f"验证失败：HTTP {status_code}")
+
+        # New API 响应格式: {"success": true, "data": {...}}
+        if data.get("success") is True and "data" in data:
+            user_data = data["data"]
+        elif data.get("success") is False:
+            message = data.get("message", "验证失败")
+            return VerifyResult(success=False, message=message)
+        else:
+            user_data = data
+
+        return VerifyResult(
+            success=True,
+            username=user_data.get("username"),
+            display_name=user_data.get("display_name") or user_data.get("username"),
+            email=user_data.get("email"),
+            quota=user_data.get("quota"),
+            used_quota=user_data.get("used_quota"),
+            request_count=user_data.get("request_count"),
+            extra={
+                k: v
+                for k, v in user_data.items()
+                if k
+                not in (
+                    "username",
+                    "display_name",
+                    "email",
+                    "quota",
+                    "used_quota",
+                    "request_count",
+                )
+            },
+        )

@@ -168,8 +168,8 @@ class YesCodeBalanceAction(BalanceAction):
     display_name = "查询余额（含每周限额）"
     description = "查询账户余额和每周限额信息"
 
-    async def execute(self, client: httpx.AsyncClient) -> ActionResult:
-        """执行余额查询（复用 client 调用两个接口获取完整数据）"""
+    async def _do_query_balance(self, client: httpx.AsyncClient) -> ActionResult:
+        """执行余额查询（实现抽象方法，复用 client 调用两个接口获取完整数据）"""
         import time
 
         start_time = time.time()
@@ -198,7 +198,7 @@ class YesCodeBalanceAction(BalanceAction):
                 total_used=None,
                 total_available=total_available,
                 currency=self.config.get("currency", "USD"),
-                extra=extra if extra else None,
+                extra=extra if extra else {},
             )
 
             return self._make_success_result(

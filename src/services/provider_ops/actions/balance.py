@@ -1,8 +1,8 @@
 """
-余额查询操作
+余额查询操作抽象基类
 """
 
-import time
+from abc import abstractmethod
 from typing import Any, Dict, Optional
 
 import httpx
@@ -10,7 +10,6 @@ import httpx
 from src.services.provider_ops.actions.base import ProviderAction
 from src.services.provider_ops.types import (
     ActionResult,
-    ActionStatus,
     BalanceInfo,
     ProviderActionType,
 )
@@ -18,9 +17,10 @@ from src.services.provider_ops.types import (
 
 class BalanceAction(ProviderAction):
     """
-    余额查询操作
+    余额查询操作抽象基类
 
-    支持可配置的 endpoint 和响应字段映射。
+    子类必须实现 _do_query_balance() 方法来处理特定平台的余额查询逻辑。
+    子类可选实现 _do_checkin() 方法来在查询余额前执行签到。
     """
 
     action_type = ProviderActionType.QUERY_BALANCE
@@ -29,108 +29,88 @@ class BalanceAction(ProviderAction):
     default_cache_ttl = 86400  # 24 小时
 
     async def execute(self, client: httpx.AsyncClient) -> ActionResult:
-        """执行余额查询"""
-        endpoint = self.config.get("endpoint", "/api/user/balance")
-        method = self.config.get("method", "GET")
-        mapping = self.config.get("response_mapping", {})
+        """
+        执行余额查询（模板方法）
 
-        start_time = time.time()
+        1. 先尝试签到（如果子类实现了 _do_checkin）
+        2. 执行余额查询
 
-        try:
-            response = await client.request(method, endpoint)
-            response_time_ms = int((time.time() - start_time) * 1000)
+        Args:
+            client: 已认证的 HTTP 客户端
 
-            # 尝试解析 JSON
-            try:
-                data = response.json()
-            except Exception:
-                return self._make_error_result(
-                    ActionStatus.PARSE_ERROR,
-                    "响应不是有效的 JSON",
-                )
+        Returns:
+            ActionResult，其中 data 字段为 BalanceInfo
+        """
+        from src.core.logger import logger
 
-            # 检查 HTTP 状态
-            if response.status_code != 200:
-                return self._handle_http_error(response, data)
+        # 先尝试签到
+        checkin_result = await self._do_checkin(client)
 
-            # 检查业务状态码（如果配置了）
-            success_field = self.config.get("success_field")
-            if success_field:
-                is_success = self._extract_field(data, success_field)
-                if is_success is False or is_success == 0:
-                    message = self._extract_field(data, self.config.get("message_field", "message"))
-                    return self._make_error_result(
-                        ActionStatus.UNKNOWN_ERROR,
-                        message or "业务状态码表示失败",
-                        raw_response=data,
-                    )
+        # 执行余额查询
+        result = await self._do_query_balance(client)
 
-            # 解析余额信息
-            balance = self._parse_balance(data, mapping)
+        # 将签到结果附加到 extra 字段
+        if checkin_result and result.data and hasattr(result.data, "extra"):
+            if result.data.extra is None:
+                result.data.extra = {}
+            result.data.extra["checkin_success"] = checkin_result.get("success")
+            result.data.extra["checkin_message"] = checkin_result.get("message", "")
+            logger.debug(f"签到结果已附加到 extra: {checkin_result}")
 
-            return self._make_success_result(
-                data=balance,
-                response_time_ms=response_time_ms,
-                raw_response=data,
-            )
+        return result
 
-        except httpx.TimeoutException:
-            return self._make_error_result(
-                ActionStatus.NETWORK_ERROR,
-                "请求超时",
-                retry_after_seconds=30,
-            )
-        except httpx.RequestError as e:
-            return self._make_error_result(
-                ActionStatus.NETWORK_ERROR,
-                f"网络错误: {str(e)}",
-                retry_after_seconds=30,
-            )
-        except Exception as e:
-            return self._make_error_result(
-                ActionStatus.UNKNOWN_ERROR,
-                f"未知错误: {str(e)}",
-            )
+    @abstractmethod
+    async def _do_query_balance(self, client: httpx.AsyncClient) -> ActionResult:
+        """
+        执行余额查询（子类必须实现）
 
-    def _parse_balance(self, data: Any, mapping: Dict[str, str]) -> BalanceInfo:
-        """解析余额信息"""
-        # 默认映射（常见字段名）
-        default_mappings = {
-            "total_granted": ["data.total_quota", "data.quota", "total_quota", "quota"],
-            "total_used": ["data.used_quota", "data.used", "used_quota", "used"],
-            "total_available": [
-                "data.balance",
-                "data.remaining",
-                "data.available",
-                "balance",
-                "remaining",
-            ],
-        }
+        Args:
+            client: 已认证的 HTTP 客户端
 
-        # 获取 quota 除数（用于将原始值转换为美元，如 New API 的 1/500000）
-        quota_divisor = self.config.get("quota_divisor", 1)
+        Returns:
+            ActionResult，其中 data 字段为 BalanceInfo
+        """
+        pass
 
-        def get_value(field: str, default_paths: list) -> Optional[float]:
-            # 优先使用用户配置的映射
-            if field in mapping:
-                value = self._extract_field(data, mapping[field])
-                if value is not None:
-                    raw = self._to_float(value)
-                    return raw / quota_divisor if raw is not None else None
+    async def _do_checkin(self, client: httpx.AsyncClient) -> Optional[Dict[str, Any]]:
+        """
+        执行签到（子类可选实现）
 
-            # 尝试默认映射
-            for path in default_paths:
-                value = self._extract_field(data, path)
-                if value is not None:
-                    raw = self._to_float(value)
-                    return raw / quota_divisor if raw is not None else None
+        默认实现返回 None（不签到）。
+        子类可重写此方法实现平台特定的签到逻辑。
 
-            return None
+        Args:
+            client: 已认证的 HTTP 客户端
 
-        total_granted = get_value("total_granted", default_mappings["total_granted"])
-        total_used = get_value("total_used", default_mappings["total_used"])
-        total_available = get_value("total_available", default_mappings["total_available"])
+        Returns:
+            签到结果字典 {"success": bool, "message": str}，或 None 表示不签到
+        """
+        return None
 
+    def _create_balance_info(
+        self,
+        total_granted: Optional[float] = None,
+        total_used: Optional[float] = None,
+        total_available: Optional[float] = None,
+        currency: str = "USD",
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> BalanceInfo:
+        """
+        创建余额信息对象
+
+        辅助方法，用于创建统一格式的 BalanceInfo。
+        如果只有部分数据，会尝试计算缺失的值。
+
+        Args:
+            total_granted: 总额度
+            total_used: 已用额度
+            total_available: 可用余额
+            currency: 货币单位
+            extra: 额外信息
+
+        Returns:
+            BalanceInfo 对象
+        """
         # 如果只有部分数据，尝试计算
         if total_available is None and total_granted is not None and total_used is not None:
             total_available = total_granted - total_used
@@ -139,20 +119,12 @@ class BalanceAction(ProviderAction):
         if total_granted is None and total_used is not None and total_available is not None:
             total_granted = total_used + total_available
 
-        # 提取额外字段
-        extra = {}
-        for key, path in mapping.items():
-            if key not in ["total_granted", "total_used", "total_available", "expires_at"]:
-                value = self._extract_field(data, path)
-                if value is not None:
-                    extra[key] = value
-
         return BalanceInfo(
             total_granted=total_granted,
             total_used=total_used,
             total_available=total_available,
-            currency=self.config.get("currency", "USD"),
-            extra=extra,
+            currency=currency,
+            extra=extra if extra is not None else {},
         )
 
     def _to_float(self, value: Any) -> Optional[float]:
@@ -166,66 +138,15 @@ class BalanceAction(ProviderAction):
 
     @classmethod
     def get_config_schema(cls) -> Dict[str, Any]:
-        """获取操作配置 schema"""
+        """获取操作配置 schema（子类可重写）"""
         return {
             "type": "object",
             "properties": {
-                "endpoint": {
-                    "type": "string",
-                    "title": "API 路径",
-                    "description": "余额查询 API 路径",
-                    "default": "/api/user/balance",
-                },
-                "method": {
-                    "type": "string",
-                    "title": "请求方法",
-                    "enum": ["GET", "POST"],
-                    "default": "GET",
-                },
-                "quota_divisor": {
-                    "type": "number",
-                    "title": "额度除数",
-                    "description": "将原始额度值转换为美元的除数（如 New API 为 500000）",
-                    "default": 1,
-                },
-                "success_field": {
-                    "type": "string",
-                    "title": "成功状态字段",
-                    "description": "响应中表示成功的字段路径（如 success, code）",
-                },
-                "message_field": {
-                    "type": "string",
-                    "title": "消息字段",
-                    "description": "响应中的消息字段路径",
-                    "default": "message",
-                },
-                "response_mapping": {
-                    "type": "object",
-                    "title": "响应字段映射",
-                    "description": "响应字段到余额字段的映射",
-                    "properties": {
-                        "total_granted": {
-                            "type": "string",
-                            "title": "总额度字段",
-                            "description": "响应中总额度的字段路径",
-                        },
-                        "total_used": {
-                            "type": "string",
-                            "title": "已用额度字段",
-                            "description": "响应中已用额度的字段路径",
-                        },
-                        "total_available": {
-                            "type": "string",
-                            "title": "可用余额字段",
-                            "description": "响应中可用余额的字段路径",
-                        },
-                    },
-                },
                 "currency": {
                     "type": "string",
                     "title": "货币单位",
                     "default": "USD",
                 },
             },
-            "required": ["endpoint"],
+            "required": [],
         }

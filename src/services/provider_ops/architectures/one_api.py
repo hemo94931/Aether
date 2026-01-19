@@ -8,8 +8,12 @@ from typing import Any, Dict, List, Optional, Type
 
 import httpx
 
-from src.services.provider_ops.actions import BalanceAction, ProviderAction
-from src.services.provider_ops.architectures.base import ProviderArchitecture, ProviderConnector
+from src.services.provider_ops.actions import NewApiBalanceAction, ProviderAction
+from src.services.provider_ops.architectures.base import (
+    ProviderArchitecture,
+    ProviderConnector,
+    VerifyResult,
+)
 from src.services.provider_ops.types import ConnectorAuthType, ProviderActionType
 
 
@@ -92,7 +96,7 @@ class OneApiArchitecture(ProviderArchitecture):
     ]
 
     supported_actions: List[Type[ProviderAction]] = [
-        BalanceAction,
+        NewApiBalanceAction,
     ]
 
     default_action_configs: Dict[ProviderActionType, Dict[str, Any]] = {
@@ -109,3 +113,66 @@ class OneApiArchitecture(ProviderArchitecture):
     def get_credentials_schema(self) -> Dict[str, Any]:
         """One API 只需要 api_key"""
         return OneApiConnector.get_credentials_schema()
+
+    def get_verify_endpoint(self) -> str:
+        """One API 验证端点"""
+        return "/api/user/self"
+
+    def build_verify_headers(
+        self,
+        config: Dict[str, Any],
+        credentials: Dict[str, Any],
+    ) -> Dict[str, str]:
+        """构建 One API 的验证请求 Headers"""
+        headers: Dict[str, str] = {}
+
+        api_key = credentials.get("api_key", "")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        return headers
+
+    def parse_verify_response(
+        self,
+        status_code: int,
+        data: Dict[str, Any],
+    ) -> VerifyResult:
+        """解析 One API 验证响应"""
+        if status_code == 401:
+            return VerifyResult(success=False, message="认证失败：无效的凭据")
+        if status_code == 403:
+            return VerifyResult(success=False, message="认证失败：权限不足")
+        if status_code != 200:
+            return VerifyResult(success=False, message=f"验证失败：HTTP {status_code}")
+
+        # One API 响应格式: {"success": true, "data": {...}}
+        if data.get("success") is True and "data" in data:
+            user_data = data["data"]
+        elif data.get("success") is False:
+            message = data.get("message", "验证失败")
+            return VerifyResult(success=False, message=message)
+        else:
+            user_data = data
+
+        return VerifyResult(
+            success=True,
+            username=user_data.get("username"),
+            display_name=user_data.get("display_name") or user_data.get("username"),
+            email=user_data.get("email"),
+            quota=user_data.get("quota"),
+            used_quota=user_data.get("used_quota"),
+            request_count=user_data.get("request_count"),
+            extra={
+                k: v
+                for k, v in user_data.items()
+                if k
+                not in (
+                    "username",
+                    "display_name",
+                    "email",
+                    "quota",
+                    "used_quota",
+                    "request_count",
+                )
+            },
+        )

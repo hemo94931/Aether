@@ -5,7 +5,6 @@ Provider 操作服务
 """
 
 import asyncio
-import json
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -45,7 +44,7 @@ class ProviderOpsService:
     """
 
     # 凭据中需要加密的字段
-    SENSITIVE_FIELDS = {"api_key", "password", "session_token", "session_cookie", "token_cookie", "auth_cookie", "cookie_string", "cookies"}
+    SENSITIVE_FIELDS = {"api_key", "password", "session_token", "session_cookie", "token_cookie", "auth_cookie", "cookie_string", "cookie"}
 
     def __init__(self, db: Session):
         self.db = db
@@ -411,6 +410,7 @@ class ProviderOpsService:
         }
 
         await CacheService.set(cache_key, cache_data, BALANCE_CACHE_TTL)
+        logger.debug(f"余额缓存已写入: provider_id={provider_id}, extra={data.get('extra') if data else None}")
 
     async def _cache_balance_from_verify(
         self,
@@ -539,9 +539,6 @@ class ProviderOpsService:
                 else:
                     logger.warning(f"跳过空值字段 {key}")
                     encrypted[key] = value
-            elif key == "cookies" and isinstance(value, dict):
-                # cookies 整体加密
-                encrypted[key] = self.crypto.encrypt(json.dumps(value))
             else:
                 encrypted[key] = value
         return encrypted
@@ -556,12 +553,6 @@ class ProviderOpsService:
                 except Exception as e:
                     logger.warning(f"解密字段 {key} 失败: {e}")
                     decrypted[key] = value  # 解密失败则保持原值
-            elif key == "cookies" and isinstance(value, str):
-                try:
-                    decrypted[key] = json.loads(self.crypto.decrypt(value))
-                except Exception as e:
-                    logger.warning(f"解密 cookies 失败: {e}")
-                    decrypted[key] = value
             else:
                 decrypted[key] = value
         return decrypted
@@ -616,7 +607,7 @@ class ProviderOpsService:
         if saved_config:
             saved_credentials = self._decrypt_credentials(saved_config.connector_credentials)
             sensitive_fields = [
-                "api_key", "password", "session_token", "cookie_string", "cookies",
+                "api_key", "password", "session_token", "cookie_string", "cookie",
                 "token_cookie", "auth_cookie", "session_cookie",  # Cookie 认证字段
             ]
 

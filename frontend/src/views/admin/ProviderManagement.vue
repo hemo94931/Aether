@@ -190,12 +190,12 @@
                       class="flex items-center gap-1.5"
                     >
                       <span
-                        v-if="getProviderCheckin(provider.id)?.success === true"
+                        v-if="getProviderCheckin(provider.id)?.success !== false"
                         class="text-[10px] text-muted-foreground/60"
                         :title="getProviderCheckin(provider.id)?.message"
                       >已签到</span>
                       <span
-                        v-else-if="getProviderCheckin(provider.id)?.success === false"
+                        v-else
                         class="text-[10px] text-destructive/70"
                         :title="getProviderCheckin(provider.id)?.message"
                       >签到失败</span>
@@ -431,7 +431,7 @@
               余额 <span class="font-semibold text-foreground/90">{{ formatBalanceDisplay(getProviderBalance(provider.id)) }}</span>
               <!-- 签到状态显示 -->
               <span
-                v-if="getProviderCheckin(provider.id)?.success === true"
+                v-if="getProviderCheckin(provider.id) && getProviderCheckin(provider.id)?.success !== false"
                 class="ml-1 text-muted-foreground"
                 :title="getProviderCheckin(provider.id)?.message"
               >已签到</span>

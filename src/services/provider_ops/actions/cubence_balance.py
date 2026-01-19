@@ -2,6 +2,7 @@
 Cubence 余额查询操作
 """
 
+import time
 from typing import Any, Dict, Optional
 
 import httpx
@@ -23,6 +24,66 @@ class CubenceBalanceAction(BalanceAction):
     display_name = "查询余额（含窗口限额）"
     description = "查询账户余额和窗口限额信息"
 
+    async def _do_query_balance(self, client: httpx.AsyncClient) -> ActionResult:
+        """执行 Cubence 余额查询（实现抽象方法）"""
+        endpoint = self.config.get("endpoint", "/api/v1/dashboard/overview")
+        method = self.config.get("method", "GET")
+
+        start_time = time.time()
+
+        try:
+            response = await client.request(method, endpoint)
+            response_time_ms = int((time.time() - start_time) * 1000)
+
+            # 尝试解析 JSON
+            try:
+                data = response.json()
+            except Exception:
+                return self._make_error_result(
+                    ActionStatus.PARSE_ERROR,
+                    "响应不是有效的 JSON",
+                )
+
+            # 检查 HTTP 状态
+            if response.status_code != 200:
+                return self._handle_http_error(response, data)
+
+            # 检查业务状态码
+            if data.get("success") is False:
+                message = data.get("message", "业务状态码表示失败")
+                return self._make_error_result(
+                    ActionStatus.UNKNOWN_ERROR,
+                    message,
+                    raw_response=data,
+                )
+
+            # 解析余额信息
+            balance = self._parse_balance(data)
+
+            return self._make_success_result(
+                data=balance,
+                response_time_ms=response_time_ms,
+                raw_response=data,
+            )
+
+        except httpx.TimeoutException:
+            return self._make_error_result(
+                ActionStatus.NETWORK_ERROR,
+                "请求超时",
+                retry_after_seconds=30,
+            )
+        except httpx.RequestError as e:
+            return self._make_error_result(
+                ActionStatus.NETWORK_ERROR,
+                f"网络错误: {str(e)}",
+                retry_after_seconds=30,
+            )
+        except Exception as e:
+            return self._make_error_result(
+                ActionStatus.UNKNOWN_ERROR,
+                f"未知错误: {str(e)}",
+            )
+
     def _handle_http_error(
         self, response: httpx.Response, raw_data: Optional[Dict[str, Any]] = None
     ) -> ActionResult:
@@ -42,8 +103,8 @@ class CubenceBalanceAction(BalanceAction):
         # 其他错误使用基类处理
         return super()._handle_http_error(response, raw_data)
 
-    def _parse_balance(self, data: Any, mapping: Dict[str, str]) -> BalanceInfo:
-        """解析 Cubence 余额信息（覆盖基类方法）"""
+    def _parse_balance(self, data: Any) -> BalanceInfo:
+        """解析 Cubence 余额信息"""
         # Cubence 响应格式：data.balance 和 data.subscription_limits
         response_data = data.get("data", {}) if isinstance(data, dict) else {}
         balance_data = response_data.get("balance", {})
@@ -86,9 +147,7 @@ class CubenceBalanceAction(BalanceAction):
         if charity_balance is not None:
             extra["charity_balance"] = charity_balance
 
-        return BalanceInfo(
-            total_granted=None,  # Cubence 不提供总额度
-            total_used=None,
+        return self._create_balance_info(
             total_available=total_available,
             currency=self.config.get("currency", "USD"),
             extra=extra if extra else None,

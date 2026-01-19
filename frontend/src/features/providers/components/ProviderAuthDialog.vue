@@ -86,9 +86,11 @@
                     <Input
                       v-if="field.type === 'text'"
                       v-model="formData[field.key]"
-                      :placeholder="field.placeholder"
+                      :placeholder="field.sensitive ? (sensitivePlaceholders[field.key] || field.placeholder) : field.placeholder"
+                      :masked="field.sensitive"
                       disable-autofill
                       class="h-8 text-sm"
+                      @update:model-value="handleFieldChange(field.key, $event)"
                     />
 
                     <!-- 密码/敏感输入 -->
@@ -98,6 +100,7 @@
                       :placeholder="sensitivePlaceholders[field.key] || field.placeholder"
                       masked
                       class="h-8 text-sm"
+                      @update:model-value="handleFieldChange(field.key, $event)"
                     />
                   </div>
                 </div>
@@ -114,72 +117,118 @@
                 {{ group.title }}
               </div>
 
-              <!-- 字段列表 -->
+              <!-- inline 布局：字段横向排列 -->
               <div
-                v-for="field in group.fields"
-                :key="field.key"
-                class="space-y-2"
+                v-if="group.layout === 'inline'"
+                class="flex gap-3"
               >
-                <Label>
-                  {{ field.label }}
-                  <span
-                    v-if="field.required"
-                    class="text-muted-foreground/70"
-                  >*</span>
-                </Label>
-
-                <!-- 文本输入 -->
-                <Input
-                  v-if="field.type === 'text'"
-                  v-model="formData[field.key]"
-                  :placeholder="field.placeholder"
-                  disable-autofill
-                />
-
-                <!-- 密码/敏感输入 -->
-                <Input
-                  v-else-if="field.type === 'password'"
-                  v-model="formData[field.key]"
-                  :placeholder="sensitivePlaceholders[field.key] || field.placeholder"
-                  masked
-                />
-
-                <!-- 下拉选择 -->
-                <Select
-                  v-else-if="field.type === 'select'"
-                  v-model="formData[field.key]"
-                  @update:model-value="handleFieldChange(field.key, $event)"
+                <div
+                  v-for="field in group.fields"
+                  :key="field.key"
+                  class="space-y-2"
+                  :style="{ flex: field.flex || 1 }"
                 >
-                  <SelectTrigger>
-                    <SelectValue :placeholder="field.placeholder || '请选择'" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem
-                      v-for="option in field.options"
-                      :key="option.value"
-                      :value="option.value"
-                    >
-                      {{ option.label }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                  <Label>
+                    {{ field.label }}
+                    <span
+                      v-if="field.required"
+                      class="text-muted-foreground/70"
+                    >*</span>
+                  </Label>
 
-                <!-- 多行文本 -->
-                <Textarea
-                  v-else-if="field.type === 'textarea'"
-                  v-model="formData[field.key]"
-                  :placeholder="field.placeholder"
-                  rows="3"
-                />
+                  <!-- 文本输入 -->
+                  <Input
+                    v-if="field.type === 'text'"
+                    v-model="formData[field.key]"
+                    :placeholder="field.sensitive ? (sensitivePlaceholders[field.key] || field.placeholder) : field.placeholder"
+                    :masked="field.sensitive"
+                    disable-autofill
+                    @update:model-value="handleFieldChange(field.key, $event)"
+                  />
 
-                <!-- 帮助文本 -->
-                <p
-                  v-if="field.helpText"
-                  class="text-xs text-muted-foreground"
-                >
-                  {{ field.helpText }}
-                </p>
+                  <!-- 密码/敏感输入 -->
+                  <Input
+                    v-else-if="field.type === 'password'"
+                    v-model="formData[field.key]"
+                    :placeholder="sensitivePlaceholders[field.key] || field.placeholder"
+                    masked
+                    @update:model-value="handleFieldChange(field.key, $event)"
+                  />
+                </div>
               </div>
+
+              <!-- vertical 布局（默认）：字段垂直排列 -->
+              <template v-else>
+                <div
+                  v-for="field in group.fields"
+                  :key="field.key"
+                  class="space-y-2"
+                >
+                  <Label>
+                    {{ field.label }}
+                    <span
+                      v-if="field.required"
+                      class="text-muted-foreground/70"
+                    >*</span>
+                  </Label>
+
+                  <!-- 文本输入 -->
+                  <Input
+                    v-if="field.type === 'text'"
+                    v-model="formData[field.key]"
+                    :placeholder="field.sensitive ? (sensitivePlaceholders[field.key] || field.placeholder) : field.placeholder"
+                    :masked="field.sensitive"
+                    disable-autofill
+                    @update:model-value="handleFieldChange(field.key, $event)"
+                  />
+
+                  <!-- 密码/敏感输入 -->
+                  <Input
+                    v-else-if="field.type === 'password'"
+                    v-model="formData[field.key]"
+                    :placeholder="sensitivePlaceholders[field.key] || field.placeholder"
+                    masked
+                    @update:model-value="handleFieldChange(field.key, $event)"
+                  />
+
+                  <!-- 下拉选择 -->
+                  <Select
+                    v-else-if="field.type === 'select'"
+                    v-model="formData[field.key]"
+                    @update:model-value="handleFieldChange(field.key, $event)"
+                  >
+                    <SelectTrigger>
+                      <SelectValue :placeholder="field.placeholder || '请选择'" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="option in field.options"
+                        :key="option.value"
+                        :value="option.value"
+                      >
+                        {{ option.label }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  <!-- 多行文本 -->
+                  <Textarea
+                    v-else-if="field.type === 'textarea'"
+                    v-model="formData[field.key]"
+                    :placeholder="field.placeholder"
+                    rows="3"
+                    @update:model-value="handleFieldChange(field.key, $event)"
+                  />
+
+                  <!-- 帮助文本 -->
+                  <p
+                    v-if="field.helpText"
+                    class="text-xs text-muted-foreground"
+                  >
+                    {{ field.helpText }}
+                  </p>
+                </div>
+              </template>
             </template>
           </template>
         </template>
@@ -235,7 +284,7 @@ import {
 } from '../auth-templates'
 
 // 敏感字段列表（用于验证和加载配置时的特殊处理）
-const SENSITIVE_FIELDS = ['api_key', 'password', 'session_token', 'session_cookie', 'token_cookie', 'auth_cookie', 'cookie_string', 'cookies', 'proxy_password'] as const
+const SENSITIVE_FIELDS = ['api_key', 'password', 'session_token', 'session_cookie', 'token_cookie', 'auth_cookie', 'cookie_string', 'cookie', 'proxy_password'] as const
 
 const props = defineProps<{
   open: boolean
@@ -321,9 +370,15 @@ function handleTemplateChange() {
   formChanged.value = true
 }
 
-function handleFieldChange(_fieldKey: string, _value: any) {
+function handleFieldChange(fieldKey: string, value: any) {
   // 标记表单已变动
   formChanged.value = true
+
+  // 调用模板的 onFieldChange 回调
+  const template = selectedTemplate.value
+  if (template?.onFieldChange) {
+    template.onFieldChange(fieldKey, value, formData.value)
+  }
 }
 
 // 监听 formData 变化，验证成功后的修改需要重新验证
