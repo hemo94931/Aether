@@ -21,7 +21,6 @@ RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.li
     supervisor \
     libpq5 \
     curl \
-    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # 从 base 镜像复制 Python 包

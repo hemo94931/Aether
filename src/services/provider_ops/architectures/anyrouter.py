@@ -180,7 +180,9 @@ def _parse_session_user_id(cookie_input: str) -> Tuple[Optional[str], Optional[s
         return None, None
 
 
-async def _get_acw_cookie(base_url: str, timeout: float = 10) -> Optional[str]:
+async def _get_acw_cookie(
+    base_url: str, timeout: float = 10, proxy: Optional[str] = None
+) -> Optional[str]:
     """
     获取 acw_sc__v2 Cookie
 
@@ -189,12 +191,22 @@ async def _get_acw_cookie(base_url: str, timeout: float = 10) -> Optional[str]:
     Args:
         base_url: 目标站点 URL
         timeout: 请求超时时间
+        proxy: 代理地址
 
     Returns:
         Cookie 字符串 (acw_sc__v2=xxx)，如果不需要或获取失败则返回 None
     """
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=get_ssl_context()) as client:
+        # 构建 client 参数
+        client_kwargs: Dict[str, Any] = {
+            "timeout": timeout,
+            "verify": get_ssl_context(),
+        }
+        if proxy:
+            client_kwargs["proxy"] = proxy
+            logger.debug(f"获取 acw_sc__v2 Cookie 使用代理: {proxy}")
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
             resp = await client.get(
                 base_url,
                 headers={
@@ -253,8 +265,8 @@ class AnyrouterConnector(ProviderConnector):
         # 解析 user_id
         self._user_id, _ = _parse_session_user_id(session_cookie)
 
-        # 尝试获取反爬 Cookie
-        self._acw_cookie = await _get_acw_cookie(self.base_url)
+        # 尝试获取反爬 Cookie（使用配置中的代理）
+        self._acw_cookie = await _get_acw_cookie(self.base_url, proxy=self._proxy)
 
         self._set_connected()
         return True
@@ -371,7 +383,9 @@ class AnyrouterArchitecture(ProviderArchitecture):
         Returns:
             包含 acw_cookie 的配置
         """
-        acw_cookie = await _get_acw_cookie(base_url)
+        # 从 config 获取代理配置
+        proxy = config.get("proxy")
+        acw_cookie = await _get_acw_cookie(base_url, proxy=proxy)
         if acw_cookie:
             return {"acw_cookie": acw_cookie}
         return {}

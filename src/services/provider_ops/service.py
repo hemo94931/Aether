@@ -727,8 +727,20 @@ class ProviderOpsService:
             f"endpoint={verify_endpoint}, headers={list(headers.keys())}"
         )
 
+        # 获取代理配置
+        proxy = config.get("proxy")
+
         try:
-            async with httpx.AsyncClient(timeout=30.0, verify=get_ssl_context()) as client:
+            # 构建 httpx client 参数
+            client_kwargs: Dict[str, Any] = {
+                "timeout": 30.0,
+                "verify": get_ssl_context(),
+            }
+            if proxy:
+                client_kwargs["proxy"] = proxy
+                logger.debug(f"使用代理: {proxy}")
+
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 response = await client.get(verify_endpoint, headers=headers)
 
                 logger.debug(

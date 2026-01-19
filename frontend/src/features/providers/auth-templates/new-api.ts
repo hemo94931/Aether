@@ -9,6 +9,7 @@
 
 import type { AuthTemplate, AuthTemplateFieldGroup } from './types'
 import type { SaveConfigRequest } from '@/api/providerOps'
+import { PROXY_FIELD_GROUP, buildProxyUrl, parseProxyUrl } from './types'
 
 export const newApiTemplate: AuthTemplate = {
   id: 'new_api',
@@ -45,6 +46,7 @@ export const newApiTemplate: AuthTemplate = {
           },
         ],
       },
+      PROXY_FIELD_GROUP,
     ]
   },
 
@@ -58,6 +60,7 @@ export const newApiTemplate: AuthTemplate = {
         auth_type: 'api_key',
         config: {
           auth_method: 'bearer',
+          proxy: buildProxyUrl(formData),
         },
         credentials: {
           api_key: formData.api_key,
@@ -70,10 +73,12 @@ export const newApiTemplate: AuthTemplate = {
   },
 
   parseConfig(config: any): Record<string, any> {
+    const proxyData = parseProxyUrl(config?.connector?.config?.proxy)
     return {
       base_url: config?.base_url || '',
       api_key: config?.connector?.credentials?.api_key || '',
       user_id: config?.connector?.credentials?.user_id || '',
+      ...proxyData,
     }
   },
 

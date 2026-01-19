@@ -12,7 +12,6 @@ RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.li
     gcc \
     nodejs \
     npm \
-    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # pip 镜像源

@@ -2,43 +2,32 @@
 # 构建命令: docker build -f Dockerfile.app -t aether-app:latest .
 # 用于 GitHub Actions CI（官方源）
 FROM aether-base:latest AS builder
-
 WORKDIR /app
-
 # 复制前端源码并构建
 COPY frontend/ ./frontend/
 RUN cd frontend && npm run build
-
 # ==================== 运行时镜像 ====================
 FROM python:3.12-slim
-
 WORKDIR /app
-
 # 运行时依赖（无 gcc/nodejs/npm）
 RUN apt-get update && apt-get install -y \
     nginx \
     supervisor \
     libpq5 \
     curl \
-    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
 # 从 base 镜像复制 Python 包
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-
 # 只复制需要的 Python 可执行文件
 COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/
 COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/
 COPY --from=builder /usr/local/bin/alembic /usr/local/bin/
-
 # 从 builder 阶段复制前端构建产物
 COPY --from=builder /app/frontend/dist /usr/share/nginx/html
-
 # 复制后端代码
 COPY src/ ./src/
 COPY alembic.ini ./
 COPY alembic/ ./alembic/
-
 # Nginx 配置模板
 # 智能处理 IP：有外层代理头就透传，没有就用直连 IP
 RUN printf '%s\n' \
@@ -119,7 +108,6 @@ RUN printf '%s\n' \
 '        proxy_read_timeout 600s;' \
 '    }' \
 '}' > /etc/nginx/sites-available/default.template
-
 # Supervisor 配置
 RUN printf '%s\n' \
 '[supervisord]' \
@@ -144,14 +132,11 @@ RUN printf '%s\n' \
 'stderr_logfile=/dev/stderr' \
 'stderr_logfile_maxbytes=0' \
 'environment=PYTHONUNBUFFERED=1,PYTHONIOENCODING=utf-8,LANG=C.UTF-8,LC_ALL=C.UTF-8,DOCKER_CONTAINER=true' > /etc/supervisor/conf.d/supervisord.conf
-
 # 创建目录
 RUN mkdir -p /var/log/supervisor /app/logs /app/data
-
 # 入口脚本（启动前执行迁移）
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-
 # 环境变量
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -160,11 +145,8 @@ ENV PYTHONUNBUFFERED=1 \
     LC_ALL=C.UTF-8 \
     PORT=8084 \
     GUNICORN_WORKERS=4
-
 EXPOSE 80
-
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost/health || exit 1
-
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

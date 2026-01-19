@@ -48,80 +48,139 @@
             v-for="(group, groupIndex) in fieldGroups"
             :key="groupIndex"
           >
-            <!-- 分组标题 -->
+            <!-- 可折叠的分组（如代理配置） -->
             <div
-              v-if="group.title"
-              class="pt-2 text-sm font-medium text-muted-foreground"
-            >
-              {{ group.title }}
-            </div>
-
-            <!-- 字段列表 -->
-            <div
-              v-for="field in group.fields"
-              :key="field.key"
+              v-if="group.collapsible && group.hasToggle && group.toggleKey"
               class="space-y-2"
             >
-              <Label>
-                {{ field.label }}
-                <span
-                  v-if="field.required"
-                  class="text-muted-foreground/70"
-                >*</span>
-              </Label>
+              <!-- 标题栏：标题在左，开关在右（在卡片外） -->
+              <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-foreground">{{ group.title }}</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted-foreground">启用代理</span>
+                  <Switch
+                    :model-value="formData[group.toggleKey] || false"
+                    @update:model-value="formData[group.toggleKey] = $event"
+                  />
+                </div>
+              </div>
 
-              <!-- 文本输入 -->
-              <Input
-                v-if="field.type === 'text'"
-                v-model="formData[field.key]"
-                :placeholder="field.placeholder"
-                disable-autofill
-              />
-
-              <!-- 密码/敏感输入 -->
-              <Input
-                v-else-if="field.type === 'password'"
-                v-model="formData[field.key]"
-                :placeholder="sensitivePlaceholders[field.key] || field.placeholder"
-                masked
-              />
-
-              <!-- 下拉选择 -->
-              <Select
-                v-else-if="field.type === 'select'"
-                v-model="formData[field.key]"
-                @update:model-value="handleFieldChange(field.key, $event)"
+              <!-- 展开内容（卡片） -->
+              <div
+                v-if="formData[group.toggleKey]"
+                class="rounded-lg border border-border bg-muted/30 px-4 py-3"
               >
-                <SelectTrigger>
-                  <SelectValue :placeholder="field.placeholder || '请选择'" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem
-                    v-for="option in field.options"
-                    :key="option.value"
-                    :value="option.value"
+                <!-- 横向排列的字段：代理地址占更多空间 -->
+                <div class="flex gap-3">
+                  <div
+                    v-for="(field, fieldIndex) in group.fields"
+                    :key="field.key"
+                    class="space-y-1"
+                    :class="fieldIndex === 0 ? 'flex-[2]' : 'flex-1'"
                   >
-                    {{ option.label }}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+                    <Label class="text-xs text-muted-foreground">
+                      {{ field.label }}
+                    </Label>
 
-              <!-- 多行文本 -->
-              <Textarea
-                v-else-if="field.type === 'textarea'"
-                v-model="formData[field.key]"
-                :placeholder="field.placeholder"
-                rows="3"
-              />
+                    <!-- 文本输入 -->
+                    <Input
+                      v-if="field.type === 'text'"
+                      v-model="formData[field.key]"
+                      :placeholder="field.placeholder"
+                      disable-autofill
+                      class="h-8 text-sm"
+                    />
 
-              <!-- 帮助文本 -->
-              <p
-                v-if="field.helpText"
-                class="text-xs text-muted-foreground"
-              >
-                {{ field.helpText }}
-              </p>
+                    <!-- 密码/敏感输入 -->
+                    <Input
+                      v-else-if="field.type === 'password'"
+                      v-model="formData[field.key]"
+                      :placeholder="sensitivePlaceholders[field.key] || field.placeholder"
+                      masked
+                      class="h-8 text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
+
+            <!-- 普通分组（非折叠） -->
+            <template v-else>
+              <!-- 分组标题 -->
+              <div
+                v-if="group.title"
+                class="pt-2 text-sm font-medium text-muted-foreground"
+              >
+                {{ group.title }}
+              </div>
+
+              <!-- 字段列表 -->
+              <div
+                v-for="field in group.fields"
+                :key="field.key"
+                class="space-y-2"
+              >
+                <Label>
+                  {{ field.label }}
+                  <span
+                    v-if="field.required"
+                    class="text-muted-foreground/70"
+                  >*</span>
+                </Label>
+
+                <!-- 文本输入 -->
+                <Input
+                  v-if="field.type === 'text'"
+                  v-model="formData[field.key]"
+                  :placeholder="field.placeholder"
+                  disable-autofill
+                />
+
+                <!-- 密码/敏感输入 -->
+                <Input
+                  v-else-if="field.type === 'password'"
+                  v-model="formData[field.key]"
+                  :placeholder="sensitivePlaceholders[field.key] || field.placeholder"
+                  masked
+                />
+
+                <!-- 下拉选择 -->
+                <Select
+                  v-else-if="field.type === 'select'"
+                  v-model="formData[field.key]"
+                  @update:model-value="handleFieldChange(field.key, $event)"
+                >
+                  <SelectTrigger>
+                    <SelectValue :placeholder="field.placeholder || '请选择'" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem
+                      v-for="option in field.options"
+                      :key="option.value"
+                      :value="option.value"
+                    >
+                      {{ option.label }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <!-- 多行文本 -->
+                <Textarea
+                  v-else-if="field.type === 'textarea'"
+                  v-model="formData[field.key]"
+                  :placeholder="field.placeholder"
+                  rows="3"
+                />
+
+                <!-- 帮助文本 -->
+                <p
+                  v-if="field.helpText"
+                  class="text-xs text-muted-foreground"
+                >
+                  {{ field.helpText }}
+                </p>
+              </div>
+            </template>
           </template>
         </template>
       </div>
@@ -165,6 +224,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
 } from '@/components/ui'
 import { saveProviderOpsConfig, verifyProviderAuth, getProviderOpsConfig } from '@/api/providerOps'
 import { useToast } from '@/composables/useToast'
@@ -175,7 +235,7 @@ import {
 } from '../auth-templates'
 
 // 敏感字段列表（用于验证和加载配置时的特殊处理）
-const SENSITIVE_FIELDS = ['api_key', 'password', 'session_token', 'session_cookie', 'token_cookie', 'auth_cookie', 'cookie_string', 'cookies'] as const
+const SENSITIVE_FIELDS = ['api_key', 'password', 'session_token', 'session_cookie', 'token_cookie', 'auth_cookie', 'cookie_string', 'cookies', 'proxy_password'] as const
 
 const props = defineProps<{
   open: boolean

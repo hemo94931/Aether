@@ -193,13 +193,21 @@ class YesCodeArchitecture(ProviderArchitecture):
 
         cookie_header = _build_cookie_header(cookie_input)
 
+        # 获取代理配置
+        proxy = config.get("proxy")
+
         try:
+            # 构建 client 参数
+            client_kwargs: Dict[str, Any] = {
+                "headers": {"Cookie": cookie_header},
+                "timeout": 10.0,
+                "verify": get_ssl_context(),
+            }
+            if proxy:
+                client_kwargs["proxy"] = proxy
+
             # 创建临时 client 获取合并数据
-            async with httpx.AsyncClient(
-                headers={"Cookie": cookie_header},
-                timeout=10.0,
-                verify=get_ssl_context(),
-            ) as client:
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 combined_data = await fetch_yescode_combined_data(client, base_url)
                 extra_config["_combined_data"] = combined_data
         except Exception:

@@ -46,6 +46,14 @@ export interface AuthTemplateFieldGroup {
   title?: string
   /** 分组内的字段 */
   fields: AuthTemplateField[]
+  /** 是否可折叠（默认展开） */
+  collapsible?: boolean
+  /** 折叠时的默认状态：true=展开，false=收起 */
+  defaultExpanded?: boolean
+  /** 是否有启用开关（与 collapsible 配合使用） */
+  hasToggle?: boolean
+  /** 启用开关对应的表单字段 key */
+  toggleKey?: string
 }
 
 /**
@@ -141,3 +149,134 @@ export interface AuthTemplateRegistry {
   /** 注册模板 */
   register(template: AuthTemplate): void
 }
+
+// ==================== 通用字段定义 ====================
+
+/**
+ * 代理地址字段
+ */
+export const PROXY_URL_FIELD: AuthTemplateField = {
+  key: 'proxy_url',
+  label: '代理地址',
+  type: 'text',
+  placeholder: 'http://proxy:port 或 socks5://',
+  required: false,
+}
+
+/**
+ * 代理用户名字段
+ */
+export const PROXY_USERNAME_FIELD: AuthTemplateField = {
+  key: 'proxy_username',
+  label: '用户名',
+  type: 'text',
+  placeholder: '可选',
+  required: false,
+}
+
+/**
+ * 代理密码字段
+ */
+export const PROXY_PASSWORD_FIELD: AuthTemplateField = {
+  key: 'proxy_password',
+  label: '密码',
+  type: 'password',
+  placeholder: '可选',
+  required: false,
+  sensitive: true,
+}
+
+/**
+ * 通用代理配置字段组（可折叠，带启用开关）
+ */
+export const PROXY_FIELD_GROUP: AuthTemplateFieldGroup = {
+  title: '代理配置',
+  fields: [PROXY_URL_FIELD, PROXY_USERNAME_FIELD, PROXY_PASSWORD_FIELD],
+  collapsible: true,
+  defaultExpanded: false,
+  hasToggle: true,
+  toggleKey: 'proxy_enabled',
+}
+
+/**
+ * 构建代理 URL（包含认证信息）
+ *
+ * @param formData 表单数据
+ * @returns 完整的代理 URL，或 undefined
+ */
+export function buildProxyUrl(formData: Record<string, any>): string | undefined {
+  if (!formData.proxy_enabled || !formData.proxy_url) {
+    return undefined
+  }
+
+  const proxyUrl = formData.proxy_url.trim()
+  const username = formData.proxy_username?.trim()
+  const password = formData.proxy_password?.trim()
+
+  // 如果没有认证信息，直接返回 URL
+  if (!username) {
+    return proxyUrl
+  }
+
+  // 解析 URL 并添加认证信息
+  try {
+    const url = new URL(proxyUrl)
+    url.username = username
+    if (password) {
+      url.password = password
+    }
+    return url.toString()
+  } catch {
+    // URL 解析失败，尝试简单拼接
+    const protocol = proxyUrl.includes('://') ? proxyUrl.split('://')[0] : 'http'
+    const host = proxyUrl.includes('://') ? proxyUrl.split('://')[1] : proxyUrl
+    const auth = password ? `${username}:${password}` : username
+    return `${protocol}://${auth}@${host}`
+  }
+}
+
+/**
+ * 从代理 URL 解析表单数据
+ *
+ * @param proxyUrl 代理 URL
+ * @returns 表单数据
+ */
+export function parseProxyUrl(proxyUrl: string | undefined): Record<string, any> {
+  if (!proxyUrl) {
+    return {
+      proxy_enabled: false,
+      proxy_url: '',
+      proxy_username: '',
+      proxy_password: '',
+    }
+  }
+
+  try {
+    const url = new URL(proxyUrl)
+    const username = url.username || ''
+    const password = url.password || ''
+
+    // 移除认证信息后的 URL
+    url.username = ''
+    url.password = ''
+    const cleanUrl = url.toString()
+
+    return {
+      proxy_enabled: true,
+      proxy_url: cleanUrl,
+      proxy_username: username,
+      proxy_password: password,
+    }
+  } catch {
+    // 解析失败，直接使用原始 URL
+    return {
+      proxy_enabled: true,
+      proxy_url: proxyUrl,
+      proxy_username: '',
+      proxy_password: '',
+    }
+  }
+}
+
+// 兼容旧的导出（已废弃，请使用 PROXY_FIELD_GROUP）
+export const PROXY_FIELD: AuthTemplateField = PROXY_URL_FIELD

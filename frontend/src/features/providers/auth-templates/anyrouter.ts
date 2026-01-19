@@ -9,6 +9,7 @@
 
 import type { AuthTemplate, AuthTemplateFieldGroup } from './types'
 import type { SaveConfigRequest } from '@/api/providerOps'
+import { PROXY_FIELD_GROUP, buildProxyUrl, parseProxyUrl } from './types'
 
 export const anyrouterTemplate: AuthTemplate = {
   id: 'anyrouter',
@@ -38,6 +39,7 @@ export const anyrouterTemplate: AuthTemplate = {
           },
         ],
       },
+      PROXY_FIELD_GROUP,
     ]
   },
 
@@ -49,7 +51,9 @@ export const anyrouterTemplate: AuthTemplate = {
       base_url: baseUrl,
       connector: {
         auth_type: 'cookie',
-        config: {},
+        config: {
+          proxy: buildProxyUrl(formData),
+        },
         credentials: {
           session_cookie: formData.session_cookie,
         },
@@ -60,9 +64,11 @@ export const anyrouterTemplate: AuthTemplate = {
   },
 
   parseConfig(config: any): Record<string, any> {
+    const proxyData = parseProxyUrl(config?.connector?.config?.proxy)
     return {
       base_url: config?.base_url || '',
       session_cookie: config?.connector?.credentials?.session_cookie || '',
+      ...proxyData,
     }
   },
 
