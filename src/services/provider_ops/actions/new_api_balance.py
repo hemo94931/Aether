@@ -125,9 +125,8 @@ class NewApiBalanceAction(BalanceAction):
         site = client.base_url.host or str(client.base_url)
         checkin_endpoint = self.config.get("checkin_endpoint", "/api/user/checkin")
 
-        # 检查 client 是否配置了 Cookie（通过检查默认 headers）
-        # httpx.AsyncClient 的 headers 是 httpx.Headers 类型
-        has_cookie = "cookie" in {k.lower() for k in client.headers.keys()}
+        # 检查是否配置了 Cookie（通过 service 层注入的 _has_cookie 标志）
+        has_cookie = self.config.get("_has_cookie", False)
         if not has_cookie:
             logger.debug(f"[{site}] 未配置 Cookie，跳过签到")
             return None

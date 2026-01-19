@@ -320,6 +320,11 @@ class ProviderOpsService:
         saved_action_config = config.actions.get(action_type.value, {}).get("config", {})
         merged_config = {**saved_action_config, **(action_config or {})}
 
+        # 注入 credentials 元信息（如是否配置了 Cookie），供 Action 使用
+        decrypted_credentials = self._decrypt_credentials(config.connector_credentials)
+        if decrypted_credentials.get("cookie"):
+            merged_config["_has_cookie"] = True
+
         # 创建操作实例
         action = architecture.get_action(action_type, merged_config)
 
