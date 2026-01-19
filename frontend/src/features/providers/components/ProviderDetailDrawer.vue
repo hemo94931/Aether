@@ -95,10 +95,21 @@
                   >{{ API_FORMAT_LABELS[endpoint.api_format] || endpoint.api_format }}</span>
                 </template>
                 <span
+                  v-if="endpoints.length > 0"
                   class="text-xs px-2 py-0.5 rounded-md border border-dashed border-border hover:bg-accent hover:border-accent-foreground/20 cursor-pointer transition-colors text-muted-foreground"
                   title="编辑端点"
                   @click="showAddEndpointDialog"
                 >编辑</span>
+                <Button
+                  v-else
+                  variant="outline"
+                  size="sm"
+                  class="h-7 text-xs"
+                  @click="showAddEndpointDialog"
+                >
+                  <Plus class="w-3 h-3 mr-1" />
+                  添加 API 端点
+                </Button>
               </div>
             </div>
 

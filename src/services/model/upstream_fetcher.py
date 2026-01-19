@@ -20,6 +20,9 @@ from src.utils.ssl_utils import get_ssl_context
 # 并发请求限制
 MAX_CONCURRENT_REQUESTS = 5
 
+# 只对这些基础格式获取模型列表，CLI 格式使用相同的上游 API
+MODEL_FETCH_FORMATS = [APIFormat.OPENAI, APIFormat.CLAUDE, APIFormat.GEMINI]
+
 
 def _get_adapter_for_format(api_format: str) -> Optional[type]:
     """根据 API 格式获取对应的 Adapter 类"""
@@ -66,9 +69,9 @@ def build_all_format_configs(
     base_url = base_endpoint.base_url
     extra_headers = get_extra_headers_from_endpoint(base_endpoint)
 
-    # 从所有 API 格式都尝试获取模型，然后聚合去重
+    # 只对基础 API 格式获取模型，CLI 格式使用相同的上游 API
     endpoint_configs: list[dict] = []
-    for fmt in APIFormat:
+    for fmt in MODEL_FETCH_FORMATS:
         fmt_value = fmt.value
         # 如果该格式有专门的端点配置，使用其 base_url 和 headers
         if fmt_value in format_to_endpoint:

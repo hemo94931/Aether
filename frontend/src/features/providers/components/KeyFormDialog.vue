@@ -213,9 +213,9 @@
       <!-- 自动获取模型 -->
       <div class="flex items-center justify-between py-2 px-3 rounded-md border border-border/60 bg-muted/30">
         <div class="space-y-0.5">
-          <Label class="text-sm font-medium">自动获取模型</Label>
+          <Label class="text-sm font-medium">自动获取上游可用模型</Label>
           <p class="text-xs text-muted-foreground">
-            系统将定时从上游获取可用模型, 但无法默认接受提供商模型
+            定时更新上游模型, 配合模型映射使用
           </p>
           <p
             v-if="showAutoFetchWarning"

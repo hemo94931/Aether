@@ -852,9 +852,9 @@ function getPriorityModeLabel(mode: string): string {
   return labels[mode] || mode
 }
 
-// 判断是否存在模型映射转换
+// 判断是否存在模型映射（始终显示 provider_model_name）
 function hasModelMapping(provider: RoutingProviderInfo): boolean {
-  return provider.provider_model_name !== routingData.value?.global_model_name
+  return !!provider.provider_model_name
 }
 
 // 获取 Key 的 allowed_models 中匹配当前 GlobalModel 的所有模型名

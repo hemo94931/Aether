@@ -23,9 +23,9 @@
           >
             <!-- 编辑模式 -->
             <template v-if="editingEndpointId === endpoint.id">
-              <div class="space-y-2">
+              <div class="space-y-3">
                 <div class="flex items-center gap-2">
-                  <span class="text-sm font-medium w-24 shrink-0">{{ API_FORMAT_LABELS[endpoint.api_format] || endpoint.api_format }}</span>
+                  <span class="text-sm font-medium">{{ API_FORMAT_LABELS[endpoint.api_format] || endpoint.api_format }}</span>
                   <div class="flex items-center gap-1 ml-auto">
                     <Button
                       variant="ghost"
@@ -48,21 +48,21 @@
                     </Button>
                   </div>
                 </div>
-                <div class="grid grid-cols-2 gap-2">
-                  <div class="space-y-1">
+                <div class="flex items-end gap-3">
+                  <div class="flex-1 min-w-0 space-y-1">
                     <Label class="text-xs text-muted-foreground">Base URL</Label>
                     <Input
                       v-model="editingUrl"
-                      class="h-8 text-sm"
-                      placeholder="https://api.example.com"
+                      class="h-9"
+                      :placeholder="provider?.website || 'https://api.example.com'"
                       @keyup.escape="cancelEdit"
                     />
                   </div>
-                  <div class="space-y-1">
-                    <Label class="text-xs text-muted-foreground">自定义路径 (可选)</Label>
+                  <div class="w-52 shrink-0 space-y-1">
+                    <Label class="text-xs text-muted-foreground">自定义路径（可选）</Label>
                     <Input
                       v-model="editingPath"
-                      class="h-8 text-sm"
+                      class="h-9"
                       :placeholder="editingDefaultPath || '留空使用默认路径'"
                       @keyup.escape="cancelEdit"
                     />
@@ -71,7 +71,7 @@
                 <!-- 请求头规则配置 -->
                 <Collapsible
                   v-model:open="rulesExpanded"
-                  class="mt-2"
+                  class="mt-1"
                 >
                   <CollapsibleTrigger as-child>
                     <button
@@ -96,7 +96,7 @@
                       <div
                         v-for="(rule, index) in editingRules"
                         :key="index"
-                        class="flex items-start gap-2 p-2 rounded bg-muted/50"
+                        class="flex items-center gap-2"
                       >
                         <!-- 操作类型选择 -->
                         <Select
@@ -104,10 +104,13 @@
                           :model-value="rule.action"
                           @update:model-value="(v) => updateRuleAction(index, v as 'set' | 'drop' | 'rename')"
                         >
-                          <SelectTrigger class="w-24 h-7 text-xs">
+                          <SelectTrigger class="w-24 h-8 text-xs shrink-0">
                             <SelectValue />
                           </SelectTrigger>
-                          <SelectContent :side-offset="4">
+                          <SelectContent
+                            position="popper"
+                            :side-offset="4"
+                          >
                             <SelectItem value="set">
                               覆写
                             </SelectItem>
@@ -120,89 +123,62 @@
                           </SelectContent>
                         </Select>
 
-                        <!-- set: key + value -->
+                        <!-- set: key = value -->
                         <template v-if="rule.action === 'set'">
-                          <div class="flex-1 space-y-1">
-                            <Input
-                              v-model="rule.key"
-                              placeholder="Header 名称"
-                              class="h-7 text-xs"
-                            />
-                            <p
-                              v-if="validateRuleKey(rule.key, index)"
-                              class="text-xs text-destructive"
-                            >
-                              {{ validateRuleKey(rule.key, index) }}
-                            </p>
-                          </div>
+                          <Input
+                            v-model="rule.key"
+                            placeholder="Header 名称"
+                            :class="`w-36 h-8 text-xs ${validateRuleKey(rule.key, index) ? 'border-destructive' : ''}`"
+                            :title="validateRuleKey(rule.key, index) || ''"
+                          />
+                          <span class="text-muted-foreground text-xs">=</span>
                           <Input
                             v-model="rule.value"
                             placeholder="Header 值"
-                            class="flex-1 h-7 text-xs"
+                            class="flex-1 h-8 text-xs"
                           />
                         </template>
 
-                        <!-- drop: key only -->
+                        <!-- drop: key -->
                         <template v-else-if="rule.action === 'drop'">
-                          <div class="flex-1 space-y-1">
-                            <Input
-                              v-model="rule.key"
-                              placeholder="要删除的 Header 名称"
-                              class="h-7 text-xs"
-                            />
-                            <p
-                              v-if="validateRuleKey(rule.key, index)"
-                              class="text-xs text-destructive"
-                            >
-                              {{ validateRuleKey(rule.key, index) }}
-                            </p>
-                          </div>
+                          <Input
+                            v-model="rule.key"
+                            placeholder="要删除的 Header 名称"
+                            :class="`flex-1 h-8 text-xs ${validateRuleKey(rule.key, index) ? 'border-destructive' : ''}`"
+                            :title="validateRuleKey(rule.key, index) || ''"
+                          />
                         </template>
 
-                        <!-- rename: from + to -->
+                        <!-- rename: from -> to -->
                         <template v-else-if="rule.action === 'rename'">
-                          <div class="flex-1 space-y-1">
-                            <Input
-                              v-model="rule.from"
-                              placeholder="原 Header 名称"
-                              class="h-7 text-xs"
-                            />
-                            <p
-                              v-if="validateRenameFrom(rule.from, index)"
-                              class="text-xs text-destructive"
-                            >
-                              {{ validateRenameFrom(rule.from, index) }}
-                            </p>
-                          </div>
-                          <ArrowRight class="w-4 h-4 shrink-0 text-muted-foreground mt-1.5" />
-                          <div class="flex-1 space-y-1">
-                            <Input
-                              v-model="rule.to"
-                              placeholder="新 Header 名称"
-                              class="h-7 text-xs"
-                            />
-                            <p
-                              v-if="validateRenameTo(rule.to, index)"
-                              class="text-xs text-destructive"
-                            >
-                              {{ validateRenameTo(rule.to, index) }}
-                            </p>
-                          </div>
+                          <Input
+                            v-model="rule.from"
+                            placeholder="原名称"
+                            :class="`flex-1 h-8 text-xs ${validateRenameFrom(rule.from, index) ? 'border-destructive' : ''}`"
+                            :title="validateRenameFrom(rule.from, index) || ''"
+                          />
+                          <ArrowRight class="w-4 h-4 shrink-0 text-muted-foreground" />
+                          <Input
+                            v-model="rule.to"
+                            placeholder="新名称"
+                            :class="`flex-1 h-8 text-xs ${validateRenameTo(rule.to, index) ? 'border-destructive' : ''}`"
+                            :title="validateRenameTo(rule.to, index) || ''"
+                          />
                         </template>
 
                         <Button
                           variant="ghost"
                           size="icon"
-                          class="h-7 w-7 shrink-0"
+                          class="h-8 w-8 shrink-0"
                           @click="removeRule(index)"
                         >
-                          <X class="w-3 h-3" />
+                          <X class="w-3.5 h-3.5" />
                         </Button>
                       </div>
                       <Button
                         variant="outline"
                         size="sm"
-                        class="w-full h-7 text-xs"
+                        class="w-full h-8 text-xs"
                         @click="addRule"
                       >
                         <Plus class="w-3 h-3 mr-1" />
@@ -273,7 +249,7 @@
       >
         <Label class="text-muted-foreground">添加新端点</Label>
         <div class="flex items-end gap-3">
-          <div class="w-32 shrink-0 space-y-1.5">
+          <div class="w-36 shrink-0 space-y-1.5">
             <Label class="text-xs">API 格式</Label>
             <Select
               v-model="newEndpoint.api_format"
@@ -293,31 +269,22 @@
               </SelectContent>
             </Select>
           </div>
-          <div class="flex-1 space-y-1.5">
+          <div class="flex-1 min-w-0 space-y-1.5">
             <Label class="text-xs">Base URL</Label>
             <Input
               v-model="newEndpoint.base_url"
-              placeholder="https://api.example.com"
+              :placeholder="provider?.website || 'https://api.example.com'"
               class="h-9"
             />
           </div>
-          <div class="w-40 shrink-0 space-y-1.5">
-            <Label class="text-xs">自定义路径</Label>
+          <div class="w-52 shrink-0 space-y-1.5">
+            <Label class="text-xs">自定义路径（可选）</Label>
             <Input
               v-model="newEndpoint.custom_path"
-              :placeholder="newEndpointDefaultPath || '可选'"
+              :placeholder="newEndpointDefaultPath || '留空使用默认路径'"
               class="h-9"
             />
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            class="h-9 shrink-0"
-            :disabled="!newEndpoint.api_format || !newEndpoint.base_url || addingEndpoint"
-            @click="handleAddEndpoint"
-          >
-            {{ addingEndpoint ? '添加中...' : '添加' }}
-          </Button>
         </div>
       </div>
 
@@ -336,6 +303,14 @@
         @click="handleClose"
       >
         关闭
+      </Button>
+      <Button
+        v-if="availableFormats.length > 0"
+        variant="outline"
+        :disabled="!newEndpoint.api_format || (!newEndpoint.base_url?.trim() && !provider?.website?.trim()) || addingEndpoint"
+        @click="handleAddEndpoint"
+      >
+        {{ addingEndpoint ? '添加中...' : '添加' }}
       </Button>
     </template>
   </Dialog>
@@ -710,21 +685,27 @@ async function saveEndpointUrl(endpoint: ProviderEndpoint) {
 
 // 添加端点
 async function handleAddEndpoint() {
-  if (!props.provider || !newEndpoint.value.api_format || !newEndpoint.value.base_url) return
+  if (!props.provider || !newEndpoint.value.api_format) return
+
+  // 如果没有输入 base_url，使用提供商的 website 作为默认值
+  const baseUrl = newEndpoint.value.base_url || props.provider.website
+  if (!baseUrl) {
+    showError('请输入 Base URL')
+    return
+  }
 
   addingEndpoint.value = true
   try {
     await createEndpoint(props.provider.id, {
       provider_id: props.provider.id,
       api_format: newEndpoint.value.api_format,
-      base_url: newEndpoint.value.base_url,
+      base_url: baseUrl,
       custom_path: newEndpoint.value.custom_path || undefined,
       is_active: true,
     })
     success(`已添加 ${API_FORMAT_LABELS[newEndpoint.value.api_format] || newEndpoint.value.api_format} 端点`)
     // 重置表单，保留 URL
-    const url = newEndpoint.value.base_url
-    newEndpoint.value = { api_format: '', base_url: url, custom_path: '' }
+    newEndpoint.value = { api_format: '', base_url: baseUrl, custom_path: '' }
     emit('endpointCreated')
   } catch (error: any) {
     showError(error.response?.data?.detail || '添加失败', '错误')
