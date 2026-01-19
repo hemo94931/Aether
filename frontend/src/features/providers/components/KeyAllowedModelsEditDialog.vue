@@ -366,7 +366,7 @@ import {
 } from '@/api/endpoints'
 import { getGlobalModels, type GlobalModelResponse } from '@/api/global-models'
 import { useUpstreamModelsCache } from '../composables/useUpstreamModelsCache'
-import { API_FORMAT_SHORT, type UpstreamModel } from '@/api/endpoints/types'
+import { API_FORMAT_SHORT, sortApiFormats, type UpstreamModel } from '@/api/endpoints/types'
 
 interface AvailableModel {
   name: string
@@ -481,7 +481,7 @@ const upstreamModelList = computed(() => {
   })
   const result: UpstreamModelInfo[] = []
   modelMap.forEach((formats, id) => {
-    result.push({ id, api_formats: Array.from(formats).sort() })
+    result.push({ id, api_formats: sortApiFormats(Array.from(formats)) })
   })
   return result.sort((a, b) => a.id.localeCompare(b.id))
 })
