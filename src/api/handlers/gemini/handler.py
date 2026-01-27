@@ -50,66 +50,26 @@ class GeminiChatHandler(ChatHandlerBase):
 
     async def _convert_request(self, request):
         """
-        将请求转换为 Gemini 格式
+        将请求转换为 Gemini 格式的 Pydantic 对象
 
-        支持自动转换:
-        - Claude 格式 → Gemini 格式
-        - OpenAI 格式 → Gemini 格式
+        注意：此方法只做类型转换（dict → Pydantic），不做跨格式转换。
+        跨格式转换由 FallbackOrchestrator 在选中候选后、发送请求前执行，
+        并受全局开关和端点配置控制。
 
         Args:
-            request: 原始请求对象（可能是 Gemini/Claude/OpenAI 格式）
+            request: 原始请求对象（应已是 Gemini 格式）
 
         Returns:
             GeminiRequest 对象
         """
-        from src.core.api_format.conversion.registry import (
-            format_conversion_registry,
-            register_default_normalizers,
-        )
-        from src.models.claude import ClaudeMessagesRequest
         from src.models.gemini import GeminiRequest
-        from src.models.openai import OpenAIRequest
 
-        register_default_normalizers()
-
-        # 如果已经是 Gemini 格式，直接返回
+        # 如果已经是 Gemini 格式 Pydantic 对象，直接返回
         if isinstance(request, GeminiRequest):
             return request
 
-        # 如果是 Claude 格式，转换为 Gemini 格式
-        if isinstance(request, ClaudeMessagesRequest):
-            req_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
-            gemini_dict = format_conversion_registry.convert_request(req_dict, "CLAUDE", "GEMINI")
-            return GeminiRequest(**gemini_dict)
-
-        # 如果是 OpenAI 格式，转换为 Gemini 格式
-        if isinstance(request, OpenAIRequest):
-            req_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
-            gemini_dict = format_conversion_registry.convert_request(req_dict, "OPENAI", "GEMINI")
-            return GeminiRequest(**gemini_dict)
-
-        # 如果是字典，根据内容判断格式并转换
+        # 如果是字典，转换为 Pydantic 对象（假设已是 Gemini 格式）
         if isinstance(request, dict):
-            # 检测 Gemini 格式特征: contents 字段
-            if "contents" in request:
-                return GeminiRequest(**request)
-
-            # 检测 Claude 格式特征: messages + 没有 choices
-            if "messages" in request and "choices" not in request:
-                # 进一步区分 Claude 和 OpenAI
-                # Claude 使用 max_tokens，OpenAI 也可能有
-                # Claude 的 messages[].content 可以是数组，OpenAI 通常是字符串
-                messages = request.get("messages", [])
-                if messages and isinstance(messages[0].get("content"), list):
-                    # 可能是 Claude 格式
-                    gemini_dict = format_conversion_registry.convert_request(request, "CLAUDE", "GEMINI")
-                    return GeminiRequest(**gemini_dict)
-                else:
-                    # 可能是 OpenAI 格式
-                    gemini_dict = format_conversion_registry.convert_request(request, "OPENAI", "GEMINI")
-                    return GeminiRequest(**gemini_dict)
-
-            # 默认尝试作为 Gemini 格式
             return GeminiRequest(**request)
 
         return request

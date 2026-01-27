@@ -188,6 +188,8 @@ class OpenAINormalizer(FormatNormalizer):
             result["stop"] = list(internal.stop_sequences)
         if internal.stream:
             result["stream"] = True
+            # 启用流式响应的 usage 统计（OpenAI 默认不返回流式 usage）
+            result["stream_options"] = {"include_usage": True}
 
         if internal.tools:
             result["tools"] = [

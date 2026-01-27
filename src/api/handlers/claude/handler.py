@@ -66,43 +66,26 @@ class ClaudeChatHandler(ChatHandlerBase):
 
     async def _convert_request(self, request: Any) -> Any:
         """
-        将请求转换为 Claude 格式
+        将请求转换为 Claude 格式的 Pydantic 对象
+
+        注意：此方法只做类型转换（dict → Pydantic），不做跨格式转换。
+        跨格式转换由 FallbackOrchestrator 在选中候选后、发送请求前执行，
+        并受全局开关和端点配置控制。
 
         Args:
-            request: 原始请求对象
+            request: 原始请求对象（应已是 Claude 格式）
 
         Returns:
             ClaudeMessagesRequest 对象
         """
-        from src.core.api_format.conversion.registry import (
-            format_conversion_registry,
-            register_default_normalizers,
-        )
         from src.models.claude import ClaudeMessagesRequest
-        from src.models.openai import OpenAIRequest
 
-        register_default_normalizers()
-
-        # 如果已经是 Claude 格式，直接返回
+        # 如果已经是 Claude 格式 Pydantic 对象，直接返回
         if isinstance(request, ClaudeMessagesRequest):
             return request
 
-        # 如果是 OpenAI 格式，转换为 Claude 格式
-        if isinstance(request, OpenAIRequest):
-            req_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
-            claude_dict = format_conversion_registry.convert_request(req_dict, "OPENAI", "CLAUDE")
-            return ClaudeMessagesRequest(**claude_dict)
-
-        # 如果是字典，根据内容判断格式
+        # 如果是字典，转换为 Pydantic 对象（假设已是 Claude 格式）
         if isinstance(request, dict):
-            if "messages" in request and len(request["messages"]) > 0:
-                first_msg = request["messages"][0]
-                if "role" in first_msg and "content" in first_msg:
-                    # 可能是 OpenAI 格式
-                    claude_dict = format_conversion_registry.convert_request(request, "OPENAI", "CLAUDE")
-                    return ClaudeMessagesRequest(**claude_dict)
-
-            # 否则假设已经是 Claude 格式
             return ClaudeMessagesRequest(**request)
 
         return request

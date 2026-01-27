@@ -1481,6 +1481,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         event_type = event_name or data.get("type", "")
 
         # 调用格式特定的处理逻辑
+        # 注意：跨格式转换时，_process_event_data 会自动选择正确的 Provider 解析器
         self._process_event_data(ctx, event_type, data)
 
     def _process_event_data(
@@ -1505,7 +1506,27 @@ class CliMessageHandlerBase(BaseMessageHandler):
         # 使用解析器提取 usage
         # Claude/CLI 流式响应的 usage 可能在首个 chunk 或最后一个 chunk 中
         # 首个 chunk 可能部分为 0，最后一个 chunk 包含完整值，因此取最大值确保正确计费
-        usage = self.parser.extract_usage_from_response(data)
+        #
+        # 重要：当跨格式转换时，收到的数据是 Provider 格式，需要使用 Provider 格式的解析器
+        # 而不是客户端格式的解析器（self.parser）
+        parser = self.parser
+        if ctx.provider_api_format and ctx.provider_api_format != ctx.client_api_format:
+            # 跨格式转换：使用 Provider 格式的解析器
+            try:
+                provider_parser = get_parser_for_format(ctx.provider_api_format)
+                if provider_parser:
+                    parser = provider_parser
+                    logger.debug(
+                        f"[{getattr(ctx, 'request_id', 'unknown')}] 使用 Provider 解析器: "
+                        f"{ctx.provider_api_format} (client={ctx.client_api_format})"
+                    )
+            except KeyError:
+                logger.debug(
+                    f"[{getattr(ctx, 'request_id', 'unknown')}] 未找到 Provider 格式解析器: "
+                    f"{ctx.provider_api_format}, 回退使用客户端格式解析器"
+                )
+
+        usage = parser.extract_usage_from_response(data)
         if usage:
             new_input = usage.get("input_tokens", 0)
             new_output = usage.get("output_tokens", 0)
@@ -1526,8 +1547,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
             if any([new_input, new_output, new_cached, new_cache_creation]):
                 ctx.final_usage = usage
 
-        # 提取文本内容
-        text = self.parser.extract_text_content(data)
+        # 提取文本内容（同样使用正确的解析器）
+        text = parser.extract_text_content(data)
         if text:
             ctx.append_text(text)
 
@@ -1548,6 +1569,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
         当需要格式转换时，记录的是转换后的数据（客户端实际收到的格式）；
         同时更新 data_count、has_completion 等统计信息。
+
+        重要：此方法也从转换后的事件中提取 usage 信息，作为 _process_event_data
+        从原始数据提取的补充。这确保即使原始 Provider 数据中没有 usage（如 OpenAI
+        未设置 stream_options），也能从转换后的格式中获取。
 
         Args:
             ctx: 流上下文
@@ -1572,6 +1597,79 @@ class CliMessageHandlerBase(BaseMessageHandler):
                         if isinstance(choice, dict) and choice.get("finish_reason"):
                             ctx.has_completion = True
                             break
+
+                # 从转换后的事件中提取 usage（补充 _process_event_data 的提取）
+                # Claude 格式: message_delta.usage 或 message_start.message.usage
+                # OpenAI 格式: chunk.usage
+                self._extract_usage_from_converted_event(ctx, evt, event_type)
+
+    def _extract_usage_from_converted_event(
+        self,
+        ctx: StreamContext,
+        evt: Dict[str, Any],
+        event_type: str,
+    ) -> None:
+        """
+        从转换后的事件中提取 usage 信息
+
+        支持多种格式：
+        - Claude: message_delta.usage, message_start.message.usage
+        - OpenAI: chunk.usage
+        - Gemini: usageMetadata
+
+        Args:
+            ctx: 流上下文
+            evt: 转换后的事件
+            event_type: 事件类型
+        """
+        usage: Optional[Dict[str, Any]] = None
+
+        # Claude 格式: message_delta 或 message_start
+        if event_type == "message_delta":
+            usage = evt.get("usage")
+        elif event_type == "message_start":
+            message = evt.get("message", {})
+            if isinstance(message, dict):
+                usage = message.get("usage")
+        # OpenAI 格式: 直接在 chunk 中
+        elif "usage" in evt:
+            usage = evt.get("usage")
+        # Gemini 格式: usageMetadata
+        elif "usageMetadata" in evt:
+            meta = evt.get("usageMetadata", {})
+            if isinstance(meta, dict):
+                usage = {
+                    "input_tokens": meta.get("promptTokenCount", 0),
+                    "output_tokens": meta.get("candidatesTokenCount", 0),
+                    "cache_read_tokens": meta.get("cachedContentTokenCount", 0),
+                    "cache_creation_tokens": 0,  # Gemini 目前不支持缓存创建
+                }
+
+        if usage and isinstance(usage, dict):
+            new_input = usage.get("input_tokens", 0) or 0
+            new_output = usage.get("output_tokens", 0) or 0
+            new_cached = usage.get("cache_read_tokens") or usage.get("cache_read_input_tokens") or 0
+            new_cache_creation = usage.get("cache_creation_tokens") or usage.get("cache_creation_input_tokens") or 0
+
+            # 取最大值更新（与 _process_event_data 相同的策略）
+            if new_input > ctx.input_tokens:
+                ctx.input_tokens = new_input
+                logger.debug(
+                    f"[{ctx.request_id}] 从转换后事件更新 input_tokens: {new_input}"
+                )
+            if new_output > ctx.output_tokens:
+                ctx.output_tokens = new_output
+                logger.debug(
+                    f"[{ctx.request_id}] 从转换后事件更新 output_tokens: {new_output}"
+                )
+            if new_cached > ctx.cached_tokens:
+                ctx.cached_tokens = new_cached
+            if new_cache_creation > ctx.cache_creation_tokens:
+                ctx.cache_creation_tokens = new_cache_creation
+
+            # 保存最后一个非空 usage
+            if any([new_input, new_output, new_cached, new_cache_creation]):
+                ctx.final_usage = usage
 
     def _finalize_stream_metadata(self, ctx: StreamContext) -> None:
         """
