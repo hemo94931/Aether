@@ -1013,7 +1013,11 @@ class GetMyActivityHeatmapAdapter(AuthenticatedApiAdapter):
 
 @dataclass
 class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
-    """获取用户可用模型列表的适配器"""
+    """获取用户可用模型列表的适配器
+
+    考虑格式转换：如果全局格式转换启用，会包含通过格式转换可访问的模型。
+    这与 /v1/models API 的逻辑保持一致。
+    """
 
     skip: int
     limit: int
@@ -1023,6 +1027,7 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
         from sqlalchemy import or_
 
         from src.api.base.models_service import AccessRestrictions
+        from src.config.settings import config as app_config
 
         db = context.db
         user = context.user
@@ -1030,12 +1035,15 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
         # 使用 AccessRestrictions 类来处理限制（与 /v1/models 逻辑一致）
         restrictions = AccessRestrictions.from_api_key_and_user(api_key=None, user=user)
 
-        # 获取所有活跃的 Provider ID
-        all_active_provider_ids = {
-            p.id for p in db.query(Provider.id).filter(Provider.is_active == True).all()
-        }
+        # 检查全局格式转换开关
+        global_conversion_enabled = app_config.format_conversion_enabled
 
-        if not all_active_provider_ids:
+        # 获取所有可用的 Provider ID（考虑格式转换）
+        available_provider_ids = self._get_all_available_provider_ids(
+            db, global_conversion_enabled
+        )
+
+        if not available_provider_ids:
             return {"models": [], "total": 0}
 
         # 查询所有活跃的 GlobalModel 及其关联的 Model
@@ -1044,7 +1052,7 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
             .join(Model, Model.global_model_id == GlobalModel.id)
             .filter(
                 and_(
-                    Model.provider_id.in_(all_active_provider_ids),
+                    Model.provider_id.in_(available_provider_ids),
                     Model.is_active == True,
                     GlobalModel.is_active == True,
                 )
@@ -1105,6 +1113,77 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
 
         logger.debug(f"用户 {user.email} 可用模型: {len(model_responses)} 个")
         return PublicGlobalModelListResponse(models=model_responses, total=total)
+
+    def _get_all_available_provider_ids(
+        self, db: Session, global_conversion_enabled: bool
+    ) -> set[str]:
+        """
+        获取所有可用的 Provider ID（考虑格式转换）
+
+        用户模型目录需要显示通过任何客户端格式（OPENAI/CLAUDE/GEMINI）可访问的模型并集。
+        与 /v1/models 逻辑一致，确保返回的 Provider 都有活跃的端点和 Key。
+
+        优化：将 DB 查询从 6 次减少到 2 次
+        - 一次性查询所有活跃端点
+        - 在内存中进行格式兼容性过滤
+        - 一次性查询 Key 可用性
+        """
+        from src.api.base.models_service import get_available_provider_ids
+        from src.core.api_format import APIFormat
+        from src.core.api_format.conversion.compatibility import is_format_compatible
+        from src.models.database import ProviderEndpoint
+
+        # 主流 API 格式列表
+        all_formats = [APIFormat.OPENAI.value, APIFormat.CLAUDE.value, APIFormat.GEMINI.value]
+
+        # 步骤 1：一次性查询所有活跃端点（单次 DB 查询）
+        endpoint_rows = (
+            db.query(
+                ProviderEndpoint.provider_id,
+                ProviderEndpoint.api_format,
+                ProviderEndpoint.format_acceptance_config,
+            )
+            .join(Provider, ProviderEndpoint.provider_id == Provider.id)
+            .filter(
+                Provider.is_active.is_(True),
+                ProviderEndpoint.is_active.is_(True),
+                ProviderEndpoint.api_format.in_(all_formats),
+            )
+            .all()
+        )
+
+        if not endpoint_rows:
+            return set()
+
+        # 步骤 2：在内存中对每种客户端格式进行兼容性过滤
+        # 只要端点能被任意一种客户端格式访问，就将其 Provider 加入结果
+        provider_to_formats: dict[str, set[str]] = {}
+
+        for provider_id, endpoint_format, format_acceptance_config in endpoint_rows:
+            if not provider_id or not endpoint_format:
+                continue
+
+            endpoint_format_upper = str(endpoint_format).upper()
+
+            # 检查该端点是否能被任意客户端格式访问
+            for client_format in all_formats:
+                is_compatible, _, _ = is_format_compatible(
+                    client_format,
+                    endpoint_format_upper,
+                    format_acceptance_config,
+                    is_stream=False,
+                    global_conversion_enabled=global_conversion_enabled,
+                )
+                if is_compatible:
+                    provider_to_formats.setdefault(provider_id, set()).add(endpoint_format_upper)
+                    break  # 只要有一种客户端格式能访问就够了
+
+        if not provider_to_formats:
+            return set()
+
+        # 步骤 3：检查 Provider 是否有活跃的 Key（单次 DB 查询）
+        formats = sorted({f for fmts in provider_to_formats.values() for f in fmts})
+        return get_available_provider_ids(db, formats, provider_to_formats)
 
 
 class ListAvailableProvidersAdapter(AuthenticatedApiAdapter):
