@@ -1,7 +1,12 @@
 """
 格式兼容性检查
 
-用于候选筛选时判断端点是否可以处理客户端请式。
+用于候选筛选时判断端点是否可以处理客户端请求格式。
+
+转换逻辑：
+1. 格式完全匹配 -> 透传（无需转换）
+2. 同族格式透传（CLAUDE/CLAUDE_CLI、GEMINI/GEMINI_CLI 格式相同，只是认证不同）
+3. 需要转换的情况 -> 检查全局开关 + 端点配置 + 转换器能力
 """
 
 from __future__ import annotations
@@ -33,7 +38,7 @@ def is_format_compatible(
         endpoint_api_format: 端点的 API 格式
         endpoint_format_acceptance_config: 端点的格式接受配置
         is_stream: 是否是流式请求
-        global_conversion_enabled: 全局格式转换开关
+        global_conversion_enabled: 全局格式转换开关（来自环境变量 FORMAT_CONVERSION_ENABLED，默认 True）
         registry: 转换器注册表（可选，默认使用全局单例）
 
     Returns:
@@ -55,7 +60,7 @@ def is_format_compatible(
     provider_format = endpoint_api_format.upper()
     client_format_upper = client_format.upper()
 
-    # 1. 格式完全匹配 -> 兼容，无需转换
+    # 1. 格式完全匹配 -> 透传（无需转换）
     if provider_format == client_format_upper:
         return True, False, None
 
@@ -63,32 +68,18 @@ def is_format_compatible(
     provider_base = get_base_format(provider_format)
     client_base = get_base_format(client_format_upper)
 
-    if provider_base == client_base:
-        # 同族格式：检查是否需要转换
-        # - OPENAI 和 OPENAI_CLI 的请求/响应格式不同（Chat Completions vs Responses API），需要转换
-        # - CLAUDE 和 CLAUDE_CLI、GEMINI 和 GEMINI_CLI 格式相同，只是认证不同，可透传
-        if provider_base == "OPENAI":
-            # OPENAI/OPENAI_CLI 同族转换：兼容但需要转换
-            # 检查转换器能力（同族转换不需要全局开关和端点配置）
-            if registry.can_convert_full(
-                client_format_upper, provider_format, require_stream=is_stream
-            ):
-                return True, True, None  # 兼容，需要转换
-            else:
-                return (
-                    False,
-                    False,
-                    f"不存在 {client_format} <-> {provider_format} 的完整转换器",
-                )
-        else:
-            # CLAUDE/CLAUDE_CLI、GEMINI/GEMINI_CLI 等：格式相同，可透传
-            return True, False, None
+    is_same_family = provider_base == client_base
+    if is_same_family and provider_base != "OPENAI":
+        # CLAUDE/CLAUDE_CLI、GEMINI/GEMINI_CLI 等：格式相同，只是认证不同，可透传
+        # 注意：这些格式之间没有定义转换器，因为数据格式完全相同
+        return True, False, None
 
-    # 3. 检查全局开关
+    # 3. 需要转换的情况（OPENAI/OPENAI_CLI 同族转换 或 跨格式转换）
+    # 检查全局开关（来自环境变量，默认开启）
     if not global_conversion_enabled:
-        return False, False, "全局格式转换未启用"
+        return False, False, "全局格式转换未启用（环境变量 FORMAT_CONVERSION_ENABLED=false）"
 
-    # 4. 检查端点配置
+    # 4. 检查端点配置（核心控制）
     if endpoint_format_acceptance_config is None:
         return False, False, "端点未配置格式转换"
 

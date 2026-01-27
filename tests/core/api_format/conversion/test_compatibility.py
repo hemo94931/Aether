@@ -46,6 +46,7 @@ def test_cli_format_convertible_when_converter_supports_full() -> None:
 
 
 def test_global_switch_disabled_blocks_conversion() -> None:
+    """全局开关关闭时（环境变量 FORMAT_CONVERSION_ENABLED=false）阻止转换"""
     ok, needs_conv, reason = is_format_compatible(
         "CLAUDE",
         "OPENAI",
@@ -56,7 +57,7 @@ def test_global_switch_disabled_blocks_conversion() -> None:
     )
     assert ok is False
     assert needs_conv is False
-    assert reason and "全局" in reason
+    assert reason and ("全局" in reason or "FORMAT_CONVERSION_ENABLED" in reason)
 
 
 def test_endpoint_config_none_blocks_conversion() -> None:
@@ -219,9 +220,9 @@ def test_openai_cli_to_openai_needs_conversion() -> None:
     ok, needs_conv, reason = is_format_compatible(
         "OPENAI_CLI",
         "OPENAI",
-        endpoint_format_acceptance_config=None,  # 同族转换不需要端点配置
+        endpoint_format_acceptance_config={"enabled": True},  # 同族转换也需要端点配置
         is_stream=False,
-        global_conversion_enabled=False,  # 同族转换不需要全局开关
+        global_conversion_enabled=True,  # 同族转换也需要全局开关
         registry=registry,
     )
     assert ok is True
@@ -237,9 +238,9 @@ def test_openai_to_openai_cli_needs_conversion() -> None:
     ok, needs_conv, reason = is_format_compatible(
         "OPENAI",
         "OPENAI_CLI",
-        endpoint_format_acceptance_config=None,  # 同族转换不需要端点配置
+        endpoint_format_acceptance_config={"enabled": True},  # 同族转换也需要端点配置
         is_stream=False,
-        global_conversion_enabled=False,  # 同族转换不需要全局开关
+        global_conversion_enabled=True,  # 同族转换也需要全局开关
         registry=registry,
     )
     assert ok is True
@@ -255,9 +256,9 @@ def test_openai_cli_to_openai_stream_needs_conversion() -> None:
     ok, needs_conv, reason = is_format_compatible(
         "OPENAI_CLI",
         "OPENAI",
-        endpoint_format_acceptance_config=None,
+        endpoint_format_acceptance_config={"enabled": True},  # 同族转换也需要端点配置
         is_stream=True,
-        global_conversion_enabled=False,
+        global_conversion_enabled=True,  # 同族转换也需要全局开关
         registry=registry,
     )
     assert ok is True
@@ -273,11 +274,65 @@ def test_openai_cli_to_openai_fails_without_converter() -> None:
     ok, needs_conv, reason = is_format_compatible(
         "OPENAI_CLI",
         "OPENAI",
-        endpoint_format_acceptance_config=None,
+        endpoint_format_acceptance_config={"enabled": True},
         is_stream=False,
-        global_conversion_enabled=False,
+        global_conversion_enabled=True,
         registry=registry,
     )
     assert ok is False
     assert needs_conv is False
     assert reason and "转换器" in reason
+
+
+def test_openai_cli_to_openai_blocked_when_global_switch_disabled() -> None:
+    """同族转换（OPENAI/OPENAI_CLI）也受全局开关限制（环境变量 FORMAT_CONVERSION_ENABLED=false）"""
+    registry = MagicMock()
+    registry.can_convert_full.return_value = True
+
+    ok, needs_conv, reason = is_format_compatible(
+        "OPENAI_CLI",
+        "OPENAI",
+        endpoint_format_acceptance_config={"enabled": True},
+        is_stream=False,
+        global_conversion_enabled=False,  # 全局开关关闭
+        registry=registry,
+    )
+    assert ok is False
+    assert needs_conv is False
+    assert reason and ("全局" in reason or "FORMAT_CONVERSION_ENABLED" in reason)
+
+
+def test_openai_cli_to_openai_blocked_when_endpoint_disabled() -> None:
+    """同族转换（OPENAI/OPENAI_CLI）也受端点开关限制"""
+    registry = MagicMock()
+    registry.can_convert_full.return_value = True
+
+    ok, needs_conv, reason = is_format_compatible(
+        "OPENAI_CLI",
+        "OPENAI",
+        endpoint_format_acceptance_config={"enabled": False},  # 端点开关关闭
+        is_stream=False,
+        global_conversion_enabled=True,
+        registry=registry,
+    )
+    assert ok is False
+    assert needs_conv is False
+    assert reason and "未启用" in reason
+
+
+def test_openai_cli_to_openai_blocked_when_endpoint_not_configured() -> None:
+    """同族转换（OPENAI/OPENAI_CLI）也需要端点配置"""
+    registry = MagicMock()
+    registry.can_convert_full.return_value = True
+
+    ok, needs_conv, reason = is_format_compatible(
+        "OPENAI_CLI",
+        "OPENAI",
+        endpoint_format_acceptance_config=None,  # 无端点配置
+        is_stream=False,
+        global_conversion_enabled=True,
+        registry=registry,
+    )
+    assert ok is False
+    assert needs_conv is False
+    assert reason and "未配置" in reason

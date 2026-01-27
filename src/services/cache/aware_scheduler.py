@@ -659,9 +659,8 @@ class CacheAwareScheduler:
             return [], global_model_id
 
         # 2. 构建候选列表（传入 is_stream 和 capability_requirements 用于过滤）
-        global_conversion_enabled = bool(
-            SystemConfigService.get_config(db, "format_conversion_enabled", False)
-        )
+        from src.config.settings import config
+        global_conversion_enabled = config.format_conversion_enabled
         candidates = await self._build_candidates(
             db=db,
             providers=providers,

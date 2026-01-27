@@ -147,6 +147,13 @@ class Config:
         # HTTP_REQUEST_TIMEOUT: 非流式请求整体超时（秒），默认 300 秒
         self.http_request_timeout = float(os.getenv("HTTP_REQUEST_TIMEOUT", "300.0"))
 
+        # 格式转换配置
+        # FORMAT_CONVERSION_ENABLED: 全局格式转换总开关，默认开启
+        # 注意：即使开启，也需要端点配置 format_acceptance_config.enabled=true 才能生效
+        self.format_conversion_enabled = os.getenv(
+            "FORMAT_CONVERSION_ENABLED", "true"
+        ).lower() == "true"
+
         # HTTP 连接池配置
         # HTTP_MAX_CONNECTIONS: 最大连接数，影响并发能力
         #   - 每个连接占用一个 socket，过多会耗尽系统资源

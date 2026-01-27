@@ -99,9 +99,10 @@ def _get_formats_for_api(api_format: str) -> list[str]:
         return _OPENAI_FORMATS
 
 
-def _is_format_conversion_enabled(db: Session) -> bool:
-    """检查全局格式转换开关"""
-    return bool(SystemConfigService.get_config(db, "format_conversion_enabled", False))
+def _is_format_conversion_enabled() -> bool:
+    """检查全局格式转换开关（从环境变量读取，默认开启）"""
+    from src.config.settings import config
+    return config.format_conversion_enabled
 
 
 def _get_convertible_formats(client_format: str, global_conversion_enabled: bool) -> list[str]:
@@ -511,7 +512,7 @@ async def list_models(
     restrictions = AccessRestrictions.from_api_key_and_user(key_record, user)
 
     # 获取可用格式（包括可转换的格式）
-    global_conversion_enabled = _is_format_conversion_enabled(db)
+    global_conversion_enabled = _is_format_conversion_enabled()
     candidate_formats = _get_convertible_formats(api_format, global_conversion_enabled)
     candidate_formats, empty_response = _filter_formats_by_restrictions(
         candidate_formats, restrictions, api_format
@@ -615,7 +616,7 @@ async def retrieve_model(
     restrictions = AccessRestrictions.from_api_key_and_user(key_record, user)
 
     # 获取可用格式（包括可转换的格式）
-    global_conversion_enabled = _is_format_conversion_enabled(db)
+    global_conversion_enabled = _is_format_conversion_enabled()
     candidate_formats = _get_convertible_formats(api_format, global_conversion_enabled)
     candidate_formats, _ = _filter_formats_by_restrictions(
         candidate_formats, restrictions, api_format
@@ -700,7 +701,7 @@ async def list_models_gemini(
     restrictions = AccessRestrictions.from_api_key_and_user(key_record, user)
 
     # 获取可用格式（包括可转换的格式）
-    global_conversion_enabled = _is_format_conversion_enabled(db)
+    global_conversion_enabled = _is_format_conversion_enabled()
     candidate_formats = _get_convertible_formats("gemini", global_conversion_enabled)
     candidate_formats, empty_response = _filter_formats_by_restrictions(
         candidate_formats, restrictions, "gemini"
@@ -781,7 +782,7 @@ async def get_model_gemini(
     restrictions = AccessRestrictions.from_api_key_and_user(key_record, user)
 
     # 获取可用格式（包括可转换的格式）
-    global_conversion_enabled = _is_format_conversion_enabled(db)
+    global_conversion_enabled = _is_format_conversion_enabled()
     candidate_formats = _get_convertible_formats("gemini", global_conversion_enabled)
     candidate_formats, _ = _filter_formats_by_restrictions(
         candidate_formats, restrictions, "gemini"

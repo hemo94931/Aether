@@ -862,8 +862,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 使用增量解码器处理跨 chunk 的 UTF-8 字符
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
-            # 检查是否需要格式转换
-            needs_conversion = self._needs_format_conversion(ctx)
+            # 使用已设置的 ctx.needs_conversion（由候选筛选阶段根据端点配置判断）
+            # 不再调用 _needs_format_conversion，它只检查格式差异，不检查端点配置
+            needs_conversion = ctx.needs_conversion
 
             async for chunk in stream_response.aiter_bytes():
                 buffer += chunk
@@ -1224,8 +1225,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
             # 使用增量解码器处理跨 chunk 的 UTF-8 字符
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
-            # 检查是否需要格式转换
-            needs_conversion = self._needs_format_conversion(ctx)
+            # 使用已设置的 ctx.needs_conversion（由候选筛选阶段根据端点配置判断）
+            # 不再调用 _needs_format_conversion，它只检查格式差异，不检查端点配置
+            needs_conversion = ctx.needs_conversion
 
             # 先处理预读的字节块
             for chunk in prefetched_chunks:
@@ -2394,7 +2396,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
 
     def _needs_format_conversion(self, ctx: StreamContext) -> bool:
         """
-        检查是否需要进行格式转换
+        [已废弃] 仅根据格式差异判断是否需要转换
+
+        警告：此方法只检查格式是否不同，不检查端点的 format_acceptance_config 配置！
+        正确的判断应使用候选筛选阶段的结果（ctx.needs_conversion），该结果由
+        is_format_compatible() 函数根据全局开关和端点配置计算得出。
+
+        此方法保留仅供调试和日志输出使用，流生成器中不应调用此方法。
 
         当 Provider 的 API 格式与客户端请求的 API 格式不同时，需要转换响应。
         例如：客户端请求 Claude 格式，但 Provider 返回 OpenAI 格式。

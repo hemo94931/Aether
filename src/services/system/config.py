@@ -118,10 +118,6 @@ class SystemConfigService:
             "value": "cache_affinity",
             "description": "调度模式：fixed_order(固定顺序模式，严格按优先级顺序) 或 cache_affinity(缓存亲和模式，优先使用已缓存的Provider)",
         },
-        "format_conversion_enabled": {
-            "value": False,
-            "description": "是否启用全局格式自动转换（需要端点配置 format_acceptance_config 才能生效）",
-        },
         "auto_delete_expired_keys": {
             "value": False,
             "description": "是否自动删除过期的API Key（True=物理删除，False=仅禁用），仅管理员可配置",
