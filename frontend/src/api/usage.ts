@@ -201,6 +201,9 @@ export const usageApi = {
       first_byte_time_ms: number | null
       provider?: string | null
       api_key_name?: string | null
+      api_format?: string | null
+      endpoint_api_format?: string | null
+      has_format_conversion?: boolean | null
     }>
   }> {
     const params = ids?.length ? { ids: ids.join(',') } : {}

@@ -290,6 +290,10 @@ async function pollActiveRequests() {
       record.rate_multiplier = update.rate_multiplier ?? undefined
       record.response_time_ms = update.response_time_ms ?? undefined
       record.first_byte_time_ms = update.first_byte_time_ms ?? undefined
+      // API 格式/格式转换：streaming 时已可确定，轮询时同步更新
+      if (update.api_format !== undefined) record.api_format = update.api_format
+      if (update.endpoint_api_format !== undefined) record.endpoint_api_format = update.endpoint_api_format
+      if (update.has_format_conversion !== undefined) record.has_format_conversion = update.has_format_conversion
       // 管理员接口返回额外字段
       if ('provider' in update && typeof update.provider === 'string') {
         record.provider = update.provider

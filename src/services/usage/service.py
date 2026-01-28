@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from src.core.api_format.metadata import can_passthrough
 from src.core.logger import logger
 from src.models.database import ApiKey, Provider, ProviderAPIKey, Usage, User, UserRole
 from src.services.model.cost import ModelCostService
@@ -1959,6 +1960,10 @@ class UsageService:
             Usage.first_byte_time_ms,  # 首字时间 (TTFB)
             Usage.created_at,
             Usage.provider_endpoint_id,
+            # API 格式 / 格式转换（streaming 状态时已可确定）
+            Usage.api_format,
+            Usage.endpoint_api_format,
+            Usage.has_format_conversion,
         )
 
         # 管理员轮询：可附带 provider 与上游 key 名称（注意：不要在普通用户接口暴露上游 key 信息）
@@ -2008,6 +2013,18 @@ class UsageService:
 
         result: List[Dict[str, Any]] = []
         for r in records:
+            api_format = getattr(r, "api_format", None)
+            endpoint_api_format = getattr(r, "endpoint_api_format", None)
+            has_format_conversion = getattr(r, "has_format_conversion", None)
+
+            # 兼容历史数据：当 streaming 状态已拿到两个格式但 has_format_conversion 为空时，回填推断结果
+            if (
+                has_format_conversion is None
+                and api_format
+                and endpoint_api_format
+            ):
+                has_format_conversion = not can_passthrough(api_format, endpoint_api_format)
+
             item: Dict[str, Any] = {
                 "id": r.id,
                 "status": "failed" if r.id in timeout_ids else r.status,
@@ -2021,6 +2038,12 @@ class UsageService:
                 "response_time_ms": r.response_time_ms,
                 "first_byte_time_ms": r.first_byte_time_ms,  # 首字时间 (TTFB)
             }
+            if api_format:
+                item["api_format"] = api_format
+            if endpoint_api_format:
+                item["endpoint_api_format"] = endpoint_api_format
+            if has_format_conversion is not None:
+                item["has_format_conversion"] = bool(has_format_conversion)
             if include_admin_fields:
                 item["provider"] = r.provider_name
                 item["api_key_name"] = r.api_key_name

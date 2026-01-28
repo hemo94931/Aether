@@ -223,6 +223,9 @@ export const meApi = {
       rate_multiplier?: number | null
       response_time_ms: number | null
       first_byte_time_ms: number | null
+      api_format?: string | null
+      endpoint_api_format?: string | null
+      has_format_conversion?: boolean | null
     }>
   }> {
     const params = ids ? { ids } : {}
