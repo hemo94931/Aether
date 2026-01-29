@@ -180,7 +180,9 @@
                       >
                         <Select
                           :model-value="rule.action"
+                          :open="ruleSelectOpen[`${endpoint.id}-${index}`]"
                           @update:model-value="(v) => updateEndpointRuleAction(endpoint.id, index, v as 'set' | 'drop' | 'rename')"
+                          @update:open="(v) => handleRuleSelectOpen(endpoint.id, index, v)"
                         >
                           <SelectTrigger class="w-24 h-8 text-xs shrink-0">
                             <SelectValue />
@@ -301,7 +303,8 @@
             <Label class="text-xs text-muted-foreground">API 格式</Label>
             <Select
               v-model="newEndpoint.api_format"
-              v-model:open="formatSelectOpen"
+              :open="formatSelectOpen"
+              @update:open="handleFormatSelectOpen"
             >
               <SelectTrigger class="h-8">
                 <SelectValue placeholder="选择格式" />
@@ -438,6 +441,32 @@ const emit = defineEmits<{
 }>()
 
 const { success, error: showError } = useToast()
+
+// 规则 Select 的展开状态（与 Collapsible 分开管理）
+const ruleSelectOpen = ref<Record<string, boolean>>({})
+
+// 打开规则选择器时关闭其他所有下拉
+function handleRuleSelectOpen(endpointId: string, index: number, open: boolean) {
+  if (open) {
+    formatSelectOpen.value = false
+    // 关闭其他 Select
+    Object.keys(ruleSelectOpen.value).forEach(key => {
+      ruleSelectOpen.value[key] = false
+    })
+  }
+  ruleSelectOpen.value[`${endpointId}-${index}`] = open
+}
+
+// 打开格式选择器时关闭其他所有下拉
+function handleFormatSelectOpen(open: boolean) {
+  if (open) {
+    // 关闭所有规则 Select
+    Object.keys(ruleSelectOpen.value).forEach(key => {
+      ruleSelectOpen.value[key] = false
+    })
+  }
+  formatSelectOpen.value = open
+}
 
 // 状态
 const addingEndpoint = ref(false)
