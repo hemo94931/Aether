@@ -24,10 +24,12 @@ COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/
 COPY --from=builder /usr/local/bin/alembic /usr/local/bin/
 # 从 builder 阶段复制前端构建产物
 COPY --from=builder /app/frontend/dist /usr/share/nginx/html
+RUN chmod -R 755 /usr/share/nginx/html
 # 复制后端代码
 COPY src/ ./src/
 COPY alembic.ini ./
 COPY alembic/ ./alembic/
+COPY gunicorn_conf.py ./
 # Nginx 配置模板
 # 智能处理 IP：有外层代理头就透传，没有就用直连 IP
 RUN printf '%s\n' \
@@ -123,7 +125,7 @@ RUN printf '%s\n' \
 'stderr_logfile=/var/log/nginx/error.log' \
 '' \
 '[program:app]' \
-'command=gunicorn src.main:app --preload -w %(ENV_GUNICORN_WORKERS)s -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:8084 --timeout 120 --access-logfile - --error-logfile - --log-level info' \
+'command=gunicorn src.main:app -c gunicorn_conf.py --preload -w %(ENV_GUNICORN_WORKERS)s -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:8084 --timeout 120 --max-requests 2000 --max-requests-jitter 100 --access-logfile - --error-logfile - --log-level info' \
 'directory=/app' \
 'autostart=true' \
 'autorestart=true' \

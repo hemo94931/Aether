@@ -45,9 +45,6 @@ services:
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
       # 容器级别设置
       TZ: Asia/Shanghai
-      PYTHONIOENCODING: utf-8
-      LANG: C.UTF-8
-      LC_ALL: C.UTF-8
     depends_on:
       postgres:
         condition: service_healthy
