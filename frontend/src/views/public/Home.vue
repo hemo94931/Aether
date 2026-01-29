@@ -21,8 +21,9 @@
 
     <!-- Header -->
     <header class="sticky top-0 z-50 border-b border-[#cc785c]/10 dark:border-[rgba(227,224,211,0.12)] bg-[#fafaf7]/90 dark:bg-[#191714]/95 backdrop-blur-xl transition-all">
-      <div class="h-14 sm:h-16 flex items-center px-3 sm:px-4 md:px-8">
-        <!-- Left: Logo & Brand -->
+      <!-- Mobile layout (< md): Logo left, buttons right -->
+      <div class="h-14 sm:h-16 flex md:hidden items-center justify-between px-3 sm:px-4">
+        <!-- Logo & Brand -->
         <div
           class="flex items-center gap-2 sm:gap-3 group/logo cursor-pointer shrink-0"
           @click="scrollToSection(0)"
@@ -39,75 +40,141 @@
           </div>
         </div>
 
-        <!-- Center: Navigation (flexible, takes remaining space) -->
-        <nav class="hidden md:flex items-center justify-center gap-2 flex-1 min-w-0">
-          <button
-            v-for="(section, index) in sections"
-            :key="index"
-            class="group relative px-3 py-2 text-sm font-medium transition"
-            :class="currentSection === index
-              ? 'text-[#cc785c] dark:text-[#d4a27f]'
-              : 'text-[#666663] dark:text-muted-foreground hover:text-[#191919] dark:hover:text-white'"
-            @click="scrollToSection(index)"
-          >
-            {{ section.name }}
-            <div
-              class="absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-all duration-300"
-              :class="currentSection === index ? 'bg-[#cc785c] dark:bg-[#d4a27f] scale-x-100' : 'bg-transparent scale-x-0'"
-            />
-          </button>
-        </nav>
-
-        <!-- Spacer for mobile (when nav is hidden) -->
-        <div class="flex-1 md:hidden" />
-
-        <!-- Right: Login/Dashboard Button + Icons -->
-        <div class="flex items-center gap-1 sm:gap-2 shrink-0">
-          <!-- Login/Dashboard Button -->
+        <!-- Right: Login + Icons -->
+        <div class="flex items-center gap-2">
           <RouterLink
             v-if="authStore.isAuthenticated"
             :to="dashboardPath"
-            class="min-w-[60px] sm:min-w-[72px] text-center rounded-lg sm:rounded-xl bg-[#191919] dark:bg-[#cc785c] px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-white shadow-sm transition hover:bg-[#262625] dark:hover:bg-[#b86d52] whitespace-nowrap"
+            class="min-w-[60px] text-center rounded-lg bg-[#191919] dark:bg-[#cc785c] px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-[#262625] dark:hover:bg-[#b86d52] whitespace-nowrap"
           >
             控制台
           </RouterLink>
           <button
             v-else
-            class="min-w-[60px] sm:min-w-[72px] text-center rounded-lg sm:rounded-xl bg-[#cc785c] px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-white shadow-lg shadow-[#cc785c]/30 transition hover:bg-[#d4a27f] whitespace-nowrap"
+            class="min-w-[60px] text-center rounded-lg bg-[#cc785c] px-3 py-1.5 text-xs font-medium text-white shadow-lg shadow-[#cc785c]/30 transition hover:bg-[#d4a27f] whitespace-nowrap"
             @click="showLoginDialog = true"
           >
             登录
           </button>
-          <!-- Theme Toggle + GitHub Icons -->
-          <div class="flex items-center gap-0.5 sm:gap-1 ml-0.5 sm:ml-1 md:ml-3 lg:ml-4">
+          <button
+            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition"
+            :title="themeMode === 'system' ? '跟随系统' : themeMode === 'dark' ? '深色模式' : '浅色模式'"
+            @click="toggleDarkMode"
+          >
+            <SunMoon
+              v-if="themeMode === 'system'"
+              class="h-3.5 w-3.5"
+            />
+            <Sun
+              v-else-if="themeMode === 'light'"
+              class="h-3.5 w-3.5"
+            />
+            <Moon
+              v-else
+              class="h-3.5 w-3.5"
+            />
+          </button>
+          <a
+            href="https://github.com/fawney19/Aether"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition"
+            title="GitHub 仓库"
+          >
+            <GithubIcon class="h-3.5 w-3.5" />
+          </a>
+        </div>
+      </div>
+
+      <!-- Desktop layout (>= md): Centered nav with balanced spacing -->
+      <div class="h-16 hidden md:flex items-center justify-between px-8">
+        <!-- Left spacer for balance (matches right icons width) -->
+        <div class="w-[76px] shrink-0" />
+
+        <!-- Center: Logo + Nav + Login Button -->
+        <div class="flex items-center">
+          <!-- Logo & Brand -->
+          <div
+            class="flex items-center gap-3 group/logo cursor-pointer shrink-0"
+            @click="scrollToSection(0)"
+          >
+            <HeaderLogo
+              size="h-9 w-9"
+              class-name="text-[#191919] dark:text-white"
+            />
+            <div class="flex flex-col justify-center">
+              <h1 class="text-lg font-bold text-[#191919] dark:text-white leading-none">
+                Aether
+              </h1>
+              <span class="text-[10px] text-[#91918d] dark:text-muted-foreground leading-none mt-1.5 font-medium tracking-wide">AI Gateway</span>
+            </div>
+          </div>
+
+          <!-- Navigation -->
+          <nav class="flex items-center gap-2 mx-16 lg:mx-28">
             <button
-              class="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition"
-              :title="themeMode === 'system' ? '跟随系统' : themeMode === 'dark' ? '深色模式' : '浅色模式'"
-              @click="toggleDarkMode"
+              v-for="(section, index) in sections"
+              :key="index"
+              class="group relative px-3 py-2 text-sm font-medium transition"
+              :class="currentSection === index
+                ? 'text-[#cc785c] dark:text-[#d4a27f]'
+                : 'text-[#666663] dark:text-muted-foreground hover:text-[#191919] dark:hover:text-white'"
+              @click="scrollToSection(index)"
             >
-              <SunMoon
-                v-if="themeMode === 'system'"
-                class="h-3.5 w-3.5 sm:h-4 sm:w-4"
-              />
-              <Sun
-                v-else-if="themeMode === 'light'"
-                class="h-3.5 w-3.5 sm:h-4 sm:w-4"
-              />
-              <Moon
-                v-else
-                class="h-3.5 w-3.5 sm:h-4 sm:w-4"
+              {{ section.name }}
+              <div
+                class="absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-all duration-300"
+                :class="currentSection === index ? 'bg-[#cc785c] dark:bg-[#d4a27f] scale-x-100' : 'bg-transparent scale-x-0'"
               />
             </button>
-            <a
-              href="https://github.com/fawney19/Aether"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition"
-              title="GitHub 仓库"
-            >
-              <GithubIcon class="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-            </a>
-          </div>
+          </nav>
+
+          <!-- Login/Dashboard Button -->
+          <RouterLink
+            v-if="authStore.isAuthenticated"
+            :to="dashboardPath"
+            class="min-w-[72px] text-center rounded-xl bg-[#191919] dark:bg-[#cc785c] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#262625] dark:hover:bg-[#b86d52] whitespace-nowrap"
+          >
+            控制台
+          </RouterLink>
+          <button
+            v-else
+            class="min-w-[72px] text-center rounded-xl bg-[#cc785c] px-4 py-2 text-sm font-medium text-white shadow-lg shadow-[#cc785c]/30 transition hover:bg-[#d4a27f] whitespace-nowrap"
+            @click="showLoginDialog = true"
+          >
+            登录
+          </button>
+        </div>
+
+        <!-- Right: Theme Toggle + GitHub Icons -->
+        <div class="flex items-center gap-1 shrink-0">
+          <button
+            class="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition"
+            :title="themeMode === 'system' ? '跟随系统' : themeMode === 'dark' ? '深色模式' : '浅色模式'"
+            @click="toggleDarkMode"
+          >
+            <SunMoon
+              v-if="themeMode === 'system'"
+              class="h-4 w-4"
+            />
+            <Sun
+              v-else-if="themeMode === 'light'"
+              class="h-4 w-4"
+            />
+            <Moon
+              v-else
+              class="h-4 w-4"
+            />
+          </button>
+          <a
+            href="https://github.com/fawney19/Aether"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition"
+            title="GitHub 仓库"
+          >
+            <GithubIcon class="h-4 w-4" />
+          </a>
         </div>
       </div>
     </header>
