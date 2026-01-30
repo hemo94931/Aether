@@ -10,13 +10,26 @@ API 格式核心模块
 - utils.py: 工具函数（is_cli_format, get_base_format 等）
 - detection.py: 格式检测（从请求头、响应内容检测格式）
 """
+
+from src.core.api_format.auth import (
+    ApiKeyAuthHandler,
+    AuthHandler,
+    BearerAuthHandler,
+    GoogApiKeyAuthHandler,
+    OAuth2AuthHandler,
+    QueryKeyAuthHandler,
+    get_auth_handler,
+    get_default_auth_method,
+)
 from src.core.api_format.detection import (
+    RequestContext,
     detect_cli_format_from_path,
     detect_format_and_key_from_starlette,
     detect_format_from_request,
     detect_format_from_response,
+    detect_request_context,
 )
-from src.core.api_format.enums import APIFormat
+from src.core.api_format.enums import APIFormat, AuthMethod, EndpointType
 from src.core.api_format.headers import (
     CORE_REDACT_HEADERS,
     HOP_BY_HOP_HEADERS,
@@ -65,6 +78,8 @@ from src.core.api_format.utils import (
 __all__ = [
     # Enums
     "APIFormat",
+    "AuthMethod",
+    "EndpointType",
     # Metadata
     "ApiFormatDefinition",
     "API_FORMAT_DEFINITIONS",
@@ -111,4 +126,15 @@ __all__ = [
     "detect_format_and_key_from_starlette",
     "detect_format_from_response",
     "detect_cli_format_from_path",
+    "detect_request_context",
+    "RequestContext",
+    # Auth
+    "AuthHandler",
+    "BearerAuthHandler",
+    "ApiKeyAuthHandler",
+    "GoogApiKeyAuthHandler",
+    "OAuth2AuthHandler",
+    "QueryKeyAuthHandler",
+    "get_auth_handler",
+    "get_default_auth_method",
 ]

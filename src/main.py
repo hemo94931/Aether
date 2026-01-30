@@ -5,9 +5,8 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from contextlib import asynccontextmanager
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -30,10 +29,8 @@ from src.core.exceptions import ExceptionHandlers, ProxyException
 from src.core.logger import logger
 from src.core.modules import get_module_registry
 from src.database import init_db
-
 from src.middleware.plugin_middleware import PluginMiddleware
 from src.plugins.manager import get_plugin_manager
-
 
 
 async def initialize_providers() -> None:
@@ -131,7 +128,9 @@ async def lifespan(app: FastAPI) -> Any:
         if redis_client:
             logger.info("[OK] Redis客户端初始化成功，缓存亲和性功能已启用")
         else:
-            logger.warning("[WARN] Redis未启用或连接失败，将使用内存缓存亲和性（仅适用于单实例/开发环境）")
+            logger.warning(
+                "[WARN] Redis未启用或连接失败，将使用内存缓存亲和性（仅适用于单实例/开发环境）"
+            )
     except RuntimeError as e:
         if config.require_redis:
             logger.exception("[ERROR] Redis连接失败，应用启动中止")
@@ -201,14 +200,16 @@ async def lifespan(app: FastAPI) -> Any:
 
     # 启动月卡额度重置调度器（仅一个 worker 执行）
     logger.info("启动月卡额度重置调度器...")
+    from src.services.model.fetch_scheduler import get_model_fetch_scheduler
     from src.services.system.maintenance_scheduler import get_maintenance_scheduler
     from src.services.usage.quota_scheduler import get_quota_scheduler
-    from src.services.model.fetch_scheduler import get_model_fetch_scheduler
+    from src.services.video.task_poller import get_video_task_poller
     from src.utils.task_coordinator import StartupTaskCoordinator
 
     quota_scheduler = get_quota_scheduler()
     maintenance_scheduler = get_maintenance_scheduler()
     model_fetch_scheduler = get_model_fetch_scheduler()
+    video_task_poller = get_video_task_poller()
     task_coordinator = StartupTaskCoordinator(redis_client)
 
     # 启动额度调度器
@@ -236,6 +237,15 @@ async def lifespan(app: FastAPI) -> Any:
     else:
         logger.info("检测到其他 worker 已运行模型获取调度器，本实例跳过")
         model_fetch_scheduler = None  # type: ignore[assignment]
+
+    # 启动视频任务轮询服务
+    video_poller_active = await task_coordinator.acquire("video_task_poller")
+    if video_poller_active:
+        logger.info("启动视频任务轮询服务...")
+        await video_task_poller.start()
+    else:
+        logger.info("检测到其他 worker 已运行视频任务轮询，本实例跳过")
+        video_task_poller = None  # type: ignore[assignment]
 
     # 启动统一的定时任务调度器
     from src.services.system.scheduler import get_scheduler
@@ -285,6 +295,11 @@ async def lifespan(app: FastAPI) -> Any:
         logger.info("停止模型自动获取调度器...")
         await model_fetch_scheduler.stop()
         await task_coordinator.release("model_fetch_scheduler")
+
+    if video_task_poller:
+        logger.info("停止视频任务轮询...")
+        await video_task_poller.stop()
+        await task_coordinator.release("video_task_poller")
 
     # 停止统一的定时任务调度器
     logger.info("停止定时任务调度器...")
@@ -411,7 +426,7 @@ app = FastAPI(
     docs_url="/docs" if config.docs_enabled else None,
     redoc_url="/redoc" if config.docs_enabled else None,
     openapi_url="/openapi.json" if config.docs_enabled else None,
-    openapi_tags=openapi_tags
+    openapi_tags=openapi_tags,
 )
 
 # 注册全局异常处理器
@@ -456,7 +471,6 @@ app.include_router(announcement_router)  # 公告系统
 app.include_router(dashboard_router)  # 仪表盘端点
 app.include_router(public_router)  # 公开API端点（用户可查看提供商和模型）
 app.include_router(monitoring_router)  # 监控端点
-
 
 
 def main() -> Any:

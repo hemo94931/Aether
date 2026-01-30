@@ -7,10 +7,14 @@ Gemini API Handler 模块
 from src.api.handlers.gemini.adapter import GeminiChatAdapter, build_gemini_adapter
 from src.api.handlers.gemini.handler import GeminiChatHandler
 from src.api.handlers.gemini.stream_parser import GeminiStreamParser
+from src.api.handlers.gemini.video_adapter import GeminiVeoAdapter
+from src.api.handlers.gemini.video_handler import GeminiVeoHandler
 
 __all__ = [
     "GeminiChatAdapter",
     "GeminiChatHandler",
     "GeminiStreamParser",
     "build_gemini_adapter",
+    "GeminiVeoAdapter",
+    "GeminiVeoHandler",
 ]

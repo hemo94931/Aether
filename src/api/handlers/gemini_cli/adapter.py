@@ -15,7 +15,8 @@ from src.api.handlers.base.cli_adapter_base import CliAdapterBase, register_cli_
 from src.api.handlers.base.cli_handler_base import CliMessageHandlerBase
 from src.api.handlers.gemini.adapter import GeminiChatAdapter
 from src.config.settings import config
-from src.core.api_format import extract_client_api_key_with_query
+from src.core.api_format import get_auth_handler
+from src.core.api_format.enums import AuthMethod
 
 
 @register_cli_adapter
@@ -48,11 +49,8 @@ class GeminiCliAdapter(CliAdapterBase):
         1. URL 参数 ?key=
         2. x-goog-api-key 请求头
         """
-        return extract_client_api_key_with_query(
-            dict(request.headers),
-            dict(request.query_params),
-            self._get_api_format(),
-        )
+        handler = get_auth_handler(AuthMethod.GOOG_API_KEY)
+        return handler.extract_credentials(request)
 
     def _merge_path_params(
         self, original_request_body: dict[str, Any], path_params: dict[str, Any]  # noqa: ARG002
@@ -129,16 +127,16 @@ class GeminiCliAdapter(CliAdapterBase):
         cli_headers = {"User-Agent": config.internal_user_agent_gemini_cli}
         if extra_headers:
             cli_headers.update(extra_headers)
-        models, error = await GeminiChatAdapter.fetch_models(
-            client, base_url, api_key, cli_headers
-        )
+        models, error = await GeminiChatAdapter.fetch_models(client, base_url, api_key, cli_headers)
         # 更新 api_format 为 CLI 格式
         for m in models:
             m["api_format"] = cls.FORMAT_ID
         return models, error
 
     @classmethod
-    def build_endpoint_url(cls, base_url: str, request_data: dict[str, Any], model_name: str | None = None) -> str:
+    def build_endpoint_url(
+        cls, base_url: str, request_data: dict[str, Any], model_name: str | None = None
+    ) -> str:
         """构建Gemini CLI API端点URL"""
         effective_model_name = model_name or request_data.get("model", "")
         if not effective_model_name:

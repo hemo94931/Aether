@@ -1,4 +1,4 @@
-""" 
+"""
 Gemini (GenerateContent / streamGenerateContent) Normalizer
 
 负责：
@@ -10,7 +10,6 @@ Gemini (GenerateContent / streamGenerateContent) Normalizer
 - 请求体字段在本项目中同时兼容 snake_case（历史转换器产物）与 camelCase（官方/客户端输入）。
 - 响应/流式通常为 camelCase（candidates/finishReason/usageMetadata/modelVersion）。
 """
-
 
 import json
 from typing import Any
@@ -42,6 +41,12 @@ from src.core.api_format.conversion.internal import (
     ToolUseBlock,
     UnknownBlock,
     UsageInfo,
+)
+from src.core.api_format.conversion.internal_video import (
+    InternalVideoPollResult,
+    InternalVideoRequest,
+    InternalVideoTask,
+    VideoStatus,
 )
 from src.core.api_format.conversion.normalizer import FormatNormalizer
 from src.core.api_format.conversion.stream_events import (
@@ -111,7 +116,9 @@ class GeminiNormalizer(FormatNormalizer):
         if isinstance(contents, list):
             for content in contents:
                 if not isinstance(content, dict):
-                    dropped["gemini_content_non_dict"] = dropped.get("gemini_content_non_dict", 0) + 1
+                    dropped["gemini_content_non_dict"] = (
+                        dropped.get("gemini_content_non_dict", 0) + 1
+                    )
                     continue
                 imsg, md = self._content_to_internal_message(content)
                 self._merge_dropped(dropped, md)
@@ -128,9 +135,7 @@ class GeminiNormalizer(FormatNormalizer):
             else None
         )
         temperature = self._optional_float(
-            generation_config.get("temperature")
-            if isinstance(generation_config, dict)
-            else None
+            generation_config.get("temperature") if isinstance(generation_config, dict) else None
         )
         top_p = self._optional_float(
             generation_config.get("top_p") if isinstance(generation_config, dict) else None
@@ -144,9 +149,7 @@ class GeminiNormalizer(FormatNormalizer):
 
         tools = self._gemini_tools_to_internal(request.get("tools"))
         tool_choice = self._gemini_tool_config_to_tool_choice(
-            request.get("tool_config")
-            if "tool_config" in request
-            else request.get("toolConfig")
+            request.get("tool_config") if "tool_config" in request else request.get("toolConfig")
         )
 
         # 构建 extra，保留原始 gemini 字段
@@ -253,9 +256,15 @@ class GeminiNormalizer(FormatNormalizer):
             orig_gc = gemini_extra.get("generation_config") or gemini_extra.get("generationConfig")
             if isinstance(orig_gc, dict):
                 # responseModalities
-                if "responseModalities" in orig_gc and "responseModalities" not in generation_config:
+                if (
+                    "responseModalities" in orig_gc
+                    and "responseModalities" not in generation_config
+                ):
                     generation_config["responseModalities"] = orig_gc["responseModalities"]
-                if "response_modalities" in orig_gc and "responseModalities" not in generation_config:
+                if (
+                    "response_modalities" in orig_gc
+                    and "responseModalities" not in generation_config
+                ):
                     generation_config["responseModalities"] = orig_gc["response_modalities"]
                 # thinkingConfig
                 if "thinkingConfig" in orig_gc and "thinkingConfig" not in generation_config:
@@ -370,14 +379,19 @@ class GeminiNormalizer(FormatNormalizer):
 
         finish_reason = None
         if internal.stop_reason is not None:
-            finish_reason = STOP_REASON_MAPPINGS.get("GEMINI", {}).get(internal.stop_reason.value, "OTHER")
+            finish_reason = STOP_REASON_MAPPINGS.get("GEMINI", {}).get(
+                internal.stop_reason.value, "OTHER"
+            )
 
         usage_metadata: dict[str, Any] = {}
         if internal.usage:
             usage_metadata = {
                 "promptTokenCount": int(internal.usage.input_tokens),
                 "candidatesTokenCount": int(internal.usage.output_tokens),
-                "totalTokenCount": int(internal.usage.total_tokens or (internal.usage.input_tokens + internal.usage.output_tokens)),
+                "totalTokenCount": int(
+                    internal.usage.total_tokens
+                    or (internal.usage.input_tokens + internal.usage.output_tokens)
+                ),
             }
             if internal.usage.cache_read_tokens:
                 usage_metadata["cachedContentTokenCount"] = int(internal.usage.cache_read_tokens)
@@ -410,7 +424,9 @@ class GeminiNormalizer(FormatNormalizer):
     # Streaming
     # =========================
 
-    def stream_chunk_to_internal(self, chunk: dict[str, Any], state: StreamState) -> list[InternalStreamEvent]:
+    def stream_chunk_to_internal(
+        self, chunk: dict[str, Any], state: StreamState
+    ) -> list[InternalStreamEvent]:
         ss = state.substate(self.FORMAT_ID)
         events: list[InternalStreamEvent] = []
 
@@ -457,7 +473,9 @@ class GeminiNormalizer(FormatNormalizer):
                     if delta:
                         if not ss.get("text_block_started"):
                             ss["text_block_started"] = True
-                            events.append(ContentBlockStartEvent(block_index=0, block_type=ContentType.TEXT))
+                            events.append(
+                                ContentBlockStartEvent(block_index=0, block_type=ContentType.TEXT)
+                            )
                         events.append(ContentDeltaEvent(block_index=0, text_delta=delta))
                     continue
 
@@ -500,7 +518,9 @@ class GeminiNormalizer(FormatNormalizer):
                     inline_data = part.get("inline_data")
 
                 if isinstance(inline_data, dict):
-                    mime_type = str(inline_data.get("mimeType") or inline_data.get("mime_type") or "").strip()
+                    mime_type = str(
+                        inline_data.get("mimeType") or inline_data.get("mime_type") or ""
+                    ).strip()
                     data = str(inline_data.get("data") or "").strip()
 
                     # 确保 mime_type 和 data 都非空
@@ -635,7 +655,9 @@ class GeminiNormalizer(FormatNormalizer):
         if isinstance(event, MessageStopEvent):
             finish_reason = None
             if event.stop_reason is not None:
-                finish_reason = STOP_REASON_MAPPINGS.get("GEMINI", {}).get(event.stop_reason.value, "OTHER")
+                finish_reason = STOP_REASON_MAPPINGS.get("GEMINI", {}).get(
+                    event.stop_reason.value, "OTHER"
+                )
 
             chunk: dict[str, Any] = base_chunk([])
             if finish_reason is not None:
@@ -645,10 +667,15 @@ class GeminiNormalizer(FormatNormalizer):
                 chunk["usageMetadata"] = {
                     "promptTokenCount": int(event.usage.input_tokens),
                     "candidatesTokenCount": int(event.usage.output_tokens),
-                    "totalTokenCount": int(event.usage.total_tokens or (event.usage.input_tokens + event.usage.output_tokens)),
+                    "totalTokenCount": int(
+                        event.usage.total_tokens
+                        or (event.usage.input_tokens + event.usage.output_tokens)
+                    ),
                 }
                 if event.usage.cache_read_tokens:
-                    chunk["usageMetadata"]["cachedContentTokenCount"] = int(event.usage.cache_read_tokens)
+                    chunk["usageMetadata"]["cachedContentTokenCount"] = int(
+                        event.usage.cache_read_tokens
+                    )
 
             out.append(chunk)
             return out
@@ -699,10 +726,170 @@ class GeminiNormalizer(FormatNormalizer):
         return {"error": payload}
 
     # =========================
+    # Video conversion
+    # =========================
+
+    def video_request_to_internal(self, request: dict[str, Any]) -> InternalVideoRequest:
+        instances = request.get("instances")
+        if not instances or not isinstance(instances, list) or len(instances) == 0:
+            raise ValueError("Video request requires at least one instance")
+        instance = instances[0] if isinstance(instances[0], dict) else {}
+        params = request.get("parameters") or {}
+
+        image = instance.get("image") if isinstance(instance, dict) else None
+        image_ref = None
+        if isinstance(image, dict):
+            image_ref = image.get("bytesBase64Encoded")
+
+        prompt = instance.get("prompt") if isinstance(instance, dict) else None
+        prompt_str = str(prompt).strip() if prompt else ""
+        if not prompt_str:
+            raise ValueError("Video prompt is required")
+
+        duration_raw = params.get("durationSeconds")
+        sample_count_raw = params.get("sampleCount")
+
+        try:
+            duration_seconds = int(duration_raw) if duration_raw else 8
+        except (ValueError, TypeError):
+            duration_seconds = 8
+
+        # 安全解析 sampleCount
+        try:
+            sample_count = int(sample_count_raw) if sample_count_raw else 1
+        except (ValueError, TypeError):
+            sample_count = 1
+
+        return InternalVideoRequest(
+            prompt=prompt_str,
+            model=str(request.get("model") or "veo-3.1-generate-preview"),
+            duration_seconds=duration_seconds,
+            aspect_ratio=str(params.get("aspectRatio") or "16:9"),
+            resolution=str(params.get("resolution") or "720p"),
+            reference_image_url=image_ref,
+            extra={
+                "personGeneration": params.get("personGeneration"),
+                "sampleCount": sample_count,
+            },
+        )
+
+    def video_request_from_internal(self, internal: InternalVideoRequest) -> dict[str, Any]:
+        instance: dict[str, Any] = {"prompt": internal.prompt}
+        if internal.reference_image_url:
+            instance["image"] = {"bytesBase64Encoded": internal.reference_image_url}
+
+        parameters: dict[str, Any] = {
+            "aspectRatio": internal.aspect_ratio,
+            "resolution": internal.resolution,
+            "durationSeconds": internal.duration_seconds,
+        }
+        for key in ["personGeneration", "sampleCount"]:
+            if key in internal.extra:
+                parameters[key] = internal.extra[key]
+
+        return {
+            "instances": [instance],
+            "parameters": parameters,
+        }
+
+    def video_task_to_internal(self, response: dict[str, Any]) -> InternalVideoTask:
+        operation_name = str(response.get("name") or "")
+        done = bool(response.get("done"))
+
+        if done:
+            video_response = response.get("response", {}).get("generateVideoResponse", {})
+            samples = video_response.get("generatedSamples", [])
+            video_urls = [
+                s.get("video", {}).get("uri")
+                for s in samples
+                if isinstance(s, dict) and s.get("video", {}).get("uri")
+            ]
+            return InternalVideoTask(
+                id=operation_name.replace("operations/", ""),
+                external_id=operation_name,
+                status=VideoStatus.COMPLETED,
+                progress_percent=100,
+                video_url=video_urls[0] if video_urls else None,
+                video_urls=video_urls,
+                extra={"raw_response": video_response},
+            )
+
+        metadata = response.get("metadata", {})
+        return InternalVideoTask(
+            id=operation_name.replace("operations/", ""),
+            external_id=operation_name,
+            status=VideoStatus.PROCESSING,
+            progress_percent=50,
+            extra={"metadata": metadata},
+        )
+
+    def video_task_from_internal(self, internal: InternalVideoTask) -> dict[str, Any]:
+        # 优先使用 external_id（上游返回的 operation name），否则用内部 id
+        operation_name = internal.external_id or f"operations/{internal.id}"
+        if not operation_name.startswith("operations/"):
+            operation_name = f"operations/{operation_name}"
+
+        if internal.status == VideoStatus.COMPLETED:
+            urls = internal.video_urls or ([internal.video_url] if internal.video_url else [])
+            return {
+                "name": operation_name,
+                "done": True,
+                "response": {
+                    "generateVideoResponse": {
+                        "generatedSamples": [
+                            {"video": {"uri": url, "mimeType": "video/mp4"}} for url in urls
+                        ]
+                    }
+                },
+            }
+
+        return {
+            "name": operation_name,
+            "done": False,
+            "metadata": internal.extra.get("metadata", {}),
+        }
+
+    def video_poll_to_internal(self, response: dict[str, Any]) -> InternalVideoPollResult:
+        done = bool(response.get("done"))
+        if done:
+            error = response.get("error")
+            if error:
+                return InternalVideoPollResult(
+                    status=VideoStatus.FAILED,
+                    error_code=str(error.get("code", "unknown")),
+                    error_message=error.get("message", "Unknown error"),
+                    raw_response=response,
+                )
+
+            video_response = response.get("response", {}).get("generateVideoResponse", {})
+            samples = video_response.get("generatedSamples", [])
+            video_urls = [
+                s.get("video", {}).get("uri")
+                for s in samples
+                if isinstance(s, dict) and s.get("video", {}).get("uri")
+            ]
+            video_url = video_urls[0] if video_urls else None
+            return InternalVideoPollResult(
+                status=VideoStatus.COMPLETED,
+                progress_percent=100,
+                video_url=video_url,
+                video_urls=video_urls,
+                raw_response=response,
+            )
+
+        return InternalVideoPollResult(
+            status=VideoStatus.PROCESSING,
+            progress_percent=50,
+            raw_response=response,
+        )
+
+    # =========================
     # Helpers
     # =========================
 
-    def _content_to_internal_message(self, content: dict[str, Any]) -> tuple[InternalMessage | None, dict[str, int]]:
+    def _content_to_internal_message(
+        self, content: dict[str, Any]
+    ) -> tuple[InternalMessage | None, dict[str, int]]:
         dropped: dict[str, int] = {}
 
         role_raw = str(content.get("role") or "user")
@@ -749,12 +936,16 @@ class GeminiNormalizer(FormatNormalizer):
             if inline is None:
                 inline = part.get("inlineData")
             if isinstance(inline, dict):
-                mime_type = inline.get("mime_type") if "mime_type" in inline else inline.get("mimeType")
+                mime_type = (
+                    inline.get("mime_type") if "mime_type" in inline else inline.get("mimeType")
+                )
                 data = inline.get("data")
                 if isinstance(mime_type, str) and mime_type and isinstance(data, str) and data:
                     blocks.append(ImageBlock(data=data, media_type=mime_type))
                 else:
-                    dropped["gemini_inline_data_invalid"] = dropped.get("gemini_inline_data_invalid", 0) + 1
+                    dropped["gemini_inline_data_invalid"] = (
+                        dropped.get("gemini_inline_data_invalid", 0) + 1
+                    )
                     blocks.append(UnknownBlock(raw_type="inline_data", payload=part))
                 continue
 
@@ -859,7 +1050,9 @@ class GeminiNormalizer(FormatNormalizer):
 
         return {"role": role, "parts": parts}
 
-    def _collapse_system_instruction(self, system_instruction: Any) -> tuple[str | None, dict[str, int]]:
+    def _collapse_system_instruction(
+        self, system_instruction: Any
+    ) -> tuple[str | None, dict[str, int]]:
         dropped: dict[str, int] = {}
         if system_instruction is None:
             return None, dropped
@@ -875,12 +1068,18 @@ class GeminiNormalizer(FormatNormalizer):
                 joined = "".join(texts)
                 return (joined or None), dropped
 
-        dropped["gemini_system_instruction_unsupported"] = dropped.get("gemini_system_instruction_unsupported", 0) + 1
+        dropped["gemini_system_instruction_unsupported"] = (
+            dropped.get("gemini_system_instruction_unsupported", 0) + 1
+        )
         return None, dropped
 
     def _get_generation_config(self, request: dict[str, Any]) -> dict[str, Any]:
         # 兼容 snake_case 与 camelCase
-        gc = request.get("generation_config") if "generation_config" in request else request.get("generationConfig")
+        gc = (
+            request.get("generation_config")
+            if "generation_config" in request
+            else request.get("generationConfig")
+        )
         if not isinstance(gc, dict):
             return {}
 
@@ -936,8 +1135,16 @@ class GeminiNormalizer(FormatNormalizer):
                     ToolDefinition(
                         name=name,
                         description=decl.get("description"),
-                        parameters=decl.get("parameters") if isinstance(decl.get("parameters"), dict) else None,
-                        extra={"gemini_function_declaration": self._extract_extra(decl, {"name", "description", "parameters"})},
+                        parameters=(
+                            decl.get("parameters")
+                            if isinstance(decl.get("parameters"), dict)
+                            else None
+                        ),
+                        extra={
+                            "gemini_function_declaration": self._extract_extra(
+                                decl, {"name", "description", "parameters"}
+                            )
+                        },
                     )
                 )
 
@@ -966,7 +1173,11 @@ class GeminiNormalizer(FormatNormalizer):
         if mode in ("ANY", "REQUIRED"):
             return ToolChoice(type=ToolChoiceType.REQUIRED, extra={"gemini": tool_config})
         if isinstance(allowed, list) and len(allowed) == 1:
-            return ToolChoice(type=ToolChoiceType.TOOL, tool_name=str(allowed[0] or ""), extra={"gemini": tool_config})
+            return ToolChoice(
+                type=ToolChoiceType.TOOL,
+                tool_name=str(allowed[0] or ""),
+                extra={"gemini": tool_config},
+            )
 
         return ToolChoice(type=ToolChoiceType.AUTO, extra={"gemini": tool_config})
 
@@ -1010,7 +1221,9 @@ class GeminiNormalizer(FormatNormalizer):
                 pass
 
         if "total_tokens" not in fields:
-            fields["total_tokens"] = int(fields.get("input_tokens", 0) + fields.get("output_tokens", 0))
+            fields["total_tokens"] = int(
+                fields.get("input_tokens", 0) + fields.get("output_tokens", 0)
+            )
 
         return UsageInfo(
             input_tokens=int(fields.get("input_tokens", 0)),

@@ -7,12 +7,11 @@ OpenAI Chat Completions Normalizer
 - 可选：OpenAI error <-> InternalError
 """
 
-
 import json
 import time
+from datetime import datetime, timezone
 from typing import Any
 
-from src.core.logger import logger
 from src.core.api_format.conversion.field_mappings import (
     ERROR_TYPE_MAPPINGS,
     RETRYABLE_ERROR_TYPES,
@@ -39,6 +38,12 @@ from src.core.api_format.conversion.internal import (
     UnknownBlock,
     UsageInfo,
 )
+from src.core.api_format.conversion.internal_video import (
+    InternalVideoPollResult,
+    InternalVideoRequest,
+    InternalVideoTask,
+    VideoStatus,
+)
 from src.core.api_format.conversion.normalizer import FormatNormalizer
 from src.core.api_format.conversion.stream_events import (
     ContentBlockStartEvent,
@@ -51,6 +56,7 @@ from src.core.api_format.conversion.stream_events import (
     ToolCallDeltaEvent,
 )
 from src.core.api_format.conversion.stream_state import StreamState
+from src.core.logger import logger
 
 
 class OpenAINormalizer(FormatNormalizer):
@@ -79,6 +85,28 @@ class OpenAINormalizer(FormatNormalizer):
         StopReason.TOOL_USE: "tool_calls",
         StopReason.CONTENT_FILTERED: "content_filter",
         StopReason.UNKNOWN: "stop",
+    }
+
+    # 视频尺寸映射: (resolution, aspect_ratio) -> size
+    _VIDEO_SIZE_MAP: dict[tuple[str, str], str] = {
+        ("480p", "16:9"): "854x480",
+        ("480p", "9:16"): "480x854",
+        ("480p", "1:1"): "480x480",
+        ("720p", "16:9"): "1280x720",
+        ("720p", "9:16"): "720x1280",
+        ("720p", "1:1"): "720x720",
+        ("1080p", "16:9"): "1920x1080",
+        ("1080p", "9:16"): "1080x1920",
+        ("1080p", "1:1"): "1080x1080",
+    }
+    # OpenAI Sora 特定尺寸（非标准分辨率，需单独处理）
+    _SORA_SIZE_REVERSE: dict[str, tuple[str, str]] = {
+        "1792x1024": ("1080p", "16:9"),
+        "1024x1792": ("1080p", "9:16"),
+    }
+    _VIDEO_SIZE_REVERSE: dict[str, tuple[str, str]] = {
+        **{value: key for key, value in _VIDEO_SIZE_MAP.items()},
+        **_SORA_SIZE_REVERSE,
     }
 
     # InternalError.type -> OpenAI error.type（最佳努力）
@@ -139,9 +167,7 @@ class OpenAINormalizer(FormatNormalizer):
 
         # 兼容新旧参数名：优先使用 max_completion_tokens，回退到 max_tokens
         mct = request.get("max_completion_tokens")
-        max_tokens_value = self._optional_int(
-            mct if mct is not None else request.get("max_tokens")
-        )
+        max_tokens_value = self._optional_int(mct if mct is not None else request.get("max_tokens"))
 
         # 构建 extra，保留未识别字段
         extra: dict[str, Any] = {"openai": self._extract_extra(request, {"messages"})}
@@ -304,7 +330,9 @@ class OpenAINormalizer(FormatNormalizer):
             message["content"] = content_value
 
         if tool_blocks:
-            message["tool_calls"] = [self._tool_use_block_to_openai_call(b, idx) for idx, b in enumerate(tool_blocks)]
+            message["tool_calls"] = [
+                self._tool_use_block_to_openai_call(b, idx) for idx, b in enumerate(tool_blocks)
+            ]
 
         finish_reason = None
         if internal.stop_reason is not None:
@@ -334,7 +362,9 @@ class OpenAINormalizer(FormatNormalizer):
     # Streaming
     # =========================
 
-    def stream_chunk_to_internal(self, chunk: dict[str, Any], state: StreamState) -> list[InternalStreamEvent]:
+    def stream_chunk_to_internal(
+        self, chunk: dict[str, Any], state: StreamState
+    ) -> list[InternalStreamEvent]:
         ss = state.substate(self.FORMAT_ID)
         events: list[InternalStreamEvent] = []
 
@@ -393,7 +423,9 @@ class OpenAINormalizer(FormatNormalizer):
                 tc_name = str(fn.get("name") or "")
                 tc_args = fn.get("arguments")
 
-                block_index = self._ensure_tool_block_index(ss, tc_id or str(tool_call.get("index") or ""))
+                block_index = self._ensure_tool_block_index(
+                    ss, tc_id or str(tool_call.get("index") or "")
+                )
 
                 # tool start（只在首次见到该 tool_id 时发）
                 started_key = f"tool_started:{block_index}"
@@ -493,7 +525,12 @@ class OpenAINormalizer(FormatNormalizer):
             image_data = event.extra.get("image_data")
             image_media_type = event.extra.get("image_media_type")
             # 确保图片数据有效（base64 数据至少有一定长度）
-            if image_data and image_media_type and isinstance(image_data, str) and len(image_data) > 10:
+            if (
+                image_data
+                and image_media_type
+                and isinstance(image_data, str)
+                and len(image_data) > 10
+            ):
                 # 构造 data URL 格式的图片
                 data_url = f"data:{image_media_type};base64,{image_data}"
                 # 存储图片数据，在 ContentBlockStopEvent 时输出
@@ -603,10 +640,170 @@ class OpenAINormalizer(FormatNormalizer):
         return {"error": payload}
 
     # =========================
+    # Video conversion
+    # =========================
+
+    def video_request_to_internal(self, request: dict[str, Any]) -> InternalVideoRequest:
+        prompt = str(request.get("prompt") or "").strip()
+        if not prompt:
+            raise ValueError("Video prompt is required")
+
+        size = str(request.get("size") or "720x1280")
+        resolution, aspect_ratio = self._VIDEO_SIZE_REVERSE.get(size, ("720p", "9:16"))
+
+        input_reference = request.get("input_reference")
+        reference_url = str(input_reference) if input_reference else None
+
+        # 安全解析 seconds 字段
+        seconds_raw = request.get("seconds")
+        try:
+            duration_seconds = int(seconds_raw) if seconds_raw else 4
+        except (ValueError, TypeError):
+            duration_seconds = 4
+
+        return InternalVideoRequest(
+            prompt=prompt,
+            model=str(request.get("model") or "sora-2"),
+            duration_seconds=duration_seconds,
+            resolution=resolution,
+            aspect_ratio=aspect_ratio,
+            character_ids=request.get("character_ids") or [],
+            reference_image_url=reference_url,
+            extra={"original_size": size},
+        )
+
+    def video_request_from_internal(self, internal: InternalVideoRequest) -> dict[str, Any]:
+        size = self._VIDEO_SIZE_MAP.get((internal.resolution, internal.aspect_ratio), "720x1280")
+        payload: dict[str, Any] = {
+            "prompt": internal.prompt,
+            "model": internal.model,
+            "seconds": internal.duration_seconds,
+            "size": size,
+            "character_ids": internal.character_ids,
+        }
+        if internal.reference_image_url:
+            payload["input_reference"] = internal.reference_image_url
+        return payload
+
+    def video_task_to_internal(self, response: dict[str, Any]) -> InternalVideoTask:
+        status_map = {
+            "queued": VideoStatus.QUEUED,
+            "processing": VideoStatus.PROCESSING,
+            "completed": VideoStatus.COMPLETED,
+            "failed": VideoStatus.FAILED,
+        }
+        status = status_map.get(str(response.get("status") or ""), VideoStatus.PENDING)
+
+        error = response.get("error") or {}
+        error_code = error.get("code") if isinstance(error, dict) else None
+        error_message = error.get("message") if isinstance(error, dict) else None
+
+        created_at = response.get("created_at")
+        completed_at = response.get("completed_at")
+        expires_at = response.get("expires_at")
+
+        return InternalVideoTask(
+            id=str(response.get("id") or ""),
+            status=status,
+            progress_percent=int(response.get("progress") or 0),
+            created_at=datetime.fromtimestamp(created_at, tz=timezone.utc) if created_at else None,
+            completed_at=(
+                datetime.fromtimestamp(completed_at, tz=timezone.utc) if completed_at else None
+            ),
+            expires_at=datetime.fromtimestamp(expires_at, tz=timezone.utc) if expires_at else None,
+            error_code=error_code,
+            error_message=error_message,
+            extra={
+                "object": response.get("object"),
+                "model": response.get("model"),
+                "size": response.get("size"),
+                "seconds": response.get("seconds"),
+            },
+        )
+
+    def video_task_from_internal(self, internal: InternalVideoTask) -> dict[str, Any]:
+        status_map = {
+            VideoStatus.PENDING: "queued",
+            VideoStatus.SUBMITTED: "queued",
+            VideoStatus.QUEUED: "queued",
+            VideoStatus.PROCESSING: "processing",
+            VideoStatus.COMPLETED: "completed",
+            VideoStatus.FAILED: "failed",
+            VideoStatus.CANCELLED: "failed",
+            VideoStatus.EXPIRED: "failed",
+        }
+        payload: dict[str, Any] = {
+            "id": internal.id,
+            "object": "video",
+            "status": status_map.get(internal.status, "queued"),
+            "progress": internal.progress_percent,
+        }
+
+        if internal.created_at:
+            payload["created_at"] = int(internal.created_at.timestamp())
+        if internal.completed_at:
+            payload["completed_at"] = int(internal.completed_at.timestamp())
+        if internal.expires_at:
+            payload["expires_at"] = int(internal.expires_at.timestamp())
+        if internal.error_code:
+            payload["error"] = {
+                "code": internal.error_code,
+                "message": internal.error_message,
+            }
+
+        for key in ["model", "size", "seconds"]:
+            if key in internal.extra:
+                payload[key] = internal.extra[key]
+
+        return payload
+
+    def video_poll_to_internal(self, response: dict[str, Any]) -> InternalVideoPollResult:
+        status = str(response.get("status") or "")
+        task_id = response.get("id")
+
+        if status == "completed":
+            expires_at = response.get("expires_at")
+            # 使用任务 ID 构建内容路径，由调用方拼接完整 URL
+            # 如果 task_id 不存在，说明上游响应异常
+            video_url = f"videos/{task_id}/content" if task_id else None
+            if not video_url:
+                return InternalVideoPollResult(
+                    status=VideoStatus.FAILED,
+                    error_code="missing_task_id",
+                    error_message="Upstream response missing task id",
+                    raw_response=response,
+                )
+            return InternalVideoPollResult(
+                status=VideoStatus.COMPLETED,
+                progress_percent=100,
+                video_url=video_url,
+                expires_at=(
+                    datetime.fromtimestamp(expires_at, tz=timezone.utc) if expires_at else None
+                ),
+                raw_response=response,
+            )
+        if status == "failed":
+            error = response.get("error") or {}
+            return InternalVideoPollResult(
+                status=VideoStatus.FAILED,
+                error_code=error.get("code") if isinstance(error, dict) else None,
+                error_message=error.get("message") if isinstance(error, dict) else None,
+                raw_response=response,
+            )
+
+        return InternalVideoPollResult(
+            status=VideoStatus.PROCESSING,
+            progress_percent=int(response.get("progress") or 0),
+            raw_response=response,
+        )
+
+    # =========================
     # Helpers
     # =========================
 
-    def _openai_message_to_internal(self, msg: dict[str, Any]) -> tuple[InternalMessage | None, dict[str, int]]:
+    def _openai_message_to_internal(
+        self, msg: dict[str, Any]
+    ) -> tuple[InternalMessage | None, dict[str, int]]:
         dropped: dict[str, int] = {}
 
         role_raw = str(msg.get("role") or "unknown")
@@ -620,7 +817,11 @@ class OpenAINormalizer(FormatNormalizer):
             if tr_block is None:
                 return None, dropped
             return (
-                InternalMessage(role=Role.USER, content=[tr_block], extra=self._extract_extra(msg, {"role", "content"})),
+                InternalMessage(
+                    role=Role.USER,
+                    content=[tr_block],
+                    extra=self._extract_extra(msg, {"role", "content"}),
+                ),
                 dropped,
             )
 
@@ -668,24 +869,34 @@ class OpenAINormalizer(FormatNormalizer):
         blocks: list[ContentBlock] = []
         for part in content:
             if not isinstance(part, dict):
-                dropped["openai_content_part_non_dict"] = dropped.get("openai_content_part_non_dict", 0) + 1
+                dropped["openai_content_part_non_dict"] = (
+                    dropped.get("openai_content_part_non_dict", 0) + 1
+                )
                 continue
 
             ptype = str(part.get("type") or "unknown")
             if ptype == "text":
                 text = str(part.get("text") or "")
                 if text:
-                    blocks.append(TextBlock(text=text, extra=self._extract_extra(part, {"type", "text"})))
+                    blocks.append(
+                        TextBlock(text=text, extra=self._extract_extra(part, {"type", "text"}))
+                    )
                 continue
 
             if ptype == "image_url":
-                url = (part.get("image_url") or {}).get("url") if isinstance(part.get("image_url"), dict) else None
+                url = (
+                    (part.get("image_url") or {}).get("url")
+                    if isinstance(part.get("image_url"), dict)
+                    else None
+                )
                 if isinstance(url, str) and url:
                     img = self._image_url_to_block(url)
                     img.extra.update(self._extract_extra(part, {"type", "image_url"}))
                     blocks.append(img)
                 else:
-                    dropped["openai_image_url_missing"] = dropped.get("openai_image_url_missing", 0) + 1
+                    dropped["openai_image_url_missing"] = (
+                        dropped.get("openai_image_url_missing", 0) + 1
+                    )
                     blocks.append(UnknownBlock(raw_type="image_url", payload=part))
                 continue
 
@@ -731,7 +942,9 @@ class OpenAINormalizer(FormatNormalizer):
                     parameters=params_raw if isinstance(params_raw, dict) else None,
                     extra={
                         "openai_tool": self._extract_extra(tool, {"type", "function"}),
-                        "openai_function": self._extract_extra(function, {"name", "description", "parameters"}),
+                        "openai_function": self._extract_extra(
+                            function, {"name", "description", "parameters"}
+                        ),
                     },
                 )
             )
@@ -756,7 +969,9 @@ class OpenAINormalizer(FormatNormalizer):
             fn_raw = tool_choice.get("function")
             fn: dict[str, Any] = fn_raw if isinstance(fn_raw, dict) else {}
             name = str(fn.get("name") or "")
-            return ToolChoice(type=ToolChoiceType.TOOL, tool_name=name, extra={"openai": tool_choice})
+            return ToolChoice(
+                type=ToolChoiceType.TOOL, tool_name=name, extra={"openai": tool_choice}
+            )
 
         return ToolChoice(type=ToolChoiceType.AUTO, extra={"openai": tool_choice})
 
@@ -771,7 +986,9 @@ class OpenAINormalizer(FormatNormalizer):
             return {"type": "function", "function": {"name": tool_choice.tool_name or ""}}
         return "auto"
 
-    def _openai_tool_call_to_block(self, tool_call: Any) -> tuple[ToolUseBlock | None, dict[str, int]]:
+    def _openai_tool_call_to_block(
+        self, tool_call: Any
+    ) -> tuple[ToolUseBlock | None, dict[str, int]]:
         dropped: dict[str, int] = {}
         if not isinstance(tool_call, dict):
             dropped["openai_tool_call_non_dict"] = dropped.get("openai_tool_call_non_dict", 0) + 1
@@ -808,12 +1025,16 @@ class OpenAINormalizer(FormatNormalizer):
             dropped,
         )
 
-    def _legacy_function_call_to_block(self, func_call: dict[str, Any]) -> tuple[ToolUseBlock | None, dict[str, int]]:
+    def _legacy_function_call_to_block(
+        self, func_call: dict[str, Any]
+    ) -> tuple[ToolUseBlock | None, dict[str, int]]:
         dropped: dict[str, int] = {}
         name = str(func_call.get("name") or "")
         args_str = str(func_call.get("arguments") or "")
         if not name:
-            dropped["openai_function_call_missing_name"] = dropped.get("openai_function_call_missing_name", 0) + 1
+            dropped["openai_function_call_missing_name"] = (
+                dropped.get("openai_function_call_missing_name", 0) + 1
+            )
             return None, dropped
 
         tool_input: dict[str, Any]
@@ -844,7 +1065,12 @@ class OpenAINormalizer(FormatNormalizer):
         dropped: dict[str, int] = {}
         content = msg.get("content")
         if content is None:
-            return ToolResultBlock(tool_use_id=tool_call_id, output=None, content_text=None, extra={"openai": msg}), dropped
+            return (
+                ToolResultBlock(
+                    tool_use_id=tool_call_id, output=None, content_text=None, extra={"openai": msg}
+                ),
+                dropped,
+            )
 
         if isinstance(content, str):
             parsed: Any = None
@@ -906,7 +1132,9 @@ class OpenAINormalizer(FormatNormalizer):
             extra={"openai": extra} if extra else {},
         )
 
-    def _blocks_to_openai_content(self, blocks: list[ContentBlock]) -> str | list[dict[str, Any]] | None:
+    def _blocks_to_openai_content(
+        self, blocks: list[ContentBlock]
+    ) -> str | list[dict[str, Any]] | None:
         parts: list[dict[str, Any]] = []
         text_parts: list[str] = []
 
@@ -946,7 +1174,9 @@ class OpenAINormalizer(FormatNormalizer):
         # OpenAI content 可以是空字符串；但作为响应 message.content 通常允许为 ""/None。
         return ""
 
-    def _split_blocks(self, blocks: list[ContentBlock]) -> tuple[list[ContentBlock], list[ToolUseBlock]]:
+    def _split_blocks(
+        self, blocks: list[ContentBlock]
+    ) -> tuple[list[ContentBlock], list[ToolUseBlock]]:
         content_blocks: list[ContentBlock] = []
         tool_blocks: list[ToolUseBlock] = []
         for b in blocks:
@@ -979,7 +1209,13 @@ class OpenAINormalizer(FormatNormalizer):
         def flush_user() -> None:
             nonlocal pending
             # 丢弃 Unknown/Tool blocks（tool_result 在 flush 时不会出现）
-            content = self._blocks_to_openai_content([b for b in pending if not isinstance(b, (UnknownBlock, ToolUseBlock, ToolResultBlock))])
+            content = self._blocks_to_openai_content(
+                [
+                    b
+                    for b in pending
+                    if not isinstance(b, (UnknownBlock, ToolUseBlock, ToolResultBlock))
+                ]
+            )
             if content is None:
                 content = ""
             out.append({"role": "user", "content": content})
@@ -1025,7 +1261,9 @@ class OpenAINormalizer(FormatNormalizer):
         out["content"] = content_value if content_value is not None else ""
 
         if tool_blocks:
-            out["tool_calls"] = [self._tool_use_block_to_openai_call(b, idx) for idx, b in enumerate(tool_blocks)]
+            out["tool_calls"] = [
+                self._tool_use_block_to_openai_call(b, idx) for idx, b in enumerate(tool_blocks)
+            ]
 
         return out
 

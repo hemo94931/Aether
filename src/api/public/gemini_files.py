@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from src.clients.http_client import HTTPClientPool
-from src.core.api_format import APIFormat, extract_client_api_key_with_query
+from src.core.api_format import APIFormat, get_auth_handler, get_default_auth_method
 from src.core.api_format.metadata import get_api_format_definition
 from src.core.crypto import crypto_service
 from src.core.logger import logger
@@ -50,14 +50,16 @@ GEMINI_FILES_BASE_URL = "https://generativelanguage.googleapis.com"
 REQUIRED_CAPABILITIES = {"gemini_files_api": True}
 
 # 需要从客户端请求中移除的头部（这些会由代理重新设置或不应转发）
-HEADERS_TO_REMOVE = frozenset({
-    "host",
-    "content-length",
-    "transfer-encoding",
-    "connection",
-    "x-goog-api-key",
-    "authorization",
-})
+HEADERS_TO_REMOVE = frozenset(
+    {
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "x-goog-api-key",
+        "authorization",
+    }
+)
 
 
 def _extract_gemini_api_key(request: Request) -> str | None:
@@ -68,11 +70,9 @@ def _extract_gemini_api_key(request: Request) -> str | None:
     1. URL 参数 ?key=
     2. x-goog-api-key 请求头
     """
-    return extract_client_api_key_with_query(
-        dict(request.headers),
-        dict(request.query_params),
-        APIFormat.GEMINI,
-    )
+    auth_method = get_default_auth_method(APIFormat.GEMINI)
+    handler = get_auth_handler(auth_method)
+    return handler.extract_credentials(request)
 
 
 def _build_upstream_headers(
@@ -127,7 +127,7 @@ def _build_upstream_url(
     # 处理 base_url 可能包含 /v1beta 的情况，避免重复
     normalized_base_url = base_url.rstrip("/")
     if normalized_base_url.endswith("/v1beta"):
-        normalized_base_url = normalized_base_url[:-len("/v1beta")]
+        normalized_base_url = normalized_base_url[: -len("/v1beta")]
 
     # 上传端点使用不同的路径前缀
     if is_upload:
@@ -319,13 +319,9 @@ async def _proxy_request(
             response = await client.delete(upstream_url, headers=headers)
         elif method.upper() == "POST":
             if content is not None:
-                response = await client.post(
-                    upstream_url, headers=headers, content=content
-                )
+                response = await client.post(upstream_url, headers=headers, content=content)
             elif json_body is not None:
-                response = await client.post(
-                    upstream_url, headers=headers, json=json_body
-                )
+                response = await client.post(upstream_url, headers=headers, json=json_body)
             else:
                 response = await client.post(upstream_url, headers=headers)
         else:
@@ -619,5 +615,3 @@ async def delete_file(
             f"Gemini Files delete failed, skip mapping cleanup: status={response.status_code}"
         )
     return response
-
-

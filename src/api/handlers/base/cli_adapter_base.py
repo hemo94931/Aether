@@ -23,13 +23,20 @@ from typing import Any
 
 import httpx
 from fastapi import HTTPException, Request
-from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
 from src.api.base.adapter import ApiAdapter, ApiMode
 from src.api.base.context import ApiRequestContext
 from src.api.handlers.base.cli_handler_base import CliMessageHandlerBase
-from src.core.api_format import APIFormat
+from src.core.api_format import (
+    APIFormat,
+    build_adapter_base_headers,
+    build_adapter_headers,
+    get_adapter_protected_keys,
+    get_auth_handler,
+    get_default_auth_method,
+)
 from src.core.exceptions import (
     InvalidRequestException,
     ModelNotSupportedException,
@@ -41,17 +48,10 @@ from src.core.exceptions import (
     QuotaExceededException,
     UpstreamClientException,
 )
-from src.core.api_format import (
-    build_adapter_base_headers,
-    build_adapter_headers,
-    extract_client_api_key,
-    get_adapter_protected_keys,
-)
 from src.core.logger import logger
 from src.services.billing import calculate_request_cost as _calculate_request_cost
 from src.services.request.result import RequestResult
 from src.services.usage.recorder import UsageRecorder
-
 
 
 class CliAdapterBase(ApiAdapter):
@@ -94,9 +94,11 @@ class CliAdapterBase(ApiAdapter):
         """
         从请求中提取 API 密钥
 
-        使用统一的头部处理函数，根据 API 格式自动识别认证头。
+        使用 AuthHandler 新流程，根据 API 格式选择认证方式。
         """
-        return extract_client_api_key(dict(request.headers), self._get_api_format())
+        auth_method = get_default_auth_method(self._get_api_format())
+        handler = get_auth_handler(auth_method)
+        return handler.extract_credentials(request)
 
     @classmethod
     def build_base_headers(cls, api_key: str) -> dict[str, str]:
@@ -171,8 +173,10 @@ class CliAdapterBase(ApiAdapter):
         )
 
         # 请求开始日志
-        logger.info(f"[REQ] {request_id[:8]} | {self.FORMAT_ID} | {getattr(api_key, 'name', 'unknown')} | "
-            f"{model} | {'stream' if stream else 'sync'} | quota:{quota_display}")
+        logger.info(
+            f"[REQ] {request_id[:8]} | {self.FORMAT_ID} | {getattr(api_key, 'name', 'unknown')} | "
+            f"{model} | {'stream' if stream else 'sync'} | quota:{quota_display}"
+        )
 
         try:
             # 检查客户端连接
@@ -220,9 +224,7 @@ class CliAdapterBase(ApiAdapter):
             logger.debug(f"客户端请求错误: {e.error_type}")
             return self._error_response(
                 status_code=e.status_code,
-                error_type=(
-                    "invalid_request_error" if e.status_code == 400 else "quota_exceeded"
-                ),
+                error_type=("invalid_request_error" if e.status_code == 400 else "quota_exceeded"),
                 message=e.message,
             )
 
@@ -366,9 +368,7 @@ class CliAdapterBase(ApiAdapter):
         # 确定错误消息
         if isinstance(e, ProviderAuthException):
             error_message = (
-                "上游服务认证失败"
-                if result.metadata.provider != "unknown"
-                else "服务暂时不可用"
+                "上游服务认证失败" if result.metadata.provider != "unknown" else "服务暂时不可用"
             )
             result.error_message = error_message
 
@@ -421,7 +421,8 @@ class CliAdapterBase(ApiAdapter):
         if isinstance(e, ProxyException):
             logger.error(f"{self.FORMAT_ID} 请求处理业务异常: {type(e).__name__}")
         else:
-            logger.error(f"{self.FORMAT_ID} 请求处理意外异常",
+            logger.error(
+                f"{self.FORMAT_ID} 请求处理意外异常",
                 exception=e,
                 extra_data={
                     "exception_class": e.__class__.__name__,
@@ -460,9 +461,8 @@ class CliAdapterBase(ApiAdapter):
         await recorder.record_failure(result, original_headers, original_request_body)
 
         return self._error_response(
-            status_code=500,
-            error_type="internal_server_error",
-            message="处理请求时发生内部错误")
+            status_code=500, error_type="internal_server_error", message="处理请求时发生内部错误"
+        )
 
     def _error_response(self, status_code: int, error_type: str, message: str) -> JSONResponse:
         """生成错误响应"""
@@ -672,7 +672,9 @@ class CliAdapterBase(ApiAdapter):
     # =========================================================================
 
     @classmethod
-    def build_endpoint_url(cls, base_url: str, request_data: dict[str, Any], model_name: str | None = None) -> str:
+    def build_endpoint_url(
+        cls, base_url: str, request_data: dict[str, Any], model_name: str | None = None
+    ) -> str:
         """
         构建CLI API端点URL - 子类应覆盖
 
@@ -726,6 +728,7 @@ class CliAdapterBase(ApiAdapter):
         if cli_user_agent:
             headers["User-Agent"] = cli_user_agent
         return headers
+
 
 # =========================================================================
 # CLI Adapter 注册表 - 用于根据 API format 获取 CLI Adapter 实例

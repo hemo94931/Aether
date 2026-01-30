@@ -18,4 +18,26 @@ class APIFormat(Enum):
     GEMINI_CLI = "GEMINI_CLI"  # Gemini CLI API 格式
 
 
-__all__ = ["APIFormat"]
+class AuthMethod(str, Enum):
+    """认证方式 - 决定如何构造认证 Header"""
+
+    BEARER = "bearer"  # Authorization: Bearer {token}
+    API_KEY = "api_key"  # x-api-key: {key}
+    GOOG_API_KEY = "goog_key"  # x-goog-api-key: {key}
+    OAUTH2 = "oauth2"  # Google OAuth2 / Service Account
+    QUERY_KEY = "query_key"  # ?key={key} (Gemini 备用)
+
+
+class EndpointType(str, Enum):
+    """端点类型 - 决定 API 功能类别"""
+
+    CHAT = "chat"  # Chat/Completion API
+    VIDEO = "video"  # Video Generation API
+    FILES = "files"  # Files API
+    IMAGE = "image"  # Image Generation API
+    AUDIO = "audio"  # Audio API
+    EMBEDDING = "embedding"  # Embedding API
+    MODELS = "models"  # Models API
+
+
+__all__ = ["APIFormat", "AuthMethod", "EndpointType"]

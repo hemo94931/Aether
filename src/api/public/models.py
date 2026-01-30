@@ -15,15 +15,17 @@ from src.api.base.models_service import (
     AccessRestrictions,
     ModelInfo,
     find_model_by_id,
-    get_compatible_provider_formats,
     get_available_provider_ids,
+    get_compatible_provider_formats,
     list_available_models,
 )
 from src.core.api_format import (
     API_FORMAT_DEFINITIONS,
     APIFormat,
     ApiFormatDefinition,
-    detect_format_and_key_from_starlette,
+    detect_request_context,
+    get_auth_handler,
+    get_default_auth_method,
 )
 from src.core.api_format.conversion import (
     format_conversion_registry,
@@ -43,34 +45,20 @@ _GEMINI_FORMATS = [APIFormat.GEMINI.value, APIFormat.GEMINI_CLI.value]
 
 # 所有格式（用于格式转换时的查询）
 _ALL_CHAT_FORMATS = [
-    APIFormat.CLAUDE.value, APIFormat.CLAUDE_CLI.value,
-    APIFormat.OPENAI.value, APIFormat.OPENAI_CLI.value,
-    APIFormat.GEMINI.value, APIFormat.GEMINI_CLI.value,
+    APIFormat.CLAUDE.value,
+    APIFormat.CLAUDE_CLI.value,
+    APIFormat.OPENAI.value,
+    APIFormat.OPENAI_CLI.value,
+    APIFormat.GEMINI.value,
+    APIFormat.GEMINI_CLI.value,
 ]
 
 
-def _extract_api_key_from_request(
-    request: Request, definition: ApiFormatDefinition
-) -> str | None:
+def _extract_api_key_from_request(request: Request, definition: ApiFormatDefinition) -> str | None:
     """根据格式定义从请求中提取 API Key"""
-    auth_header = definition.auth_header.lower()
-    auth_type = definition.auth_type
-
-    header_value = request.headers.get(auth_header)
-    if not header_value:
-        # Gemini 还支持 ?key= 参数
-        if definition.api_format in (APIFormat.GEMINI, APIFormat.GEMINI_CLI):
-            return request.query_params.get("key")
-        return None
-
-    if auth_type == "bearer":
-        # Bearer token: "Bearer xxx"
-        if header_value.lower().startswith("bearer "):
-            return header_value[7:].strip()
-        return None
-    else:
-        # header 类型: 直接使用值
-        return header_value
+    auth_method = get_default_auth_method(definition.api_format)
+    handler = get_auth_handler(auth_method)
+    return handler.extract_credentials(request)
 
 
 def _detect_api_format_and_key(request: Request) -> tuple[str, str | None]:
@@ -85,8 +73,8 @@ def _detect_api_format_and_key(request: Request) -> tuple[str, str | None]:
     Returns:
         (api_format, api_key) 元组
     """
-    format_name, api_key, _auth_method = detect_format_and_key_from_starlette(request)
-    return format_name, api_key
+    context = detect_request_context(request)
+    return context.data_format.value.lower(), context.credentials
 
 
 def _get_formats_for_api(api_format: str) -> list[str]:
@@ -102,6 +90,7 @@ def _get_formats_for_api(api_format: str) -> list[str]:
 def _is_format_conversion_enabled() -> bool:
     """检查全局格式转换开关（从环境变量读取，默认开启）"""
     from src.config.settings import config
+
     return config.format_conversion_enabled
 
 
@@ -373,8 +362,12 @@ def _build_gemini_model_response(model_info: ModelInfo) -> dict:
         "version": "001",
         "displayName": model_info.display_name,
         "description": model_info.description or f"Model {model_info.id}",
-        "inputTokenLimit": model_info.context_limit if model_info.context_limit is not None else 128000,
-        "outputTokenLimit": model_info.output_limit if model_info.output_limit is not None else 8192,
+        "inputTokenLimit": (
+            model_info.context_limit if model_info.context_limit is not None else 128000
+        ),
+        "outputTokenLimit": (
+            model_info.output_limit if model_info.output_limit is not None else 8192
+        ),
         "supportedGenerationMethods": ["generateContent", "countTokens"],
         "temperature": 1.0,
         "maxTemperature": 2.0,

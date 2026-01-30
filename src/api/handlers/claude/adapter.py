@@ -98,7 +98,9 @@ class ClaudeChatAdapter(ChatAdapterBase):
         """
         return input_tokens + cache_creation_input_tokens + cache_read_input_tokens
 
-    def _validate_request_body(self, original_request_body: dict, path_params: dict | None = None) -> None:
+    def _validate_request_body(
+        self, original_request_body: dict, path_params: dict | None = None
+    ) -> None:
         """验证请求体"""
         try:
             if not isinstance(original_request_body, dict):
@@ -220,15 +222,16 @@ class ClaudeTokenCountAdapter(ApiAdapter):
 
     def extract_api_key(self, request: Request) -> str | None:
         """从请求中提取 API 密钥 (x-api-key 或 Authorization: Bearer)"""
-        # 优先检查 x-api-key
-        api_key = request.headers.get("x-api-key")
+        from src.core.api_format import get_auth_handler
+        from src.core.api_format.enums import AuthMethod
+
+        handler = get_auth_handler(AuthMethod.API_KEY)
+        api_key = handler.extract_credentials(request)
         if api_key:
             return api_key
-        # 降级到 Authorization: Bearer
-        authorization = request.headers.get("authorization")
-        if authorization and authorization.startswith("Bearer "):
-            return authorization.replace("Bearer ", "")
-        return None
+
+        bearer_handler = get_auth_handler(AuthMethod.BEARER)
+        return bearer_handler.extract_credentials(request)
 
     async def handle(self, context: ApiRequestContext) -> Any:
         payload = context.ensure_json_body()

@@ -4,12 +4,12 @@
 
 from __future__ import annotations
 
-from typing import Any
 import hashlib
 import secrets
 import uuid
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
+from typing import Any
 
 import bcrypt
 from sqlalchemy import (
@@ -1223,6 +1223,97 @@ class ProviderAPIKey(Base):
 
     # 关系
     provider = relationship("Provider", back_populates="api_keys")
+
+
+class VideoTask(Base):
+    """视频生成任务"""
+
+    __tablename__ = "video_tasks"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    external_task_id = Column(String(200))
+
+    # 关联
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
+    api_key_id = Column(String(36), ForeignKey("api_keys.id"))
+    provider_id = Column(String(36), ForeignKey("providers.id"))
+    endpoint_id = Column(String(36), ForeignKey("provider_endpoints.id"))
+    key_id = Column(String(36), ForeignKey("provider_api_keys.id"))
+
+    # 格式转换追踪
+    client_api_format = Column(String(50), nullable=False)
+    provider_api_format = Column(String(50), nullable=False)
+    format_converted = Column(Boolean, default=False)
+
+    # 任务配置
+    model = Column(String(100), nullable=False)
+    prompt = Column(Text, nullable=False)
+    original_request_body = Column(JSON)
+    converted_request_body = Column(JSON)
+
+    # 视频参数 (统一内部格式)
+    duration_seconds = Column(Integer, default=4)
+    resolution = Column(String(20), default="720p")
+    aspect_ratio = Column(String(10), default="16:9")
+    size = Column(String(20))
+
+    # 状态
+    status = Column(String(20), default="pending")
+    progress_percent = Column(Integer, default=0)
+    progress_message = Column(String(500))
+
+    # 结果
+    video_url = Column(String(2000))
+    video_urls = Column(JSON)
+    thumbnail_url = Column(String(2000))
+    video_size_bytes = Column(BigInteger)
+    video_expires_at = Column(DateTime(timezone=True))
+
+    # 存储 (可选)
+    stored_video_path = Column(String(500))
+    storage_provider = Column(String(50))
+
+    # 错误
+    error_code = Column(String(50))
+    error_message = Column(Text)
+    retry_count = Column(Integer, default=0)
+    max_retries = Column(Integer, default=3)
+
+    # 轮询配置
+    poll_interval_seconds = Column(Integer, default=10)
+    next_poll_at = Column(DateTime(timezone=True))  # 索引在 __table_args__ 中定义
+    poll_count = Column(Integer, default=0)
+    max_poll_count = Column(Integer, default=360)
+
+    # Remix 支持
+    remixed_from_task_id = Column(
+        String(36), ForeignKey("video_tasks.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # 时间戳
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    submitted_at = Column(DateTime(timezone=True))
+    completed_at = Column(DateTime(timezone=True))
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    # 关系
+    user = relationship("User", backref="video_tasks")
+    remixed_from = relationship("VideoTask", remote_side=[id], backref="remixes")
+
+    # 复合索引和唯一约束
+    __table_args__ = (
+        Index("idx_video_tasks_user_status", "user_id", "status"),
+        Index("idx_video_tasks_next_poll", "next_poll_at"),
+        Index("idx_video_tasks_external_id", "external_task_id"),
+        UniqueConstraint("user_id", "external_task_id", name="uq_video_tasks_user_external_id"),
+    )
 
 
 class UserPreference(Base):

@@ -81,7 +81,7 @@ dev-dependencies = [
 
 [tool.black]
 line-length = 100
-target-version = ['py314']
+target-version = ['py313']
 
 [tool.isort]
 profile = "black"

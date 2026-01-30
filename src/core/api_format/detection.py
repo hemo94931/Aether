@@ -6,13 +6,13 @@ API 格式检测
 
 from __future__ import annotations
 
-
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from starlette.requests import Request
 
-from src.core.api_format.enums import APIFormat
+from src.core.api_format.enums import APIFormat, AuthMethod, EndpointType
 from src.core.api_format.metadata import API_FORMAT_DEFINITIONS, ApiFormatDefinition
 
 
@@ -64,6 +64,78 @@ def _extract_api_key_by_definition(
         return header_value, "header"
 
 
+@dataclass(frozen=True)
+class RequestContext:
+    """请求上下文 - 三维度信息"""
+
+    data_format: APIFormat
+    endpoint_type: EndpointType
+    auth_method: AuthMethod
+    credentials: str | None
+
+
+def _detect_endpoint_type(path: str) -> EndpointType:
+    normalized = path.lower()
+
+    if normalized.startswith("/upload/v1beta/files") or normalized.startswith("/v1beta/files"):
+        return EndpointType.FILES
+    if normalized.startswith("/v1/videos") or (
+        normalized.startswith("/v1beta/") and "predictlongrunning" in normalized
+    ):
+        return EndpointType.VIDEO
+    # Gemini operations (视频轮询) 也归类为 VIDEO
+    if normalized.startswith("/v1beta/operations"):
+        return EndpointType.VIDEO
+    if normalized.startswith("/v1/models"):
+        return EndpointType.MODELS
+    if "/embeddings" in normalized:
+        return EndpointType.EMBEDDING
+    if "/images" in normalized:
+        return EndpointType.IMAGE
+    if "/audio" in normalized:
+        return EndpointType.AUDIO
+    return EndpointType.CHAT
+
+
+def _detect_data_format(
+    path: str, headers: dict[str, str], query_params: dict[str, str] | None
+) -> APIFormat:
+    normalized = path.lower()
+
+    if normalized.startswith("/v1/messages"):
+        return APIFormat.CLAUDE
+    if normalized.startswith("/v1beta/") or normalized.startswith("/upload/v1beta/"):
+        return APIFormat.GEMINI
+    if normalized.startswith("/v1/chat/completions") or normalized.startswith("/v1/videos"):
+        return APIFormat.OPENAI
+
+    api_format, _api_key, _auth_method = detect_format_from_request(headers, query_params)
+    return api_format
+
+
+def _detect_auth_method(
+    headers: dict[str, str], query_params: dict[str, str] | None
+) -> tuple[AuthMethod, str | None]:
+    # Query key (Gemini) has highest priority
+    query_key = query_params.get("key") if query_params else None
+    if query_key:
+        return AuthMethod.QUERY_KEY, query_key
+
+    x_goog_key = headers.get("x-goog-api-key")
+    if x_goog_key:
+        return AuthMethod.GOOG_API_KEY, x_goog_key
+
+    x_api_key = headers.get("x-api-key")
+    if x_api_key:
+        return AuthMethod.API_KEY, x_api_key
+
+    auth_header = headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return AuthMethod.BEARER, auth_header[7:].strip()
+
+    return AuthMethod.BEARER, None
+
+
 def detect_format_from_request(
     headers: dict[str, str],
     query_params: dict[str, str] | None = None,
@@ -86,20 +158,26 @@ def detect_format_from_request(
     """
     # Claude: x-api-key + anthropic-version (必须同时存在)
     claude_def = API_FORMAT_DEFINITIONS[APIFormat.CLAUDE]
-    claude_key, claude_auth_method = _extract_api_key_by_definition(headers, query_params, claude_def)
+    claude_key, claude_auth_method = _extract_api_key_by_definition(
+        headers, query_params, claude_def
+    )
     if claude_key and headers.get("anthropic-version"):
         return APIFormat.CLAUDE, claude_key, claude_auth_method
 
     # Gemini: x-goog-api-key (header 类型) 或 ?key=
     gemini_def = API_FORMAT_DEFINITIONS[APIFormat.GEMINI]
-    gemini_key, gemini_auth_method = _extract_api_key_by_definition(headers, query_params, gemini_def)
+    gemini_key, gemini_auth_method = _extract_api_key_by_definition(
+        headers, query_params, gemini_def
+    )
     if gemini_key:
         return APIFormat.GEMINI, gemini_key, gemini_auth_method
 
     # OpenAI: Authorization: Bearer (默认)
     # 注意: 如果只有 x-api-key 但没有 anthropic-version，也走 OpenAI 格式
     openai_def = API_FORMAT_DEFINITIONS[APIFormat.OPENAI]
-    openai_key, openai_auth_method = _extract_api_key_by_definition(headers, query_params, openai_def)
+    openai_key, openai_auth_method = _extract_api_key_by_definition(
+        headers, query_params, openai_def
+    )
     # 如果 OpenAI 格式没有 key，但有 x-api-key，也用它（兼容）
     if not openai_key and claude_key:
         openai_key = claude_key
@@ -132,6 +210,28 @@ def detect_format_and_key_from_starlette(
     # 返回小写格式名
     format_name = api_format.value.lower()
     return format_name, api_key, auth_method
+
+
+def detect_request_context(request: Request) -> RequestContext:
+    """
+    从 Request 中检测三维度信息
+
+    Returns:
+        RequestContext(data_format, endpoint_type, auth_method, credentials)
+    """
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    query_params = dict(request.query_params)
+
+    endpoint_type = _detect_endpoint_type(request.url.path)
+    data_format = _detect_data_format(request.url.path, headers, query_params)
+    auth_method, credentials = _detect_auth_method(headers, query_params)
+
+    return RequestContext(
+        data_format=data_format,
+        endpoint_type=endpoint_type,
+        auth_method=auth_method,
+        credentials=credentials,
+    )
 
 
 def detect_format_from_response(
@@ -197,4 +297,6 @@ __all__ = [
     "detect_format_and_key_from_starlette",
     "detect_format_from_response",
     "detect_cli_format_from_path",
+    "detect_request_context",
+    "RequestContext",
 ]

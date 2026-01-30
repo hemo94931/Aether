@@ -18,7 +18,6 @@ Chat Adapter 通用基类
 
 from __future__ import annotations
 
-from sqlalchemy.orm import Session
 import time
 import traceback
 from abc import abstractmethod
@@ -27,11 +26,19 @@ from typing import Any
 import httpx
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
 from src.api.base.adapter import ApiAdapter, ApiMode
 from src.api.base.context import ApiRequestContext
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
-from src.core.api_format import APIFormat
+from src.core.api_format import (
+    APIFormat,
+    build_adapter_base_headers,
+    build_adapter_headers,
+    get_adapter_protected_keys,
+    get_auth_handler,
+    get_default_auth_method,
+)
 from src.core.exceptions import (
     InvalidRequestException,
     ModelNotSupportedException,
@@ -43,17 +50,10 @@ from src.core.exceptions import (
     QuotaExceededException,
     UpstreamClientException,
 )
-from src.core.api_format import (
-    build_adapter_base_headers,
-    build_adapter_headers,
-    extract_client_api_key,
-    get_adapter_protected_keys,
-)
 from src.core.logger import logger
 from src.services.billing import calculate_request_cost as _calculate_request_cost
 from src.services.request.result import RequestResult
 from src.services.usage.recorder import UsageRecorder
-
 
 
 class ChatAdapterBase(ApiAdapter):
@@ -124,8 +124,10 @@ class ChatAdapterBase(ApiAdapter):
         return build_test_request_body(cls.FORMAT_ID, request_data)
 
     def extract_api_key(self, request: Request) -> str | None:
-        """从请求中提取 API 密钥，使用统一的 headers.py 实现"""
-        return extract_client_api_key(dict(request.headers), self._get_api_format())
+        """从请求中提取 API 密钥，使用 AuthHandler 新流程"""
+        auth_method = get_default_auth_method(self._get_api_format())
+        handler = get_auth_handler(auth_method)
+        return handler.extract_credentials(request)
 
     def __init__(self, allowed_api_formats: list[str] | None = None):
         self.allowed_api_formats = allowed_api_formats or [self.FORMAT_ID]
@@ -170,8 +172,10 @@ class ChatAdapterBase(ApiAdapter):
         )
 
         # 请求开始日志
-        logger.info(f"[REQ] {request_id[:8]} | {self.FORMAT_ID} | {getattr(api_key, 'name', 'unknown')} | "
-            f"{model} | {'stream' if stream else 'sync'} | quota:{quota_display}")
+        logger.info(
+            f"[REQ] {request_id[:8]} | {self.FORMAT_ID} | {getattr(api_key, 'name', 'unknown')} | "
+            f"{model} | {'stream' if stream else 'sync'} | quota:{quota_display}"
+        )
 
         try:
             # 检查客户端连接
@@ -218,9 +222,7 @@ class ChatAdapterBase(ApiAdapter):
             logger.info(f"客户端请求错误: {e.error_type}")
             return self._error_response(
                 status_code=e.status_code,
-                error_type=(
-                    "invalid_request_error" if e.status_code == 400 else "quota_exceeded"
-                ),
+                error_type=("invalid_request_error" if e.status_code == 400 else "quota_exceeded"),
                 message=e.message,
             )
 
@@ -306,7 +308,9 @@ class ChatAdapterBase(ApiAdapter):
         return merged
 
     @abstractmethod
-    def _validate_request_body(self, original_request_body: dict, path_params: dict | None = None) -> None:
+    def _validate_request_body(
+        self, original_request_body: dict, path_params: dict | None = None
+    ) -> None:
         """
         验证请求体 - 子类必须实现
 
@@ -383,9 +387,7 @@ class ChatAdapterBase(ApiAdapter):
         # 确定错误消息
         if isinstance(e, ProviderAuthException):
             error_message = (
-                "上游服务认证失败"
-                if result.metadata.provider != "unknown"
-                else "服务暂时不可用"
+                "上游服务认证失败" if result.metadata.provider != "unknown" else "服务暂时不可用"
             )
             result.error_message = error_message
 
@@ -438,7 +440,8 @@ class ChatAdapterBase(ApiAdapter):
         if isinstance(e, ProxyException):
             logger.error(f"{self.FORMAT_ID} 请求处理业务异常: {type(e).__name__}")
         else:
-            logger.error(f"{self.FORMAT_ID} 请求处理意外异常",
+            logger.error(
+                f"{self.FORMAT_ID} 请求处理意外异常",
                 exception=e,
                 extra_data={
                     "exception_class": e.__class__.__name__,
@@ -480,9 +483,8 @@ class ChatAdapterBase(ApiAdapter):
             logger.error(f"记录失败请求时出错: {record_error}")
 
         return self._error_response(
-            status_code=500,
-            error_type="internal_server_error",
-            message="处理请求时发生内部错误")
+            status_code=500, error_type="internal_server_error", message="处理请求时发生内部错误"
+        )
 
     def _error_response(self, status_code: int, error_type: str, message: str) -> JSONResponse:
         """生成错误响应 - 子类可覆盖以自定义格式"""
@@ -680,6 +682,7 @@ class ChatAdapterBase(ApiAdapter):
             api_key_id=api_key_id,
             model_name=model_name or request_data.get("model"),
         )
+
 
 # =========================================================================
 # Adapter 注册表 - 用于根据 API format 获取 Adapter 实例

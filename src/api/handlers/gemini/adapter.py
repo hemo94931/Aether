@@ -14,7 +14,8 @@ from fastapi.responses import JSONResponse
 
 from src.api.handlers.base.chat_adapter_base import ChatAdapterBase, register_adapter
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
-from src.core.api_format import extract_client_api_key_with_query
+from src.core.api_format import get_auth_handler
+from src.core.api_format.enums import AuthMethod
 from src.core.logger import logger
 from src.models.gemini import GeminiRequest
 from src.services.gemini_files_mapping import extract_file_names_from_request
@@ -43,7 +44,9 @@ class GeminiChatAdapter(ChatAdapterBase):
 
     def __init__(self, allowed_api_formats: list[str] | None = None):
         super().__init__(allowed_api_formats or ["GEMINI"])
-        logger.info(f"[{self.name}] 初始化 Gemini Chat 适配器 | API格式: {self.allowed_api_formats}")
+        logger.info(
+            f"[{self.name}] 初始化 Gemini Chat 适配器 | API格式: {self.allowed_api_formats}"
+        )
 
     def extract_api_key(self, request: Request) -> str | None:
         """
@@ -53,11 +56,8 @@ class GeminiChatAdapter(ChatAdapterBase):
         1. URL 参数 ?key=
         2. x-goog-api-key 请求头
         """
-        return extract_client_api_key_with_query(
-            dict(request.headers),
-            dict(request.query_params),
-            self._get_api_format(),
-        )
+        handler = get_auth_handler(AuthMethod.GOOG_API_KEY)
+        return handler.extract_credentials(request)
 
     def detect_capability_requirements(
         self,
@@ -91,7 +91,9 @@ class GeminiChatAdapter(ChatAdapterBase):
         """
         return original_request_body.copy()
 
-    def _validate_request_body(self, original_request_body: dict, path_params: dict | None = None) -> None:
+    def _validate_request_body(
+        self, original_request_body: dict, path_params: dict | None = None
+    ) -> None:
         """验证请求体"""
         path_params = path_params or {}
         is_stream = path_params.get("stream", False)
@@ -200,7 +202,9 @@ class GeminiChatAdapter(ChatAdapterBase):
 
         try:
             response = await client.get(models_url, headers=headers)
-            logger.debug(f"Gemini models request to {redact_url_for_log(models_url)}: status={response.status_code}")
+            logger.debug(
+                f"Gemini models request to {redact_url_for_log(models_url)}: status={response.status_code}"
+            )
             if response.status_code == 200:
                 data = response.json()
                 if "models" in data:
@@ -218,13 +222,17 @@ class GeminiChatAdapter(ChatAdapterBase):
             else:
                 error_body = response.text[:500] if response.text else "(empty)"
                 error_msg = f"HTTP {response.status_code}: {error_body}"
-                logger.warning(f"Gemini models request to {redact_url_for_log(models_url)} failed: {error_msg}")
+                logger.warning(
+                    f"Gemini models request to {redact_url_for_log(models_url)} failed: {error_msg}"
+                )
                 return [], error_msg
         except Exception as e:
             # 异常信息可能包含带 key 参数的 URL，需要脱敏
             sanitized_error = redact_url_for_log(str(e))
             error_msg = f"Request error: {sanitized_error}"
-            logger.warning(f"Failed to fetch Gemini models from {redact_url_for_log(models_url)}: {sanitized_error}")
+            logger.warning(
+                f"Failed to fetch Gemini models from {redact_url_for_log(models_url)}: {sanitized_error}"
+            )
             return [], error_msg
 
     @classmethod
@@ -273,6 +281,7 @@ class GeminiChatAdapter(ChatAdapterBase):
 
         # 使用基类的通用endpoint checker
         from src.api.handlers.base.endpoint_checker import run_endpoint_check
+
         return await run_endpoint_check(
             client=client,
             url=url,
