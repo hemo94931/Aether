@@ -3,7 +3,7 @@ New API 余额查询操作
 """
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 
@@ -111,7 +111,7 @@ class NewApiBalanceAction(BalanceAction):
             currency=self.config.get("currency", "USD"),
         )
 
-    async def _do_checkin(self, client: httpx.AsyncClient) -> Optional[Dict[str, Any]]:
+    async def _do_checkin(self, client: httpx.AsyncClient) -> dict[str, Any] | None:
         """
         执行签到（静默，不抛出异常）
 
@@ -155,7 +155,7 @@ class NewApiBalanceAction(BalanceAction):
                     return {"success": True, "message": message or "签到成功"}
                 else:
                     # 检查是否是"已签到"的情况
-                    already_indicators = ["already", "已签到", "今日已签", "重复签到"]
+                    already_indicators = ["already", "已签到", "已经签到", "今日已签", "重复签到"]
                     is_already = any(ind in message.lower() for ind in already_indicators)
                     if is_already:
                         logger.debug(f"[{site}] 今日已签到: {message}")
@@ -184,7 +184,7 @@ class NewApiBalanceAction(BalanceAction):
             return None
 
     @classmethod
-    def get_config_schema(cls) -> Dict[str, Any]:
+    def get_config_schema(cls) -> dict[str, Any]:
         """获取操作配置 schema"""
         return {
             "type": "object",

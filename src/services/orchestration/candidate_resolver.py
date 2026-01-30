@@ -6,7 +6,7 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -48,12 +48,12 @@ class CandidateResolver:
         api_format: APIFormat,
         model_name: str,
         affinity_key: str,
-        user_api_key: Optional[ApiKey] = None,
-        request_id: Optional[str] = None,
+        user_api_key: ApiKey | None = None,
+        request_id: str | None = None,
         is_stream: bool = False,
-        capability_requirements: Optional[Dict[str, bool]] = None,
-        preferred_key_ids: Optional[list[str]] = None,
-    ) -> Tuple[List[ProviderCandidate], str]:
+        capability_requirements: dict[str, bool] | None = None,
+        preferred_key_ids: list[str] | None = None,
+    ) -> tuple[list[ProviderCandidate], str]:
         """
         获取所有可用候选
 
@@ -73,10 +73,10 @@ class CandidateResolver:
         Raises:
             ProviderNotAvailableException: 没有找到任何可用候选时
         """
-        all_candidates: List[ProviderCandidate] = []
+        all_candidates: list[ProviderCandidate] = []
         provider_offset = 0
         provider_batch_size = 20
-        global_model_id: Optional[str] = None
+        global_model_id: str | None = None
 
         while True:
             candidates, resolved_global_model_id = await self.cache_scheduler.list_all_candidates(
@@ -136,12 +136,12 @@ class CandidateResolver:
 
     def create_candidate_records(
         self,
-        all_candidates: List[ProviderCandidate],
-        request_id: Optional[str],
+        all_candidates: list[ProviderCandidate],
+        request_id: str | None,
         user_id: str,
         user_api_key: ApiKey,
-        required_capabilities: Optional[Dict[str, bool]] = None,
-    ) -> Dict[Tuple[int, int], str]:
+        required_capabilities: dict[str, bool] | None = None,
+    ) -> dict[tuple[int, int], str]:
         """
         为所有候选预先创建 available 状态记录（批量插入优化）
 
@@ -157,8 +157,8 @@ class CandidateResolver:
         """
         from src.models.database import RequestCandidate
 
-        candidate_records_to_insert: List[Dict[str, Any]] = []
-        candidate_record_map: Dict[Tuple[int, int], str] = {}
+        candidate_records_to_insert: list[dict[str, Any]] = []
+        candidate_record_map: dict[tuple[int, int], str] = {}
 
         # 只保存启用的能力（值为 True 的）
         active_capabilities = None
@@ -232,8 +232,8 @@ class CandidateResolver:
 
     def get_active_candidates(
         self,
-        all_candidates: List[ProviderCandidate],
-    ) -> List[Tuple[int, ProviderCandidate]]:
+        all_candidates: list[ProviderCandidate],
+    ) -> list[tuple[int, ProviderCandidate]]:
         """
         获取所有非跳过的候选（带索引）
 
@@ -247,7 +247,7 @@ class CandidateResolver:
 
     def count_total_attempts(
         self,
-        all_candidates: List[ProviderCandidate],
+        all_candidates: list[ProviderCandidate],
     ) -> int:
         """
         计算总尝试次数

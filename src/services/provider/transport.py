@@ -7,8 +7,10 @@
 - Vertex AI URL 自动构建
 """
 
+from __future__ import annotations
+
 import re
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 from src.core.api_format import APIFormat, get_default_path, resolve_api_format
@@ -65,10 +67,10 @@ def _normalize_base_url(base_url: str, path: str) -> str:
 
 
 def build_provider_url(
-    endpoint: "ProviderEndpoint",
+    endpoint: ProviderEndpoint,
     *,
-    query_params: Optional[Dict[str, Any]] = None,
-    path_params: Optional[Dict[str, Any]] = None,
+    query_params: dict[str, Any] | None = None,
+    path_params: dict[str, Any] | None = None,
     is_stream: bool = False,
     key: Optional["ProviderAPIKey"] = None,
     decrypted_auth_config: Optional[Dict[str, Any]] = None,
@@ -159,7 +161,7 @@ def build_provider_url(
     return url
 
 
-def _resolve_default_path(api_format: Optional[str]) -> str:
+def _resolve_default_path(api_format: str | None) -> str:
     """
     根据 API 格式返回默认路径
     """

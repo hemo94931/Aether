@@ -11,7 +11,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 import jwt
 from fastapi import HTTPException, status
@@ -92,7 +92,7 @@ class AuthService:
     """认证服务"""
 
     @staticmethod
-    def token_identity_matches_user(payload: Dict[str, Any], user: User) -> bool:
+    def token_identity_matches_user(payload: dict[str, Any], user: User) -> bool:
         """
         校验 token 的身份字段是否与用户一致。
 
@@ -147,7 +147,7 @@ class AuthService:
         return encoded_jwt
 
     @staticmethod
-    async def verify_token(token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
+    async def verify_token(token: str, token_type: str | None = None) -> dict[str, Any]:
         """验证JWT令牌
 
         Args:
@@ -182,7 +182,7 @@ class AuthService:
     @staticmethod
     async def authenticate_user(
         db: Session, email: str, password: str, auth_type: str = "local"
-    ) -> Optional[User]:
+    ) -> User | None:
         """用户登录认证
 
         Args:
@@ -219,7 +219,7 @@ class AuthService:
                     ),
                     timeout=total_timeout,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.error(f"LDAP 认证总体超时({total_timeout}秒): {email}")
                 return None
 
@@ -267,7 +267,8 @@ class AuthService:
             logger.warning(f"登录失败 - 该用户使用 LDAP 认证: {email}")
             return None
 
-        if not user.verify_password(password):
+        # 在线程池中执行 bcrypt 密码验证，避免阻塞事件循环
+        if not await run_in_threadpool(user.verify_password, password):
             logger.warning(f"登录失败 - 密码错误: {email}")
             return None
 
@@ -285,7 +286,7 @@ class AuthService:
         return user
 
     @staticmethod
-    async def _get_or_create_ldap_user(db: Session, ldap_user: dict) -> Optional[User]:
+    async def _get_or_create_ldap_user(db: Session, ldap_user: dict) -> User | None:
         """获取或创建 LDAP 用户
 
         Args:
@@ -299,7 +300,7 @@ class AuthService:
 
         # 优先用稳定标识查找，避免邮箱变更/用户名冲突导致重复建号
         # 使用 with_for_update() 锁定行，防止并发创建
-        user: Optional[User] = None
+        user: User | None = None
         if ldap_dn:
             user = (
                 db.query(User)
@@ -416,7 +417,7 @@ class AuthService:
         return None
 
     @staticmethod
-    def authenticate_api_key(db: Session, api_key: str) -> Optional[tuple[User, ApiKey]]:
+    def authenticate_api_key(db: Session, api_key: str) -> tuple[User, ApiKey] | None:
         """API密钥认证"""
         # 对API密钥进行哈希查找，预加载 user 关系以支持后续访问限制检查
         key_hash = ApiKey.hash_key(api_key)
@@ -591,7 +592,7 @@ class AuthService:
     @staticmethod
     async def authenticate_management_token(
         db: Session, raw_token: str, client_ip: str
-    ) -> Optional[tuple[User, "ManagementToken"]]:
+    ) -> tuple[User, ManagementToken] | None:
         """Management Token 认证
 
         Args:
