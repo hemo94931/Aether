@@ -1,5 +1,8 @@
 """用户 Management Token 管理端点"""
 
+from __future__ import annotations
+
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -35,7 +38,7 @@ class ManagementTokenApiAdapter(AuthenticatedApiAdapter):
     防止用户通过已有的 Token 再创建/修改/删除其他 Token。
     """
 
-    def authorize(self, context: ApiRequestContext):
+    def authorize(self, context: ApiRequestContext) -> Any:
         # 先调用父类的认证检查
         super().authorize(context)
 
@@ -65,7 +68,7 @@ class CreateManagementTokenRequest(BaseModel):
 
     @field_validator("expires_at", mode="before")
     @classmethod
-    def parse_expires(cls, v):
+    def parse_expires(cls, v: Any) -> Any:
         return parse_expires_at(v)
 
 
@@ -88,7 +91,7 @@ class UpdateManagementTokenRequest(BaseModel):
     # 用于追踪哪些字段被显式提供（包括显式设为 null 的情况）
     _provided_fields: set[str] = set()
 
-    def __init__(self, **data):
+    def __init__(self, **data: Any) -> None:
         # 记录实际传入的字段（包括值为 None 的）
         provided = set(data.keys())
         super().__init__(**data)
@@ -108,7 +111,7 @@ class UpdateManagementTokenRequest(BaseModel):
 
     @field_validator("expires_at", mode="before")
     @classmethod
-    def parse_expires(cls, v):
+    def parse_expires(cls, v: Any) -> Any:
         # 如果是 None 或空字符串，表示要清空
         if v is None or (isinstance(v, str) and not v.strip()):
             return None
@@ -125,7 +128,7 @@ async def list_my_management_tokens(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """列出当前用户的 Management Tokens
 
     获取当前登录用户创建的所有 Management Tokens，支持按激活状态筛选和分页。
@@ -160,7 +163,7 @@ async def list_my_management_tokens(
 
 
 @router.post("")
-async def create_my_management_token(request: Request, db: Session = Depends(get_db)):
+async def create_my_management_token(request: Request, db: Session = Depends(get_db)) -> Any:
     """创建 Management Token
 
     为当前用户创建一个新的 Management Token。
@@ -196,7 +199,7 @@ async def get_my_management_token(
     token_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """获取 Management Token 详情
 
     获取当前用户指定 Token 的详细信息。
@@ -224,7 +227,7 @@ async def get_my_management_token(
 @router.put("/{token_id}")
 async def update_my_management_token(
     token_id: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """更新 Management Token
 
     更新当前用户指定 Token 的信息。支持部分字段更新。
@@ -262,7 +265,7 @@ async def update_my_management_token(
 @router.delete("/{token_id}")
 async def delete_my_management_token(
     token_id: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """删除 Management Token
 
     删除当前用户指定的 Token。
@@ -280,7 +283,7 @@ async def delete_my_management_token(
 @router.patch("/{token_id}/status")
 async def toggle_my_management_token(
     token_id: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """切换 Management Token 状态
 
     启用或禁用当前用户指定的 Token。
@@ -310,7 +313,7 @@ async def toggle_my_management_token(
 @router.post("/{token_id}/regenerate")
 async def regenerate_my_management_token(
     token_id: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """重新生成 Management Token
 
     重新生成当前用户指定 Token 的值，旧 Token 将立即失效。
@@ -350,7 +353,7 @@ class ListMyManagementTokensAdapter(ManagementTokenApiAdapter):
     skip: int = 0
     limit: int = 50
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         from src.config.settings import config
 
         tokens, total = ManagementTokenService.list_tokens(
@@ -385,7 +388,7 @@ class CreateMyManagementTokenAdapter(ManagementTokenApiAdapter):
     name: str = "create_my_management_token"
     audit_success_event = AuditEventType.MANAGEMENT_TOKEN_CREATED
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         body = context.ensure_json_body()
 
         try:
@@ -424,7 +427,7 @@ class GetMyManagementTokenAdapter(ManagementTokenApiAdapter):
     name: str = "get_my_management_token"
     token_id: str = ""
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         token = ManagementTokenService.get_token_by_id(
             db=context.db, token_id=self.token_id, user_id=context.user.id
         )
@@ -443,7 +446,7 @@ class UpdateMyManagementTokenAdapter(ManagementTokenApiAdapter):
     token_id: str = ""
     audit_success_event = AuditEventType.MANAGEMENT_TOKEN_UPDATED
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         body = context.ensure_json_body()
 
         try:
@@ -496,7 +499,7 @@ class DeleteMyManagementTokenAdapter(ManagementTokenApiAdapter):
     token_id: str = ""
     audit_success_event = AuditEventType.MANAGEMENT_TOKEN_DELETED
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         # 先获取 token 信息用于审计
         token = ManagementTokenService.get_token_by_id(
             db=context.db, token_id=self.token_id, user_id=context.user.id
@@ -525,7 +528,7 @@ class ToggleMyManagementTokenAdapter(ManagementTokenApiAdapter):
     token_id: str = ""
     audit_success_event = AuditEventType.MANAGEMENT_TOKEN_UPDATED
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         token = ManagementTokenService.toggle_status(
             db=context.db, token_id=self.token_id, user_id=context.user.id
         )
@@ -553,7 +556,7 @@ class RegenerateMyManagementTokenAdapter(ManagementTokenApiAdapter):
     token_id: str = ""
     audit_success_event = AuditEventType.MANAGEMENT_TOKEN_UPDATED
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         token, raw_token, old_token_hash = ManagementTokenService.regenerate_token(
             db=context.db, token_id=self.token_id, user_id=context.user.id
         )

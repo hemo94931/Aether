@@ -2,6 +2,8 @@
 Provider 模型管理 API
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +37,7 @@ from src.models.database import (
     Provider,
 )
 from src.services.model.service import ModelService
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(tags=["Model Management"])
 pipeline = ApiRequestPipeline()
@@ -205,7 +208,7 @@ async def delete_provider_model(
     model_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     删除模型
 
@@ -264,7 +267,7 @@ async def get_provider_available_source_models(
     provider_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取提供商支持的可用源模型
 
@@ -379,7 +382,7 @@ class AdminListProviderModelsAdapter(AdminApiAdapter):
     skip: int
     limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:
@@ -396,7 +399,7 @@ class AdminCreateProviderModelAdapter(AdminApiAdapter):
     provider_id: str
     model_data: ModelCreate
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:
@@ -416,7 +419,7 @@ class AdminGetProviderModelAdapter(AdminApiAdapter):
     provider_id: str
     model_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         model = (
             db.query(Model)
@@ -435,7 +438,7 @@ class AdminUpdateProviderModelAdapter(AdminApiAdapter):
     model_id: str
     model_data: ModelUpdate
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         model = (
             db.query(Model)
@@ -459,7 +462,7 @@ class AdminDeleteProviderModelAdapter(AdminApiAdapter):
     provider_id: str
     model_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         model = (
             db.query(Model)
@@ -484,7 +487,7 @@ class AdminBatchCreateModelsAdapter(AdminApiAdapter):
     provider_id: str
     models_data: list[ModelCreate]
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:
@@ -503,7 +506,7 @@ class AdminBatchCreateModelsAdapter(AdminApiAdapter):
 class AdminGetProviderAvailableSourceModelsAdapter(AdminApiAdapter):
     provider_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """
         返回 Provider 支持的所有 GlobalModel
 
@@ -571,7 +574,7 @@ class AdminBatchAssignModelsToProviderAdapter(AdminApiAdapter):
     provider_id: str
     payload: BatchAssignModelsToProviderRequest
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:
@@ -654,7 +657,7 @@ class AdminImportFromUpstreamAdapter(AdminApiAdapter):
     provider_id: str
     payload: ImportFromUpstreamRequest
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:

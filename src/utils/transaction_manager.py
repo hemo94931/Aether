@@ -4,6 +4,8 @@
 支持同步和异步函数
 """
 
+from __future__ import annotations
+
 import functools
 import inspect
 from contextlib import contextmanager
@@ -25,7 +27,7 @@ class TransactionError(Exception):
     pass
 
 
-def _find_db_session(args, kwargs) -> Session | None:
+def _find_db_session(args: Any, kwargs: Any) -> Session | None:
     """从参数中查找数据库会话"""
     # 从位置参数中查找Session
     for arg in args:
@@ -40,7 +42,7 @@ def _find_db_session(args, kwargs) -> Session | None:
     return None
 
 
-def transactional(commit: bool = True, rollback_on_error: bool = True):
+def transactional(commit: bool = True, rollback_on_error: bool = True) -> Any:
     """
     事务装饰器，支持同步和异步函数
 
@@ -64,7 +66,7 @@ def transactional(commit: bool = True, rollback_on_error: bool = True):
         # 检查是否是异步函数
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
-            async def async_wrapper(*args, **kwargs) -> Any:
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 db_session = _find_db_session(args, kwargs)
 
                 if not db_session:
@@ -106,7 +108,7 @@ def transactional(commit: bool = True, rollback_on_error: bool = True):
             return async_wrapper
         else:
             @functools.wraps(func)
-            def sync_wrapper(*args, **kwargs) -> Any:
+            def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
                 db_session = _find_db_session(args, kwargs)
 
                 if not db_session:
@@ -197,7 +199,7 @@ def transaction_scope(
         raise
 
 
-def retry_on_database_error(max_retries: int = 3, delay: float = 0.1):
+def retry_on_database_error(max_retries: int = 3, delay: float = 0.1) -> Any:
     """
     数据库错误重试装饰器
 
@@ -208,7 +210,7 @@ def retry_on_database_error(max_retries: int = 3, delay: float = 0.1):
 
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> Any:
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             import random
             import time
 
@@ -246,7 +248,7 @@ class BatchOperation:
         self.operations = []
         self.operation_count = 0
 
-    def add(self, obj):
+    def add(self, obj: Any) -> Any:
         """添加对象到批处理"""
         self.operations.append(("add", obj))
         self.operation_count += 1
@@ -254,7 +256,7 @@ class BatchOperation:
         if self.operation_count >= self.batch_size:
             self.flush()
 
-    def update(self, obj):
+    def update(self, obj: Any) -> Any:
         """添加更新操作到批处理"""
         self.operations.append(("merge", obj))
         self.operation_count += 1
@@ -262,7 +264,7 @@ class BatchOperation:
         if self.operation_count >= self.batch_size:
             self.flush()
 
-    def flush(self):
+    def flush(self) -> Any:
         """执行当前批次的所有操作"""
         if not self.operations:
             return
@@ -288,16 +290,16 @@ class BatchOperation:
             self.operations.clear()
             self.operation_count = 0
 
-    def commit(self):
+    def commit(self) -> Any:
         """提交所有操作"""
         self.flush()  # 确保所有操作都已flush
         self.db.commit()
         logger.debug("批量操作提交完成")
 
-    def __enter__(self):
+    def __enter__(self) -> None:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if exc_type is None:
             # 正常退出，提交事务
             self.commit()

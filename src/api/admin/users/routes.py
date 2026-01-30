@@ -1,5 +1,8 @@
 """用户管理 API 端点。"""
 
+from __future__ import annotations
+
+from typing import Any
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -17,6 +20,7 @@ from src.models.database import ApiKey, User, UserRole
 from src.services.system.config import SystemConfigService
 from src.services.user.apikey import ApiKeyService
 from src.services.user.service import UserService
+from src.api.base.context import ApiRequestContext
 
 
 router = APIRouter(prefix="/api/admin/users", tags=["Admin - Users"])
@@ -25,7 +29,7 @@ pipeline = ApiRequestPipeline()
 
 # 管理员端点
 @router.post("")
-async def create_user_endpoint(request: Request, db: Session = Depends(get_db)):
+async def create_user_endpoint(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     创建用户
 
@@ -50,7 +54,7 @@ async def list_users(
     role: str | None = Query(None, description="按角色筛选（user/admin）"),
     is_active: bool | None = Query(None, description="按状态筛选"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取用户列表
 
@@ -63,7 +67,7 @@ async def list_users(
 
 
 @router.get("/{user_id}")
-async def get_user(user_id: str, request: Request, db: Session = Depends(get_db)):
+async def get_user(user_id: str, request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取用户详情
 
@@ -81,7 +85,7 @@ async def update_user(
     user_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     更新用户信息
 
@@ -104,7 +108,7 @@ async def update_user(
 
 
 @router.delete("/{user_id}")
-async def delete_user(user_id: str, request: Request, db: Session = Depends(get_db)):
+async def delete_user(user_id: str, request: Request, db: Session = Depends(get_db)) -> None:
     """
     删除用户
 
@@ -118,7 +122,7 @@ async def delete_user(user_id: str, request: Request, db: Session = Depends(get_
 
 
 @router.patch("/{user_id}/quota")
-async def reset_user_quota(user_id: str, request: Request, db: Session = Depends(get_db)):
+async def reset_user_quota(user_id: str, request: Request, db: Session = Depends(get_db)) -> None:
     """
     重置用户配额
 
@@ -137,7 +141,7 @@ async def get_user_api_keys(
     request: Request,
     is_active: bool | None = Query(None, description="按状态筛选"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取用户的 API 密钥列表
 
@@ -155,7 +159,7 @@ async def create_user_api_key(
     user_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     为用户创建 API 密钥
 
@@ -183,7 +187,7 @@ async def delete_user_api_key(
     key_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     删除用户的 API 密钥
 
@@ -201,7 +205,7 @@ async def delete_user_api_key(
 
 
 class AdminCreateUserAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         payload = context.ensure_json_body()
         try:
@@ -279,7 +283,7 @@ class AdminListUsersAdapter(AdminApiAdapter):
         self.role = role
         self.is_active = is_active
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         role_enum = UserRole[self.role.upper()] if self.role else None
         users = UserService.list_users(db, self.skip, self.limit, role_enum, self.is_active)
@@ -306,7 +310,7 @@ class AdminGetUserAdapter(AdminApiAdapter):
     def __init__(self, user_id: str):
         self.user_id = user_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = UserService.get_user(db, self.user_id)
         if not user:
@@ -341,7 +345,7 @@ class AdminUpdateUserAdapter(AdminApiAdapter):
     def __init__(self, user_id: str):
         self.user_id = user_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         existing_user = UserService.get_user(db, self.user_id)
         if not existing_user:
@@ -406,7 +410,7 @@ class AdminDeleteUserAdapter(AdminApiAdapter):
     def __init__(self, user_id: str):
         self.user_id = user_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = UserService.get_user(db, self.user_id)
         if not user:
@@ -435,7 +439,7 @@ class AdminResetUserQuotaAdapter(AdminApiAdapter):
     def __init__(self, user_id: str):
         self.user_id = user_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = UserService.get_user(db, self.user_id)
         if not user:
@@ -470,7 +474,7 @@ class AdminGetUserKeysAdapter(AdminApiAdapter):
         self.user_id = user_id
         self.is_active = is_active
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         # 验证用户存在
@@ -518,7 +522,7 @@ class AdminCreateUserKeyAdapter(AdminApiAdapter):
     def __init__(self, user_id: str):
         self.user_id = user_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         payload = context.ensure_json_body()
         try:
@@ -574,7 +578,7 @@ class AdminDeleteUserKeyAdapter(AdminApiAdapter):
         self.user_id = user_id
         self.key_id = key_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         # 验证Key存在且属于该用户

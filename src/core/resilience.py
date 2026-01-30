@@ -3,6 +3,8 @@
 提供全局的错误处理、自动恢复、降级策略和用户友好的错误体验
 """
 
+from __future__ import annotations
+
 import asyncio
 import functools
 import threading
@@ -75,7 +77,7 @@ class CircuitBreaker:
         self.state = "closed"  # closed, open, half-open
         self._lock = threading.Lock()
 
-    def call(self, func: Callable, *args, **kwargs):
+    def call(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """执行函数调用，应用熔断逻辑"""
         with self._lock:
             if self.state == "open":
@@ -98,12 +100,12 @@ class CircuitBreaker:
             return True
         return time.time() - self.last_failure_time >= self.timeout
 
-    def _on_success(self):
+    def _on_success(self) -> None:
         """成功时重置计数器"""
         self.failure_count = 0
         self.state = "closed"
 
-    def _on_failure(self):
+    def _on_failure(self) -> None:
         """失败时增加计数器"""
         self.failure_count += 1
         self.last_failure_time = time.time()
@@ -114,14 +116,14 @@ class CircuitBreaker:
 class ResilienceManager:
     """系统韧性管理器"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.error_patterns: list[ErrorPattern] = []
         self.circuit_breakers: dict[str, CircuitBreaker] = {}
         self.error_stats: dict[str, int] = {}
         self.last_errors: list[dict[str, Any]] = []
         self._setup_default_patterns()
 
-    def _setup_default_patterns(self):
+    def _setup_default_patterns(self) -> None:
         """设置默认错误处理模式"""
 
         # 数据库连接错误 - 只捕获特定的数据库相关异常
@@ -187,7 +189,7 @@ class ResilienceManager:
             )
         )
 
-    def add_error_pattern(self, pattern: ErrorPattern):
+    def add_error_pattern(self, pattern: ErrorPattern) -> None:
         """添加错误处理模式"""
         self.error_patterns.append(pattern)
 
@@ -277,12 +279,12 @@ resilience_manager = ResilienceManager()
 
 
 def resilient_operation(
-    operation_name: str = None,
-    max_retries: int = None,
-    retry_delay: float = None,
-    circuit_breaker_key: str = None,
+    operation_name: str | None = None,
+    max_retries: int | None = None,
+    retry_delay: float | None = None,
+    circuit_breaker_key: str | None = None,
     context: dict[str, Any] = None,
-):
+) -> Any:
     """
     韧性操作装饰器
     自动处理重试、熔断、错误记录等
@@ -290,7 +292,7 @@ def resilient_operation(
 
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             op_name = operation_name or f"{func.__module__}.{func.__name__}"
             retries = max_retries or 3
             delay = retry_delay or 1.0
@@ -342,7 +344,7 @@ def resilient_operation(
             raise last_error
 
         @functools.wraps(func)
-        def sync_wrapper(*args, **kwargs):
+        def sync_wrapper(*args: Any, **kwargs: Any) -> None:
             # 对于同步函数，创建异步包装器并运行
             return asyncio.run(async_wrapper(*args, **kwargs))
 
@@ -356,7 +358,7 @@ def resilient_operation(
 
 
 @asynccontextmanager
-async def safe_operation(operation_name: str, context: dict[str, Any] = None):
+async def safe_operation(operation_name: str, context: dict[str, Any] = None) -> Any:
     """
     安全操作上下文管理器
     自动处理异常并提供用户友好的错误信息
@@ -381,7 +383,7 @@ async def safe_operation(operation_name: str, context: dict[str, Any] = None):
             logger.warning(f"操作警告 [{error_result['error_id']}]: {error_result['user_message']}")
 
 
-def graceful_degradation(fallback_func: Callable = None, fallback_value: Any = None):
+def graceful_degradation(fallback_func: Callable | None = None, fallback_value: Any | None = None) -> Any:
     """
     优雅降级装饰器
     当主要功能失败时，自动切换到备用方案
@@ -389,7 +391,7 @@ def graceful_degradation(fallback_func: Callable = None, fallback_value: Any = N
 
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 if asyncio.iscoroutinefunction(func):
                     return await func(*args, **kwargs)

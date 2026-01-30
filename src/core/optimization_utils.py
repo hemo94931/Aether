@@ -21,11 +21,11 @@ class TokenCounter:
         "claude-2": "cl100k_base",
     }
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._encodings = {}
         self._default_encoding = None
 
-    def _get_encoding(self, model: str):
+    def _get_encoding(self, model: str) -> Any:
         """获取模型对应的编码器"""
         # 标准化模型名称
         model_base = model.lower().split("-")[0]

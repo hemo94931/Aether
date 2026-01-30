@@ -3,6 +3,9 @@
 提供统一的用户认证和授权功能
 """
 
+from __future__ import annotations
+
+from typing import Any
 import hashlib
 
 from fastapi import Depends, Header, HTTPException, status
@@ -183,7 +186,7 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
-def require_role(required_role: UserRole):
+def require_role(required_role: UserRole) -> Any:
     """
     要求特定角色权限的装饰器工厂
 

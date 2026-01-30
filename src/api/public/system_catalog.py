@@ -4,6 +4,8 @@ System Catalog / 健康检查相关端点
 这些是系统工具端点，不需要复杂的 Adapter 抽象。
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from typing import Any
 
@@ -97,7 +99,7 @@ def _select_provider(db: Session, provider_name: str | None) -> Provider | None:
 
 
 @router.get("/v1/health")
-async def service_health(db: Session = Depends(get_db)):
+async def service_health(db: Session = Depends(get_db)) -> Any:
     """返回服务健康状态与依赖信息"""
     active_providers = (
         db.query(func.count(Provider.id)).filter(Provider.is_active == True).scalar() or 0
@@ -130,7 +132,7 @@ async def service_health(db: Session = Depends(get_db)):
 
 
 @router.get("/health")
-async def health_check():
+async def health_check() -> Any:
     """简单健康检查端点（无需认证）"""
     try:
         pool_status = get_pool_status()
@@ -156,7 +158,7 @@ async def health_check():
 
 
 @router.get("/")
-async def root(db: Session = Depends(get_db)):
+async def root(db: Session = Depends(get_db)) -> Any:
     """Root endpoint - 服务信息概览"""
     # 按优先级选择最高优先级的提供商
     top_provider = (
@@ -189,7 +191,7 @@ async def list_providers(
     include_models: bool = Query(False),
     include_endpoints: bool = Query(False),
     active_only: bool = Query(True),
-):
+) -> Any:
     """列出所有 Provider"""
     load_options = []
     if include_models:
@@ -219,7 +221,7 @@ async def provider_detail(
     db: Session = Depends(get_db),
     include_models: bool = Query(False),
     include_endpoints: bool = Query(False),
-):
+) -> Any:
     """获取单个 Provider 详情"""
     load_options = []
     if include_models:
@@ -248,7 +250,7 @@ async def test_connection(
     provider: str | None = Query(None),
     model: str = Query("claude-3-haiku-20240307"),
     api_format: str | None = Query(None),
-):
+) -> Any:
     """测试 Provider 连接"""
     selected_provider = _select_provider(db, provider)
     if not selected_provider:
@@ -269,7 +271,7 @@ async def test_connection(
     orchestrator = FallbackOrchestrator(db, redis_client)
 
     # 定义请求函数
-    async def test_request_func(_prov, endpoint, key, _candidate):
+    async def test_request_func(_prov: Any, endpoint: Any, key: str, _candidate: Any) -> Any:
         from src.api.handlers.base.request_builder import get_provider_auth
 
         # 获取认证信息（处理 Service Account 等异步认证场景）

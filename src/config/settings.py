@@ -3,6 +3,7 @@
 从环境变量或 .env 文件加载配置
 """
 
+from typing import Any
 import os
 from pathlib import Path
 
@@ -383,7 +384,7 @@ class Config:
         return self._database_url
 
     @database_url.setter
-    def database_url(self, value: str):
+    def database_url(self, value: str) -> Any:
         """允许在测试中设置数据库 URL"""
         self._database_url = value
 
@@ -452,7 +453,7 @@ class Config:
 
         return errors
 
-    def __repr__(self):
+    def __repr__(self) -> None:
         """配置信息字符串表示"""
         return f"""
 Configuration:

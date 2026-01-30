@@ -54,7 +54,7 @@ class ApiRequestPipeline:
         mode: ApiMode = ApiMode.STANDARD,
         api_format_hint: str | None = None,
         path_params: dict[str, Any] | None = None,
-    ):
+    ) -> Any:
         # 高频轮询端点抑制 debug 日志
         is_quiet = http_request.url.path in QUIET_POLLING_PATHS
         if not is_quiet:
@@ -500,7 +500,7 @@ class ApiRequestPipeline:
 
         return self._sanitize_metadata(metadata)
 
-    def _sanitize_metadata(self, value: Any, depth: int = 0):
+    def _sanitize_metadata(self, value: Any, depth: int = 0) -> None:
         if value is None:
             return None
         if depth > 5:

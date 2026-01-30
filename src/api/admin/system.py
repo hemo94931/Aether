@@ -1,6 +1,9 @@
 """系统设置API端点。"""
 
 
+from __future__ import annotations
+
+from typing import Any
 import copy
 from dataclasses import dataclass
 
@@ -17,6 +20,7 @@ from src.models.api import SystemSettingsRequest, SystemSettingsResponse
 from src.models.database import ApiKey, Provider, Usage, User
 from src.services.email.email_template import EmailTemplate
 from src.services.system.config import SystemConfigService
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(prefix="/api/admin/system", tags=["Admin - System"])
 
@@ -79,7 +83,7 @@ def _parse_version(version_str: str) -> tuple:
 
 
 @router.get("/version")
-async def get_system_version():
+async def get_system_version() -> Any:
     """
     获取系统版本信息
 
@@ -92,7 +96,7 @@ async def get_system_version():
 
 
 @router.get("/check-update")
-async def check_update():
+async def check_update() -> Any:
     """
     检查系统更新
 
@@ -115,7 +119,7 @@ async def check_update():
     github_repo = "Aethersailor/Aether"
     github_tags_url = f"https://api.github.com/repos/{github_repo}/tags"
 
-    def _make_empty_response(error: str | None = None):
+    def _make_empty_response(error: str | None = None) -> None:
         return {
             "current_version": current_version,
             "latest_version": None,
@@ -238,7 +242,7 @@ pipeline = ApiRequestPipeline()
 
 
 @router.get("/settings")
-async def get_system_settings(request: Request, db: Session = Depends(get_db)):
+async def get_system_settings(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取系统设置
 
@@ -255,7 +259,7 @@ async def get_system_settings(request: Request, db: Session = Depends(get_db)):
 
 
 @router.put("/settings")
-async def update_system_settings(http_request: Request, db: Session = Depends(get_db)):
+async def update_system_settings(http_request: Request, db: Session = Depends(get_db)) -> None:
     """
     更新系统设置
 
@@ -275,7 +279,7 @@ async def update_system_settings(http_request: Request, db: Session = Depends(ge
 
 
 @router.get("/configs")
-async def get_all_system_configs(request: Request, db: Session = Depends(get_db)):
+async def get_all_system_configs(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取所有系统配置
 
@@ -290,7 +294,7 @@ async def get_all_system_configs(request: Request, db: Session = Depends(get_db)
 
 
 @router.get("/configs/{key}")
-async def get_system_config(key: str, request: Request, db: Session = Depends(get_db)):
+async def get_system_config(key: str, request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取特定系统配置
 
@@ -314,7 +318,7 @@ async def set_system_config(
     key: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     设置系统配置
 
@@ -339,7 +343,7 @@ async def set_system_config(
 
 
 @router.delete("/configs/{key}")
-async def delete_system_config(key: str, request: Request, db: Session = Depends(get_db)):
+async def delete_system_config(key: str, request: Request, db: Session = Depends(get_db)) -> None:
     """
     删除系统配置
 
@@ -357,7 +361,7 @@ async def delete_system_config(key: str, request: Request, db: Session = Depends
 
 
 @router.get("/stats")
-async def get_system_stats(request: Request, db: Session = Depends(get_db)):
+async def get_system_stats(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取系统统计信息
 
@@ -374,7 +378,7 @@ async def get_system_stats(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/cleanup")
-async def trigger_cleanup(request: Request, db: Session = Depends(get_db)):
+async def trigger_cleanup(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     手动触发清理任务
 
@@ -393,7 +397,7 @@ async def trigger_cleanup(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/api-formats")
-async def get_api_formats(request: Request, db: Session = Depends(get_db)):
+async def get_api_formats(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取所有可用的 API 格式列表
 
@@ -411,35 +415,35 @@ async def get_api_formats(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/config/export")
-async def export_config(request: Request, db: Session = Depends(get_db)):
+async def export_config(request: Request, db: Session = Depends(get_db)) -> Any:
     """导出提供商和模型配置（管理员）"""
     adapter = AdminExportConfigAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/config/import")
-async def import_config(request: Request, db: Session = Depends(get_db)):
+async def import_config(request: Request, db: Session = Depends(get_db)) -> Any:
     """导入提供商和模型配置（管理员）"""
     adapter = AdminImportConfigAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/users/export")
-async def export_users(request: Request, db: Session = Depends(get_db)):
+async def export_users(request: Request, db: Session = Depends(get_db)) -> Any:
     """导出用户数据（管理员）"""
     adapter = AdminExportUsersAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/users/import")
-async def import_users(request: Request, db: Session = Depends(get_db)):
+async def import_users(request: Request, db: Session = Depends(get_db)) -> Any:
     """导入用户数据（管理员）"""
     adapter = AdminImportUsersAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/smtp/test")
-async def test_smtp(request: Request, db: Session = Depends(get_db)):
+async def test_smtp(request: Request, db: Session = Depends(get_db)) -> Any:
     """测试 SMTP 连接（管理员）"""
     adapter = AdminTestSmtpAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -449,7 +453,7 @@ async def test_smtp(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/email/templates")
-async def get_email_templates(request: Request, db: Session = Depends(get_db)):
+async def get_email_templates(request: Request, db: Session = Depends(get_db)) -> Any:
     """获取所有邮件模板（管理员）"""
     adapter = AdminGetEmailTemplatesAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -458,7 +462,7 @@ async def get_email_templates(request: Request, db: Session = Depends(get_db)):
 @router.get("/email/templates/{template_type}")
 async def get_email_template(
     template_type: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """获取指定类型的邮件模板（管理员）"""
     adapter = AdminGetEmailTemplateAdapter(template_type=template_type)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -467,7 +471,7 @@ async def get_email_template(
 @router.put("/email/templates/{template_type}")
 async def update_email_template(
     template_type: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """更新邮件模板（管理员）"""
     adapter = AdminUpdateEmailTemplateAdapter(template_type=template_type)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -476,7 +480,7 @@ async def update_email_template(
 @router.post("/email/templates/{template_type}/preview")
 async def preview_email_template(
     template_type: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """预览邮件模板（管理员）"""
     adapter = AdminPreviewEmailTemplateAdapter(template_type=template_type)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -485,7 +489,7 @@ async def preview_email_template(
 @router.post("/email/templates/{template_type}/reset")
 async def reset_email_template(
     template_type: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """重置邮件模板为默认值（管理员）"""
     adapter = AdminResetEmailTemplateAdapter(template_type=template_type)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -495,7 +499,7 @@ async def reset_email_template(
 
 
 class AdminGetSystemSettingsAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         default_provider = SystemConfigService.get_default_provider(db)
         default_model = SystemConfigService.get_config(db, "default_model")
@@ -511,7 +515,7 @@ class AdminGetSystemSettingsAdapter(AdminApiAdapter):
 
 
 class AdminUpdateSystemSettingsAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         payload = context.ensure_json_body()
         try:
@@ -560,7 +564,7 @@ class AdminUpdateSystemSettingsAdapter(AdminApiAdapter):
 
 
 class AdminGetAllConfigsAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         return SystemConfigService.get_all_configs(context.db)
 
 
@@ -571,7 +575,7 @@ class AdminGetSystemConfigAdapter(AdminApiAdapter):
     # 敏感配置项，不返回实际值
     SENSITIVE_KEYS = {"smtp_password"}
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         value = SystemConfigService.get_config(context.db, self.key)
         if value is None:
             raise NotFoundException(f"配置项 '{self.key}' 不存在")
@@ -588,7 +592,7 @@ class AdminSetSystemConfigAdapter(AdminApiAdapter):
     # 需要加密存储的配置项
     ENCRYPTED_KEYS = {"smtp_password"}
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         payload = context.ensure_json_body()
         value = payload.get("value")
 
@@ -619,7 +623,7 @@ class AdminSetSystemConfigAdapter(AdminApiAdapter):
 class AdminDeleteSystemConfigAdapter(AdminApiAdapter):
     key: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         deleted = SystemConfigService.delete_config(context.db, self.key)
         if not deleted:
             raise NotFoundException(f"配置项 '{self.key}' 不存在")
@@ -627,7 +631,7 @@ class AdminDeleteSystemConfigAdapter(AdminApiAdapter):
 
 
 class AdminSystemStatsAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         total_users = db.query(User).count()
         active_users = db.query(User).filter(User.is_active.is_(True)).count()
@@ -645,7 +649,7 @@ class AdminSystemStatsAdapter(AdminApiAdapter):
 
 
 class AdminTriggerCleanupAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """手动触发清理任务"""
         from datetime import datetime, timezone
 
@@ -708,7 +712,7 @@ class AdminTriggerCleanupAdapter(AdminApiAdapter):
 
 
 class AdminGetApiFormatsAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """获取所有可用的API格式"""
         from src.core.api_format import API_FORMAT_DEFINITIONS, APIFormat
 
@@ -738,7 +742,7 @@ class AdminExportConfigAdapter(AdminApiAdapter):
         "token_cookie", "auth_cookie", "cookie_string", "cookie"
     }
 
-    def _decrypt_provider_config(self, config: dict, crypto_service) -> dict:
+    def _decrypt_provider_config(self, config: dict, crypto_service: Any) -> dict:
         """解密 Provider config 中的 provider_ops credentials"""
         if not config:
             return config
@@ -762,7 +766,7 @@ class AdminExportConfigAdapter(AdminApiAdapter):
 
         return decrypted_config
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """导出提供商和模型配置（解密数据）"""
         from datetime import datetime, timezone
 
@@ -976,7 +980,7 @@ class AdminImportConfigAdapter(AdminApiAdapter):
         "token_cookie", "auth_cookie", "cookie_string", "cookie"
     }
 
-    def _encrypt_provider_config(self, config: dict, crypto_service) -> dict:
+    def _encrypt_provider_config(self, config: dict, crypto_service: Any) -> dict:
         """加密 Provider config 中的 provider_ops credentials"""
         if not config:
             return config
@@ -998,7 +1002,7 @@ class AdminImportConfigAdapter(AdminApiAdapter):
 
         return encrypted_config
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """导入提供商和模型配置"""
         import uuid
         from datetime import datetime, timezone
@@ -1611,7 +1615,7 @@ class AdminImportConfigAdapter(AdminApiAdapter):
 
 
 class AdminExportUsersAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """导出用户数据（保留加密数据，排除管理员）"""
         from datetime import datetime, timezone
 
@@ -1689,7 +1693,7 @@ class AdminExportUsersAdapter(AdminApiAdapter):
 
 
 class AdminImportUsersAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """导入用户数据"""
         import uuid
         from datetime import datetime, timezone
@@ -1891,7 +1895,7 @@ class AdminImportUsersAdapter(AdminApiAdapter):
 
 
 class AdminTestSmtpAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """测试 SMTP 连接"""
         from src.core.crypto import crypto_service
         from src.services.system.config import SystemConfigService
@@ -1968,7 +1972,7 @@ class AdminTestSmtpAdapter(AdminApiAdapter):
 class AdminGetEmailTemplatesAdapter(AdminApiAdapter):
     """获取所有邮件模板"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         templates = []
 
@@ -2003,7 +2007,7 @@ class AdminGetEmailTemplateAdapter(AdminApiAdapter):
 
     template_type: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         # 验证模板类型
         if self.template_type not in EmailTemplate.TEMPLATE_TYPES:
             raise NotFoundException(f"模板类型 '{self.template_type}' 不存在")
@@ -2036,7 +2040,7 @@ class AdminUpdateEmailTemplateAdapter(AdminApiAdapter):
 
     template_type: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         # 验证模板类型
         if self.template_type not in EmailTemplate.TEMPLATE_TYPES:
             raise NotFoundException(f"模板类型 '{self.template_type}' 不存在")
@@ -2077,7 +2081,7 @@ class AdminPreviewEmailTemplateAdapter(AdminApiAdapter):
 
     template_type: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         # 验证模板类型
         if self.template_type not in EmailTemplate.TEMPLATE_TYPES:
             raise NotFoundException(f"模板类型 '{self.template_type}' 不存在")
@@ -2123,7 +2127,7 @@ class AdminResetEmailTemplateAdapter(AdminApiAdapter):
 
     template_type: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         # 验证模板类型
         if self.template_type not in EmailTemplate.TEMPLATE_TYPES:
             raise NotFoundException(f"模板类型 '{self.template_type}' 不存在")

@@ -4,6 +4,8 @@ Gemini CLI Adapter - 基于通用 CLI Adapter 基类的实现
 继承 CliAdapterBase，处理 Gemini CLI 格式的请求。
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 import httpx

@@ -1,5 +1,7 @@
 """LDAP配置管理API端点。"""
 
+from __future__ import annotations
+
 import re
 from typing import Any
 
@@ -15,6 +17,7 @@ from src.core.exceptions import InvalidRequestException, translate_pydantic_erro
 from src.core.logger import logger
 from src.database import get_db
 from src.models.database import AuditEventType, LDAPConfig, User, UserRole
+from src.api.base.context import ApiRequestContext
 from src.services.system.audit import AuditService
 
 router = APIRouter(prefix="/api/admin/ldap", tags=["Admin - LDAP"])
@@ -263,7 +266,7 @@ async def test_ldap_connection(request: Request, db: Session = Depends(get_db)) 
 
 
 class AdminGetLDAPConfigAdapter(AdminApiAdapter):
-    async def handle(self, context) -> dict[str, Any]:  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> dict[str, Any]:  # type: ignore[override]
         db = context.db
         config = db.query(LDAPConfig).first()
 
@@ -300,7 +303,7 @@ class AdminGetLDAPConfigAdapter(AdminApiAdapter):
 
 
 class AdminUpdateLDAPConfigAdapter(AdminApiAdapter):
-    async def handle(self, context) -> dict[str, str]:  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> dict[str, str]:  # type: ignore[override]
         db = context.db
         payload = context.ensure_json_body()
 
@@ -421,7 +424,7 @@ class AdminUpdateLDAPConfigAdapter(AdminApiAdapter):
 
 
 class AdminTestLDAPConnectionAdapter(AdminApiAdapter):
-    async def handle(self, context) -> dict[str, Any]:  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> dict[str, Any]:  # type: ignore[override]
         from src.services.auth.ldap import LDAPService
 
         db = context.db

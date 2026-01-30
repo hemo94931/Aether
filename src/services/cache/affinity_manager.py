@@ -18,6 +18,8 @@
 - 这样可以支持"独立余额Key"场景，每个Key有自己的缓存亲和性
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import os
@@ -76,7 +78,7 @@ class CacheAffinityManager:
     # 默认缓存TTL（秒）- 使用统一常量
     DEFAULT_CACHE_TTL = CacheTTL.CACHE_AFFINITY
 
-    def __init__(self, redis_client=None, default_ttl: int = DEFAULT_CACHE_TTL):
+    def __init__(self, redis_client: Any | None = None, default_ttl: int = DEFAULT_CACHE_TTL) -> None:
         """
         初始化缓存亲和性管理器
 
@@ -149,7 +151,7 @@ class CacheAffinityManager:
                 return None
             return dict(payload)
 
-    async def _set_l1_entry(self, cache_key: str, payload: dict[str, Any] | None):
+    async def _set_l1_entry(self, cache_key: str, payload: dict[str, Any] | None) -> None:
         async with self._l1_lock:
             if not payload:
                 self._l1_cache.pop(cache_key, None)
@@ -194,7 +196,7 @@ class CacheAffinityManager:
         return len(expired_keys)
 
     @asynccontextmanager
-    async def _acquire_request_lock(self, cache_key: str):
+    async def _acquire_request_lock(self, cache_key: str) -> None:
         lock = self._request_locks.get(cache_key)
         if lock is None:
             lock = asyncio.Lock()
@@ -647,7 +649,7 @@ class CacheAffinityManager:
 _affinity_manager: CacheAffinityManager | None = None
 
 
-async def get_affinity_manager(redis_client=None) -> CacheAffinityManager:
+async def get_affinity_manager(redis_client: Any | None = None) -> CacheAffinityManager:
     """
     获取全局CacheAffinityManager实例（若Redis不可用则降级为内存模式）
 

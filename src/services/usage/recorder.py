@@ -22,6 +22,8 @@ await recorder.record(result)
 ```
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from sqlalchemy.orm import Session

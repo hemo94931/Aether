@@ -2,6 +2,8 @@
 API密钥管理服务
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -124,7 +126,7 @@ class ApiKeyService:
         return query.order_by(ApiKey.created_at.desc()).all()
 
     @staticmethod
-    def update_api_key(db: Session, key_id: str, **kwargs) -> ApiKey | None:  # UUID
+    def update_api_key(db: Session, key_id: str, **kwargs: Any) -> ApiKey | None:  # UUID
         """更新API密钥"""
         api_key = db.query(ApiKey).filter(ApiKey.id == key_id).first()
         if not api_key:

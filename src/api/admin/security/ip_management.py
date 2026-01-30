@@ -4,6 +4,9 @@ IP 安全管理接口
 提供 IP 黑白名单管理和速率限制统计
 """
 
+from __future__ import annotations
+
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
@@ -14,6 +17,7 @@ from src.api.base.pipeline import ApiRequestPipeline
 from src.core.exceptions import InvalidRequestException, translate_pydantic_error
 from src.database import get_db
 from src.services.rate_limit.ip_limiter import IPRateLimiter
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(prefix="/api/admin/security/ip", tags=["Admin - Security"])
 pipeline = ApiRequestPipeline()
@@ -52,7 +56,7 @@ class RemoveIPFromWhitelistRequest(BaseModel):
 
 
 @router.post("/blacklist")
-async def add_to_blacklist(request: Request, db: Session = Depends(get_db)):
+async def add_to_blacklist(request: Request, db: Session = Depends(get_db)) -> None:
     """
     添加 IP 到黑名单
 
@@ -74,7 +78,7 @@ async def add_to_blacklist(request: Request, db: Session = Depends(get_db)):
 
 
 @router.delete("/blacklist/{ip_address}")
-async def remove_from_blacklist(ip_address: str, request: Request, db: Session = Depends(get_db)):
+async def remove_from_blacklist(ip_address: str, request: Request, db: Session = Depends(get_db)) -> None:
     """
     从黑名单移除 IP
 
@@ -92,7 +96,7 @@ async def remove_from_blacklist(ip_address: str, request: Request, db: Session =
 
 
 @router.get("/blacklist/stats")
-async def get_blacklist_stats(request: Request, db: Session = Depends(get_db)):
+async def get_blacklist_stats(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取黑名单统计信息
 
@@ -111,7 +115,7 @@ async def get_blacklist_stats(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/whitelist")
-async def add_to_whitelist(request: Request, db: Session = Depends(get_db)):
+async def add_to_whitelist(request: Request, db: Session = Depends(get_db)) -> None:
     """
     添加 IP 到白名单
 
@@ -129,7 +133,7 @@ async def add_to_whitelist(request: Request, db: Session = Depends(get_db)):
 
 
 @router.delete("/whitelist/{ip_address}")
-async def remove_from_whitelist(ip_address: str, request: Request, db: Session = Depends(get_db)):
+async def remove_from_whitelist(ip_address: str, request: Request, db: Session = Depends(get_db)) -> None:
     """
     从白名单移除 IP
 
@@ -147,7 +151,7 @@ async def remove_from_whitelist(ip_address: str, request: Request, db: Session =
 
 
 @router.get("/whitelist")
-async def get_whitelist(request: Request, db: Session = Depends(get_db)):
+async def get_whitelist(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取白名单
 
@@ -167,7 +171,7 @@ async def get_whitelist(request: Request, db: Session = Depends(get_db)):
 class AddToBlacklistAdapter(AuthenticatedApiAdapter):
     """添加 IP 到黑名单适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         payload = context.ensure_json_body()
         try:
             req = AddIPToBlacklistRequest.model_validate(payload)
@@ -199,7 +203,7 @@ class RemoveFromBlacklistAdapter(AuthenticatedApiAdapter):
     def __init__(self, ip_address: str):
         self.ip_address = ip_address
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         success = await IPRateLimiter.remove_from_blacklist(self.ip_address)
 
         if not success:
@@ -213,7 +217,7 @@ class RemoveFromBlacklistAdapter(AuthenticatedApiAdapter):
 class GetBlacklistStatsAdapter(AuthenticatedApiAdapter):
     """获取黑名单统计适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         stats = await IPRateLimiter.get_blacklist_stats()
         return stats
 
@@ -221,7 +225,7 @@ class GetBlacklistStatsAdapter(AuthenticatedApiAdapter):
 class AddToWhitelistAdapter(AuthenticatedApiAdapter):
     """添加 IP 到白名单适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         payload = context.ensure_json_body()
         try:
             req = AddIPToWhitelistRequest.model_validate(payload)
@@ -248,7 +252,7 @@ class RemoveFromWhitelistAdapter(AuthenticatedApiAdapter):
     def __init__(self, ip_address: str):
         self.ip_address = ip_address
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         success = await IPRateLimiter.remove_from_whitelist(self.ip_address)
 
         if not success:
@@ -262,6 +266,6 @@ class RemoveFromWhitelistAdapter(AuthenticatedApiAdapter):
 class GetWhitelistAdapter(AuthenticatedApiAdapter):
     """获取白名单适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         whitelist = await IPRateLimiter.get_whitelist()
         return {"whitelist": list(whitelist), "total": len(whitelist)}

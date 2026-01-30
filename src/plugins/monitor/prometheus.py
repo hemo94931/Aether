@@ -3,6 +3,8 @@ Prometheus监控插件
 支持将指标导出到Prometheus
 """
 
+from __future__ import annotations
+
 import asyncio
 from typing import Any
 
@@ -26,7 +28,7 @@ class PrometheusPlugin(MonitorPlugin):
     使用prometheus_client库导出指标
     """
 
-    def __init__(self, name: str = "prometheus", config: dict[str, Any] = None):
+    def __init__(self, name: str = "prometheus", config: dict[str, Any] | None = None):
         super().__init__(name, config)
 
         # Check if prometheus_client is available
@@ -47,7 +49,7 @@ class PrometheusPlugin(MonitorPlugin):
         # 启动刷新任务
         self._start_flush_task()
 
-    def _init_default_metrics(self):
+    def _init_default_metrics(self) -> None:
         """初始化默认指标"""
         # HTTP请求指标
         http_label_names = ["method", "endpoint", "status", "status_class"]
@@ -113,10 +115,10 @@ class PrometheusPlugin(MonitorPlugin):
             buckets=(0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
         )
 
-    def _start_flush_task(self):
+    def _start_flush_task(self) -> None:
         """启动定期刷新任务"""
 
-        async def flush_loop():
+        async def flush_loop() -> Any:
             try:
                 while self.enabled:
                     await asyncio.sleep(self.flush_interval)
@@ -136,7 +138,7 @@ class PrometheusPlugin(MonitorPlugin):
             # 如果没有运行的事件循环，任务将在后续创建
             logger.warning("No event loop available for Prometheus flush task")
 
-    def _get_or_create_metric(self, name: str, metric_type: MetricType, labels: list[str] = None):
+    def _get_or_create_metric(self, name: str, metric_type: MetricType, labels: list[str] | None = None) -> Any:
         """获取或创建指标"""
         if name not in self._metrics:
             labels = labels or []
@@ -151,7 +153,7 @@ class PrometheusPlugin(MonitorPlugin):
 
         return self._metrics[name]
 
-    async def record_metric(self, metric: Metric):
+    async def record_metric(self, metric: Metric) -> None:
         """记录单个指标"""
         async with self._lock:
             self._buffer.append(metric)
@@ -160,7 +162,7 @@ class PrometheusPlugin(MonitorPlugin):
             if len(self._buffer) >= self.batch_size:
                 await self.flush()
 
-    async def record_batch(self, metrics: list[Metric]):
+    async def record_batch(self, metrics: list[Metric]) -> None:
         """批量记录指标"""
         async with self._lock:
             self._buffer.extend(metrics)
@@ -169,7 +171,7 @@ class PrometheusPlugin(MonitorPlugin):
             if len(self._buffer) >= self.batch_size:
                 await self.flush()
 
-    async def increment(self, name: str, value: float = 1, labels: dict[str, str] | None = None):
+    async def increment(self, name: str, value: float = 1, labels: dict[str, str] | None = None) -> Any:
         """增加计数器"""
         try:
             if name in self._metrics:
@@ -192,7 +194,7 @@ class PrometheusPlugin(MonitorPlugin):
             # 记录错误但不中断
             logger.warning(f"Error recording metric {name}: {e}")
 
-    async def gauge(self, name: str, value: float, labels: dict[str, str] | None = None):
+    async def gauge(self, name: str, value: float, labels: dict[str, str] | None = None) -> Any:
         """设置仪表值"""
         try:
             if name in self._metrics:
@@ -219,7 +221,7 @@ class PrometheusPlugin(MonitorPlugin):
         value: float,
         labels: dict[str, str] | None = None,
         buckets: list[float] | None = None,
-    ):
+    ) -> Any:
         """记录直方图数据"""
         try:
             if name in self._metrics:
@@ -247,12 +249,12 @@ class PrometheusPlugin(MonitorPlugin):
         except Exception as e:
             logger.warning(f"Error recording histogram {name}: {e}")
 
-    async def timing(self, name: str, duration: float, labels: dict[str, str] | None = None):
+    async def timing(self, name: str, duration: float, labels: dict[str, str] | None = None) -> Any:
         """记录时间指标"""
         # 使用直方图记录时间
         await self.histogram(f"{name}_seconds", duration, labels)
 
-    async def flush(self):
+    async def flush(self) -> Any:
         """刷新缓冲的指标到Prometheus"""
         async with self._lock:
             if not self._buffer:
@@ -289,7 +291,7 @@ class PrometheusPlugin(MonitorPlugin):
         """
         return generate_latest(REGISTRY)
 
-    async def shutdown(self):
+    async def shutdown(self) -> Any:
         """
         关闭插件，取消后台任务
 
@@ -311,7 +313,7 @@ class PrometheusPlugin(MonitorPlugin):
 
         logger.info("Prometheus plugin shutdown complete")
 
-    async def cleanup(self):
+    async def cleanup(self) -> Any:
         """
         清理资源（别名方法）
         """

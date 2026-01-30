@@ -3,6 +3,8 @@
 实现预聚合统计，避免每次请求都全表扫描。
 """
 
+from __future__ import annotations
+
 import os
 import uuid
 from datetime import datetime, timedelta, timezone

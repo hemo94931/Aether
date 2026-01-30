@@ -3,6 +3,9 @@
 不包含敏感信息，普通用户可访问
 """
 
+from __future__ import annotations
+
+from typing import Any
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -35,6 +38,7 @@ from src.models.endpoint_models import (
     PublicHealthEvent,
 )
 from src.services.health.endpoint import EndpointHealthService
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(prefix="/api/public", tags=["System Catalog"])
 pipeline = ApiRequestPipeline()
@@ -47,7 +51,7 @@ async def get_public_providers(
     skip: int = Query(0, description="跳过记录数"),
     limit: int = Query(100, description="返回记录数限制"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取提供商列表（用户视图）
 
@@ -84,7 +88,7 @@ async def get_public_models(
     skip: int = Query(0, description="跳过记录数"),
     limit: int = Query(100, description="返回记录数限制"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取模型列表（用户视图）
 
@@ -122,7 +126,7 @@ async def get_public_models(
 
 
 @router.get("/stats", response_model=ProviderStatsResponse)
-async def get_public_stats(request: Request, db: Session = Depends(get_db)):
+async def get_public_stats(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取系统统计信息
 
@@ -147,7 +151,7 @@ async def search_models(
     provider_id: int | None = Query(None, description="提供商ID过滤"),
     limit: int = Query(20, description="返回记录数限制"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     搜索模型
 
@@ -189,7 +193,7 @@ async def get_public_api_format_health(
     lookback_hours: int = Query(6, ge=1, le=168, description="回溯小时数"),
     per_format_limit: int = Query(100, ge=10, le=500, description="每个格式的事件数限制"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取各 API 格式的健康监控数据
 
@@ -236,7 +240,7 @@ async def get_public_global_models(
     is_active: bool | None = Query(None, description="过滤活跃状态"),
     search: str | None = Query(None, description="搜索关键词"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取全局模型（GlobalModel）列表
 
@@ -276,7 +280,7 @@ async def get_public_global_models(
 class PublicApiAdapter(ApiAdapter):
     mode = ApiMode.PUBLIC
 
-    def authorize(self, context):  # type: ignore[override]
+    def authorize(self, context: ApiRequestContext) -> None:  # type: ignore[override]
         return None
 
 
@@ -286,7 +290,7 @@ class PublicProvidersAdapter(PublicApiAdapter):
     skip: int
     limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         logger.debug("公共API请求提供商列表")
         query = db.query(Provider)
@@ -342,7 +346,7 @@ class PublicModelsAdapter(PublicApiAdapter):
     skip: int
     limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         logger.debug("公共API请求模型列表")
         query = (
@@ -391,7 +395,7 @@ class PublicModelsAdapter(PublicApiAdapter):
 
 
 class PublicStatsAdapter(PublicApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         logger.debug("公共API请求系统统计信息")
         active_providers = db.query(Provider).filter(Provider.is_active.is_(True)).count()
@@ -428,7 +432,7 @@ class PublicSearchModelsAdapter(PublicApiAdapter):
     provider_id: int | None
     limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         logger.debug(f"公共API搜索模型: {self.query}")
         query_stmt = (
@@ -490,7 +494,7 @@ class PublicApiFormatHealthMonitorAdapter(PublicApiAdapter):
     lookback_hours: int
     per_format_limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         now = datetime.now(timezone.utc)
         since = now - timedelta(hours=self.lookback_hours)
@@ -651,7 +655,7 @@ class PublicGlobalModelsAdapter(PublicApiAdapter):
     is_active: bool | None
     search: str | None
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         logger.debug("公共API请求 GlobalModel 列表")
 

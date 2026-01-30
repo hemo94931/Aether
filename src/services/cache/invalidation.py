@@ -5,16 +5,19 @@
 """
 
 
+from __future__ import annotations
+
+from typing import Any
 from src.core.logger import logger
 
 
 class CacheInvalidationService:
     """缓存失效服务"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._model_mappers = []
 
-    def register_model_mapper(self, model_mapper):
+    def register_model_mapper(self, model_mapper: Any) -> None:
         """注册 ModelMapper 实例"""
         if model_mapper not in self._model_mappers:
             self._model_mappers.append(model_mapper)
@@ -58,7 +61,7 @@ class CacheInvalidationService:
         except Exception as e:
             logger.error(f"[CacheInvalidation] 失效 models list 缓存失败: {e}")
 
-    def on_model_changed(self, provider_id: str, global_model_id: str):
+    def on_model_changed(self, provider_id: str, global_model_id: str) -> Any:
         """Model 变更时的缓存失效"""
         self._refresh_provider_cache(provider_id)
 
@@ -88,7 +91,7 @@ class CacheInvalidationService:
         for mapper in self._model_mappers:
             mapper.refresh_cache(provider_id)
 
-    def clear_all_caches(self):
+    def clear_all_caches(self) -> None:
         """清空所有缓存"""
         for mapper in self._model_mappers:
             mapper.clear_cache()

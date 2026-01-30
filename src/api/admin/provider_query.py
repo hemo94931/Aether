@@ -3,6 +3,9 @@ Provider Query API 端点
 用于查询提供商的模型列表等信息
 """
 
+from __future__ import annotations
+
+from typing import Any
 import asyncio
 
 import httpx
@@ -63,7 +66,7 @@ async def query_available_models(
     request: ModelsQueryRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> Any:
     """
     查询提供商可用模型
 
@@ -118,7 +121,7 @@ async def query_available_models(
         raise HTTPException(status_code=400, detail="No active API Key found for this provider")
 
     # 并发获取所有 Key 的模型
-    async def fetch_for_key(api_key):
+    async def fetch_for_key(api_key: Any) -> Any:
         # 非强制刷新时，先检查缓存
         if not request.force_refresh:
             cached_models = await get_upstream_models_from_cache(
@@ -246,7 +249,7 @@ async def _fetch_models_for_single_key(
     api_key_id: str,
     format_to_endpoint: dict[str, ProviderEndpoint],
     force_refresh: bool,
-):
+) -> Any:
     """获取单个 Key 的模型列表"""
     # 查找指定的 Key
     api_key = next(
@@ -305,7 +308,7 @@ async def test_model(
     request: TestModelRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> Any:
     """
     测试模型连接性
 

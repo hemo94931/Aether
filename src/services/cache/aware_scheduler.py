@@ -133,10 +133,10 @@ class CacheAwareScheduler:
 
     def __init__(
         self,
-        redis_client=None,
+        redis_client: Any | None = None,
         priority_mode: str | None = None,
         scheduling_mode: str | None = None,
-    ):
+    ) -> None:
         """
         初始化调度器
 
@@ -182,7 +182,7 @@ class CacheAwareScheduler:
             "last_reservation_result": None,
         }
 
-    async def _ensure_initialized(self):
+    async def _ensure_initialized(self) -> None:
         """确保所有异步组件已初始化"""
         if self._affinity_manager is None:
             self._affinity_manager = await get_affinity_manager(self.redis)
@@ -512,7 +512,7 @@ class CacheAwareScheduler:
             f"User.allowed_models={user.allowed_models if user else 'N/A'}"
         )
 
-        def merge_restrictions(key_restriction, user_restriction):
+        def merge_restrictions(key_restriction: Any, user_restriction: Any) -> Any:
             """合并两个限制列表，返回有效的限制集合"""
             key_set = set(key_restriction) if key_restriction else None
             user_set = set(user_restriction) if user_restriction else None
@@ -1405,7 +1405,7 @@ class CacheAwareScheduler:
                 result.extend(sorted_group)
             else:
                 # 单个候选或没有 affinity_key，按次要排序条件排序
-                def secondary_sort(c: ProviderCandidate):
+                def secondary_sort(c: ProviderCandidate) -> Any:
                     return (
                         c.provider.provider_priority,
                         c.key.internal_priority if c.key else 999999,
@@ -1541,7 +1541,7 @@ class CacheAwareScheduler:
         endpoint_id: str | None = None,
         key_id: str | None = None,
         provider_id: str | None = None,
-    ):
+    ) -> Any:
         """
         失效指定亲和性标识符对特定API格式和模型的缓存亲和性
 
@@ -1572,7 +1572,7 @@ class CacheAwareScheduler:
         api_format: str,
         global_model_id: str,
         ttl: int | None = None,
-    ):
+    ) -> Any:
         """
         记录缓存亲和性（供编排器调用）
 
@@ -1645,7 +1645,7 @@ _scheduler: CacheAwareScheduler | None = None
 
 
 async def get_cache_aware_scheduler(
-    redis_client=None,
+    redis_client: Any | None = None,
     priority_mode: str | None = None,
     scheduling_mode: str | None = None,
 ) -> CacheAwareScheduler:

@@ -4,9 +4,12 @@ GlobalModel Admin API
 提供 GlobalModel 的 CRUD 操作接口
 """
 
+from __future__ import annotations
+
+from typing import Any
 from dataclasses import dataclass
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from src.api.base.admin_adapter import AdminApiAdapter
@@ -26,6 +29,7 @@ from src.models.pydantic_models import (
     ModelCatalogProviderDetail,
 )
 from src.services.model.global_model import GlobalModelService
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(prefix="/global", tags=["Admin - Global Models"])
 pipeline = ApiRequestPipeline()
@@ -154,12 +158,12 @@ async def update_global_model(
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
-@router.delete("/{global_model_id}", status_code=204)
+@router.delete("/{global_model_id}", status_code=204, response_class=Response)
 async def delete_global_model(
     request: Request,
     global_model_id: str,
     db: Session = Depends(get_db),
-):
+) -> Response:
     """
     删除 GlobalModel
 
@@ -174,7 +178,7 @@ async def delete_global_model(
     """
     adapter = AdminDeleteGlobalModelAdapter(global_model_id=global_model_id)
     await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
-    return None
+    return Response(status_code=204)
 
 
 @router.post(
@@ -256,7 +260,7 @@ class AdminListGlobalModelsAdapter(AdminApiAdapter):
     is_active: bool | None
     search: str | None
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from sqlalchemy import func
 
         from src.models.database import Model
@@ -302,7 +306,7 @@ class AdminGetGlobalModelAdapter(AdminApiAdapter):
 
     global_model_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         global_model = GlobalModelService.get_global_model(context.db, self.global_model_id)
         stats = GlobalModelService.get_global_model_stats(context.db, self.global_model_id)
 
@@ -320,7 +324,7 @@ class AdminCreateGlobalModelAdapter(AdminApiAdapter):
 
     payload: GlobalModelCreate
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from src.core.exceptions import InvalidRequestException
         from src.core.model_permissions import validate_and_extract_model_mappings
 
@@ -359,7 +363,7 @@ class AdminUpdateGlobalModelAdapter(AdminApiAdapter):
     global_model_id: str
     payload: GlobalModelUpdate
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from src.core.exceptions import InvalidRequestException
         from src.core.model_permissions import validate_and_extract_model_mappings
 
@@ -418,7 +422,7 @@ class AdminDeleteGlobalModelAdapter(AdminApiAdapter):
 
     global_model_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         # 使用行级锁获取 GlobalModel 信息，防止并发操作导致的竞态条件
         # 设置 2 秒锁超时，允许短暂等待而非立即失败
         from sqlalchemy import text
@@ -467,7 +471,7 @@ class AdminBatchAssignToProvidersAdapter(AdminApiAdapter):
     global_model_id: str
     payload: BatchAssignToProvidersRequest
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         result = GlobalModelService.batch_assign_to_providers(
             db=context.db,
             global_model_id=self.global_model_id,
@@ -492,7 +496,7 @@ class AdminGetGlobalModelProvidersAdapter(AdminApiAdapter):
 
     global_model_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from sqlalchemy.orm import joinedload
 
         from src.models.database import Model

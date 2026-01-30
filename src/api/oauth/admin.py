@@ -1,6 +1,8 @@
 """OAuth 管理端点（管理员）。"""
 
 
+from __future__ import annotations
+
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request

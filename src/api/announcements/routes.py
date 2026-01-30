@@ -1,5 +1,8 @@
 """公告系统 API 端点。"""
 
+from __future__ import annotations
+
+from typing import Any
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -16,6 +19,7 @@ from src.models.api import CreateAnnouncementRequest, UpdateAnnouncementRequest
 from src.models.database import User
 from src.services.auth.service import AuthService
 from src.services.system.announcement import AnnouncementService
+from src.api.base.context import ApiRequestContext
 
 
 router = APIRouter(prefix="/api/announcements", tags=["Announcements"])
@@ -32,7 +36,7 @@ async def list_announcements(
     limit: int = Query(50, description="返回数量限制"),
     offset: int = Query(0, description="偏移量"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取公告列表
 
@@ -67,7 +71,7 @@ async def list_announcements(
 async def get_active_announcements(
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取当前有效的公告
 
@@ -87,7 +91,7 @@ async def get_announcement(
     announcement_id: str,  # UUID
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取单个公告详情
 
@@ -118,7 +122,7 @@ async def mark_announcement_as_read(
     announcement_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     标记公告为已读
 
@@ -141,7 +145,7 @@ async def mark_announcement_as_read(
 async def create_announcement(
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     创建公告
 
@@ -170,7 +174,7 @@ async def update_announcement(
     announcement_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     更新公告
 
@@ -201,7 +205,7 @@ async def delete_announcement(
     announcement_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     删除公告
 
@@ -224,7 +228,7 @@ async def delete_announcement(
 async def get_my_unread_announcement_count(
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取我的未读公告数量
 
@@ -245,11 +249,11 @@ class AnnouncementOptionalAuthAdapter(ApiAdapter):
 
     mode = ApiMode.PUBLIC
 
-    async def authorize(self, context):  # type: ignore[override]
+    async def authorize(self, context: ApiRequestContext) -> None:  # type: ignore[override]
         context.extra["optional_user"] = await self._resolve_optional_user(context)
         return None
 
-    async def _resolve_optional_user(self, context) -> User | None:
+    async def _resolve_optional_user(self, context: ApiRequestContext) -> User | None:
         if context.user:
             return context.user
 
@@ -283,7 +287,7 @@ class AnnouncementOptionalAuthAdapter(ApiAdapter):
         except Exception:
             return None
 
-    def get_optional_user(self, context) -> User | None:
+    def get_optional_user(self, context: ApiRequestContext) -> User | None:
         return context.extra.get("optional_user")
 
 
@@ -293,7 +297,7 @@ class ListAnnouncementsAdapter(AnnouncementOptionalAuthAdapter):
     limit: int
     offset: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         optional_user = self.get_optional_user(context)
         return AnnouncementService.get_announcements(
             db=context.db,
@@ -306,7 +310,7 @@ class ListAnnouncementsAdapter(AnnouncementOptionalAuthAdapter):
 
 
 class GetActiveAnnouncementsAdapter(AnnouncementOptionalAuthAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         optional_user = self.get_optional_user(context)
         return AnnouncementService.get_active_announcements(
             db=context.db,
@@ -318,7 +322,7 @@ class GetActiveAnnouncementsAdapter(AnnouncementOptionalAuthAdapter):
 class GetAnnouncementAdapter(AnnouncementOptionalAuthAdapter):
     announcement_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         announcement = AnnouncementService.get_announcement(context.db, self.announcement_id)
         return {
             "id": announcement.id,
@@ -345,13 +349,13 @@ class MarkAnnouncementReadAdapter(AnnouncementUserAdapter):
     def __init__(self, announcement_id: str):
         self.announcement_id = announcement_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         AnnouncementService.mark_as_read(context.db, self.announcement_id, context.user.id)
         return {"message": "公告已标记为已读"}
 
 
 class UnreadAnnouncementCountAdapter(AnnouncementUserAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         result = AnnouncementService.get_announcements(
             db=context.db,
             user_id=context.user.id,
@@ -364,7 +368,7 @@ class UnreadAnnouncementCountAdapter(AnnouncementUserAdapter):
 
 
 class CreateAnnouncementAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         payload = context.ensure_json_body()
         try:
             req = CreateAnnouncementRequest.model_validate(payload)
@@ -392,7 +396,7 @@ class CreateAnnouncementAdapter(AdminApiAdapter):
 class UpdateAnnouncementAdapter(AdminApiAdapter):
     announcement_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         payload = context.ensure_json_body()
         try:
             req = UpdateAnnouncementRequest.model_validate(payload)
@@ -422,6 +426,6 @@ class UpdateAnnouncementAdapter(AdminApiAdapter):
 class DeleteAnnouncementAdapter(AdminApiAdapter):
     announcement_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         AnnouncementService.delete_announcement(context.db, self.announcement_id, context.user.id)
         return {"message": "公告已删除"}

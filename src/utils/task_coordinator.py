@@ -10,6 +10,9 @@
 """
 
 
+from __future__ import annotations
+
+from typing import Any
 import os
 import pathlib
 import uuid
@@ -29,7 +32,7 @@ class StartupTaskCoordinator:
     # 注意：这在 fork 模式下每个 worker 都是独立的
     _startup_cleanup_attempted = False
 
-    def __init__(self, redis_client=None, lock_dir: str | None = None):
+    def __init__(self, redis_client: Any | None = None, lock_dir: str | None = None) -> None:
         self.redis = redis_client
         self._tokens: dict[str, str] = {}
         self._file_handles: dict[str, object] = {}
@@ -98,7 +101,7 @@ class StartupTaskCoordinator:
 
         return await self._acquire_file_lock(name)
 
-    async def release(self, name: str):
+    async def release(self, name: str) -> Any:
         if self.redis and name in self._tokens:
             token = self._tokens.pop(name)
             script = """
@@ -140,7 +143,7 @@ class StartupTaskCoordinator:
             return False
 
 
-async def ensure_singleton_task(name: str, redis_client=None, ttl: int | None = None):
+async def ensure_singleton_task(name: str, redis_client: Any | None = None, ttl: int | None = None) -> Any:
     """便捷协程，返回 (coordinator, acquired)"""
 
     coordinator = StartupTaskCoordinator(redis_client)

@@ -3,6 +3,8 @@
 定义监控和指标收集的接口
 """
 
+from __future__ import annotations
+
 from abc import abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
@@ -46,7 +48,7 @@ class MonitorPlugin(BasePlugin):
     所有监控插件必须继承此类并实现相关方法
     """
 
-    def __init__(self, name: str, config: dict[str, Any] = None):
+    def __init__(self, name: str, config: dict[str, Any] | None = None):
         """
         初始化监控插件
 
@@ -61,7 +63,7 @@ class MonitorPlugin(BasePlugin):
         self.batch_size = self.config.get("batch_size", 100)
 
     @abstractmethod
-    async def record_metric(self, metric: Metric):
+    async def record_metric(self, metric: Metric) -> None:
         """
         记录单个指标
 
@@ -71,7 +73,7 @@ class MonitorPlugin(BasePlugin):
         pass
 
     @abstractmethod
-    async def record_batch(self, metrics: list[Metric]):
+    async def record_batch(self, metrics: list[Metric]) -> None:
         """
         批量记录指标
 
@@ -81,7 +83,7 @@ class MonitorPlugin(BasePlugin):
         pass
 
     @abstractmethod
-    async def increment(self, name: str, value: float = 1, labels: dict[str, str] | None = None):
+    async def increment(self, name: str, value: float = 1, labels: dict[str, str] | None = None) -> Any:
         """
         增加计数器
 
@@ -93,7 +95,7 @@ class MonitorPlugin(BasePlugin):
         pass
 
     @abstractmethod
-    async def gauge(self, name: str, value: float, labels: dict[str, str] | None = None):
+    async def gauge(self, name: str, value: float, labels: dict[str, str] | None = None) -> Any:
         """
         设置仪表值
 
@@ -111,7 +113,7 @@ class MonitorPlugin(BasePlugin):
         value: float,
         labels: dict[str, str] | None = None,
         buckets: list[float] | None = None,
-    ):
+    ) -> Any:
         """
         记录直方图数据
 
@@ -124,7 +126,7 @@ class MonitorPlugin(BasePlugin):
         pass
 
     @abstractmethod
-    async def timing(self, name: str, duration: float, labels: dict[str, str] | None = None):
+    async def timing(self, name: str, duration: float, labels: dict[str, str] | None = None) -> Any:
         """
         记录时间指标
 
@@ -136,7 +138,7 @@ class MonitorPlugin(BasePlugin):
         pass
 
     @abstractmethod
-    async def flush(self):
+    async def flush(self) -> Any:
         """
         刷新缓冲的指标到后端
         """
@@ -160,7 +162,7 @@ class MonitorPlugin(BasePlugin):
         duration: float,
         provider: str | None = None,
         model: str | None = None,
-    ):
+    ) -> Any:
         """
         记录API请求指标（便捷方法）
 
@@ -209,7 +211,7 @@ class MonitorPlugin(BasePlugin):
         input_tokens: int,
         output_tokens: int,
         cost: float | None = None,
-    ):
+    ) -> Any:
         """
         记录Token使用指标（便捷方法）
 
@@ -240,7 +242,7 @@ class MonitorPlugin(BasePlugin):
         if cost is not None:
             loop.create_task(self.increment("usage_cost_total", cost, labels=labels))
 
-    def configure(self, config: dict[str, Any]):
+    def configure(self, config: dict[str, Any]) -> Any:
         """
         配置插件
 
@@ -252,5 +254,5 @@ class MonitorPlugin(BasePlugin):
         self.flush_interval = config.get("flush_interval", self.flush_interval)
         self.batch_size = config.get("batch_size", self.batch_size)
 
-    def __repr__(self):
+    def __repr__(self) -> None:
         return f"<{self.__class__.__name__}(name={self.name}, enabled={self.enabled})>"

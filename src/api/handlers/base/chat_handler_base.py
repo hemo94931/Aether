@@ -19,6 +19,8 @@ Chat Handler Base - Chat API 格式的通用基类
 - StreamTelemetryRecorder: 统计记录（Usage、Audit、Candidate）
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 from abc import ABC, abstractmethod

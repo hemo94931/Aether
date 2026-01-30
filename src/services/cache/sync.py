@@ -9,6 +9,9 @@
 2. GlobalModel/Model 变更时，同步失效所有实例的缓存
 """
 
+from __future__ import annotations
+
+from typing import Any
 import asyncio
 import json
 
@@ -46,7 +49,7 @@ class CacheSyncService:
         self._handlers: dict[str, Callable] = {}
         self._running = False
 
-    async def start(self):
+    async def start(self) -> Any:
         """启动缓存同步服务（订阅 Redis 频道）"""
         if self._running:
             logger.warning("[CacheSync] 服务已在运行")
@@ -73,7 +76,7 @@ class CacheSyncService:
             logger.error(f"[CacheSync] 启动失败: {e}")
             raise
 
-    async def stop(self):
+    async def stop(self) -> Any:
         """停止缓存同步服务"""
         if not self._running:
             return
@@ -95,7 +98,7 @@ class CacheSyncService:
 
         logger.info("[CacheSync] 缓存同步服务已停止")
 
-    def register_handler(self, channel: str, handler: Callable):
+    def register_handler(self, channel: str, handler: Callable) -> None:
         """
         注册缓存失效处理器
 
@@ -106,7 +109,7 @@ class CacheSyncService:
         self._handlers[channel] = handler
         logger.debug(f"[CacheSync] 注册处理器: {channel}")
 
-    async def _listen(self):
+    async def _listen(self) -> None:
         """监听 Redis pub/sub 消息"""
         logger.info("[CacheSync] 开始监听缓存失效消息")
 
@@ -136,21 +139,21 @@ class CacheSyncService:
         except Exception as e:
             logger.error(f"[CacheSync] 监听失败: {e}")
 
-    async def publish_global_model_changed(self, model_name: str):
+    async def publish_global_model_changed(self, model_name: str) -> Any:
         """发布 GlobalModel 变更通知"""
         await self._publish(self.CHANNEL_GLOBAL_MODEL, {"model_name": model_name})
 
-    async def publish_model_changed(self, provider_id: str, global_model_id: str):
+    async def publish_model_changed(self, provider_id: str, global_model_id: str) -> Any:
         """发布 Model 变更通知"""
         await self._publish(
             self.CHANNEL_MODEL, {"provider_id": provider_id, "global_model_id": global_model_id}
         )
 
-    async def publish_clear_all(self):
+    async def publish_clear_all(self) -> Any:
         """发布清空所有缓存通知"""
         await self._publish(self.CHANNEL_CLEAR_ALL, {})
 
-    async def _publish(self, channel: str, data: dict):
+    async def _publish(self, channel: str, data: dict) -> None:
         """发布消息到 Redis 频道"""
         try:
             message = json.dumps(data)
@@ -164,7 +167,7 @@ class CacheSyncService:
 _cache_sync_service: CacheSyncService | None = None
 
 
-async def get_cache_sync_service(redis_client: aioredis.Redis = None) -> CacheSyncService | None:
+async def get_cache_sync_service(redis_client: aioredis.Redis | None = None) -> CacheSyncService | None:
     """
     获取缓存同步服务实例
 
@@ -191,7 +194,7 @@ async def get_cache_sync_service(redis_client: aioredis.Redis = None) -> CacheSy
     return _cache_sync_service
 
 
-async def close_cache_sync_service():
+async def close_cache_sync_service() -> None:
     """关闭缓存同步服务"""
     global _cache_sync_service
 

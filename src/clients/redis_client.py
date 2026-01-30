@@ -39,13 +39,13 @@ class RedisClientManager:
     _instance: RedisClientManager | None = None
     _redis: aioredis.Redis | None = None
 
-    def __new__(cls):
+    def __new__(cls) -> "RedisClientManager":
         """单例模式"""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         # 避免重复初始化
         if getattr(self, "_initialized", False):
             return

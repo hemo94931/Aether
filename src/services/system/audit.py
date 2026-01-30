@@ -3,6 +3,8 @@
 记录所有重要操作和安全事件
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -108,7 +110,7 @@ class AuditService:
         user_agent: str,
         user_id: str | None = None,  # UUID
         error_reason: str | None = None,
-    ):
+    ) -> Any:
         """
         记录登录尝试
 
@@ -151,7 +153,7 @@ class AuditService:
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         cost_usd: float | None = None,
-    ):
+    ) -> Any:
         """
         记录API请求
 
@@ -204,7 +206,7 @@ class AuditService:
         user_id: str | None = None,  # UUID
         severity: str = "medium",
         details: dict[str, Any] | None = None,
-    ):
+    ) -> Any:
         """
         记录安全事件
 

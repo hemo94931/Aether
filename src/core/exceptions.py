@@ -7,6 +7,9 @@
 - 开发环境可返回详细信息用于调试
 """
 
+from __future__ import annotations
+
+from starlette.requests import Request
 import asyncio
 import re
 import traceback
@@ -140,7 +143,7 @@ def translate_pydantic_errors(errors: list[dict[str, Any]]) -> str:
 
 
 # 延迟导入韧性管理器，避免循环导入
-def get_resilience_manager():
+def get_resilience_manager() -> Any:
     try:
         from ..core.resilience import resilience_manager
 
@@ -173,7 +176,7 @@ class ProviderException(ProxyException):
         message: str,
         provider_name: str | None = None,
         request_metadata: Any | None = None,
-        **kwargs,
+        **kwargs: Any,
     ):
         self.request_metadata = request_metadata  # 保存元数据以便传递
         details = {"provider": provider_name} if provider_name else {}
@@ -537,7 +540,7 @@ class ThinkingSignatureException(UpstreamClientException):
         message: str,
         provider_name: str | None = None,
         upstream_error: str | None = None,
-        request_metadata: Any = None,
+        request_metadata: Any | None = None,
     ):
         super().__init__(
             message=message,
@@ -688,17 +691,17 @@ class ExceptionHandlers:
     """FastAPI异常处理器"""
 
     @staticmethod
-    async def handle_proxy_exception(request, exc: ProxyException):
+    async def handle_proxy_exception(request: Request, exc: ProxyException) -> None:
         """处理代理异常"""
         return ErrorResponse.from_exception(exc)
 
     @staticmethod
-    async def handle_http_exception(request, exc: HTTPException):
+    async def handle_http_exception(request: Request, exc: HTTPException) -> None:
         """处理HTTP异常"""
         return ErrorResponse.from_exception(exc)
 
     @staticmethod
-    async def handle_generic_exception(request, exc: Exception):
+    async def handle_generic_exception(request: Request, exc: Exception) -> None:
         """处理通用异常 - 集成韧性管理"""
 
         # 首先检查是否为HTTPException，如果是则委托给HTTP异常处理器

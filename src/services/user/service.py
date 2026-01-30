@@ -2,6 +2,8 @@
 用户管理服务
 """
 
+from __future__ import annotations
+
 import asyncio
 from datetime import datetime, timezone
 from typing import Any
@@ -176,7 +178,7 @@ class UserService:
 
     @staticmethod
     @transactional()
-    def update_user(db: Session, user_id: str, **kwargs) -> User | None:
+    def update_user(db: Session, user_id: str, **kwargs: Any) -> User | None:
         """更新用户信息"""
         user = db.query(User).filter(User.id == user_id).first()
         if not user:

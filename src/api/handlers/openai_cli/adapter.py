@@ -4,6 +4,8 @@ OpenAI CLI Adapter - 基于通用 CLI Adapter 基类的简化实现
 继承 CliAdapterBase，只需配置 FORMAT_ID 和 HANDLER_CLASS。
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 import httpx

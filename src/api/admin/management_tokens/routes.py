@@ -1,5 +1,8 @@
 """管理员 Management Token 管理端点"""
 
+from __future__ import annotations
+
+from typing import Any
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -50,7 +53,7 @@ async def list_all_management_tokens(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """列出所有 Management Tokens（管理员）
 
     管理员查看所有用户的 Management Tokens，支持筛选和分页。
@@ -90,7 +93,7 @@ async def get_management_token(
     token_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """获取 Management Token 详情（管理员）
 
     管理员查看任意 Management Token 的详细信息。
@@ -119,7 +122,7 @@ async def get_management_token(
 @router.delete("/{token_id}")
 async def delete_management_token(
     token_id: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """删除任意 Management Token（管理员）
 
     管理员可以删除任意用户的 Management Token。
@@ -137,7 +140,7 @@ async def delete_management_token(
 @router.patch("/{token_id}/status")
 async def toggle_management_token(
     token_id: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """切换任意 Management Token 状态（管理员）
 
     管理员可以启用/禁用任意用户的 Management Token。
@@ -178,7 +181,7 @@ class AdminListManagementTokensAdapter(AdminManagementTokenApiAdapter):
     skip: int = 0
     limit: int = 50
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         # 构建查询
         query = context.db.query(ManagementToken)
 
@@ -218,7 +221,7 @@ class AdminGetManagementTokenAdapter(AdminManagementTokenApiAdapter):
     name: str = "admin_get_management_token"
     token_id: str = ""
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         token = ManagementTokenService.get_token_by_id(
             db=context.db, token_id=self.token_id
         )
@@ -240,7 +243,7 @@ class AdminDeleteManagementTokenAdapter(AdminManagementTokenApiAdapter):
     token_id: str = ""
     audit_success_event = AuditEventType.MANAGEMENT_TOKEN_DELETED
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         # 先获取 token 信息用于审计
         token = ManagementTokenService.get_token_by_id(
             db=context.db, token_id=self.token_id
@@ -273,7 +276,7 @@ class AdminToggleManagementTokenAdapter(AdminManagementTokenApiAdapter):
     token_id: str = ""
     audit_success_event = AuditEventType.MANAGEMENT_TOKEN_UPDATED
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         token = ManagementTokenService.toggle_status(
             db=context.db, token_id=self.token_id
         )

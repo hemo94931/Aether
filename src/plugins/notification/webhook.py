@@ -34,7 +34,7 @@ class WebhookNotificationPlugin(NotificationPlugin):
     支持多种Webhook格式（Slack, Discord, 通用）
     """
 
-    def __init__(self, name: str = "webhook", config: dict[str, Any] = None):
+    def __init__(self, name: str = "webhook", config: dict[str, Any] | None = None):
         super().__init__(name, config)
 
         if not AIOHTTP_AVAILABLE:
@@ -65,10 +65,10 @@ class WebhookNotificationPlugin(NotificationPlugin):
         # 启动刷新任务
         self._start_flush_task()
 
-    def _start_flush_task(self):
+    def _start_flush_task(self) -> None:
         """启动定时刷新任务"""
 
-        async def flush_loop():
+        async def flush_loop() -> Any:
             while self.enabled:
                 await asyncio.sleep(self.flush_interval)
                 await self.flush()
@@ -288,11 +288,11 @@ class WebhookNotificationPlugin(NotificationPlugin):
             "has_secret": bool(self.secret),
         }
 
-    async def _do_shutdown(self):
+    async def _do_shutdown(self) -> None:
         """清理资源"""
         await self.close()
 
-    async def close(self):
+    async def close(self) -> Any:
         """关闭插件"""
         # 刷新缓冲
         await self.flush()
@@ -305,7 +305,7 @@ class WebhookNotificationPlugin(NotificationPlugin):
         if self._session:
             await self._session.close()
 
-    def __del__(self):
+    def __del__(self) -> None:
         """清理资源"""
         try:
             asyncio.create_task(self.close())

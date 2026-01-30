@@ -1,5 +1,8 @@
 """管理员监控与审计端点。"""
 
+from __future__ import annotations
+
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +26,7 @@ from src.models.database import User as DBUser
 from src.services.health.monitor import HealthMonitor
 from src.services.system.audit import audit_service
 from src.utils.database_helpers import escape_like_pattern
+from src.api.base.context import ApiRequestContext
 
 
 router = APIRouter(prefix="/api/admin/monitoring", tags=["Admin - Monitoring"])
@@ -38,7 +42,7 @@ async def get_audit_logs(
     limit: int = Query(100, description="返回数量限制"),
     offset: int = Query(0, description="偏移量"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取审计日志
 
@@ -78,7 +82,7 @@ async def get_audit_logs(
 
 
 @router.get("/system-status")
-async def get_system_status(request: Request, db: Session = Depends(get_db)):
+async def get_system_status(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取系统状态
 
@@ -101,7 +105,7 @@ async def get_suspicious_activities(
     request: Request,
     hours: int = Query(24, description="时间范围（小时）"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取可疑活动记录
 
@@ -132,7 +136,7 @@ async def analyze_user_behavior(
     request: Request,
     days: int = Query(30, description="分析天数"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     分析用户行为
 
@@ -152,7 +156,7 @@ async def analyze_user_behavior(
 
 
 @router.get("/resilience-status")
-async def get_resilience_status(request: Request, db: Session = Depends(get_db)):
+async def get_resilience_status(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取韧性系统状态
 
@@ -171,7 +175,7 @@ async def get_resilience_status(request: Request, db: Session = Depends(get_db))
 
 
 @router.delete("/resilience/error-stats")
-async def reset_error_stats(request: Request, db: Session = Depends(get_db)):
+async def reset_error_stats(request: Request, db: Session = Depends(get_db)) -> None:
     """
     重置错误统计
 
@@ -192,7 +196,7 @@ async def get_circuit_history(
     request: Request,
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取熔断器历史记录
 
@@ -220,7 +224,7 @@ class AdminGetAuditLogsAdapter(AdminApiAdapter):
     # 查看审计日志本身不应该产生审计记录，避免刷新页面时产生大量无意义的日志
     audit_log_enabled: bool = False
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         cutoff_time = datetime.now(timezone.utc) - timedelta(days=self.days)
 
@@ -284,7 +288,7 @@ class AdminGetAuditLogsAdapter(AdminApiAdapter):
 
 
 class AdminSystemStatusAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         total_users = db.query(func.count(DBUser.id)).scalar()
@@ -361,7 +365,7 @@ class AdminSystemStatusAdapter(AdminApiAdapter):
 class AdminSuspiciousActivitiesAdapter(AdminApiAdapter):
     hours: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         activities = audit_service.get_suspicious_activities(db=db, hours=self.hours, limit=100)
         response = {
@@ -393,7 +397,7 @@ class AdminUserBehaviorAdapter(AdminApiAdapter):
     user_id: str
     days: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         result = audit_service.analyze_user_behavior(
             db=context.db,
             user_id=self.user_id,
@@ -409,7 +413,7 @@ class AdminUserBehaviorAdapter(AdminApiAdapter):
 
 
 class AdminResilienceStatusAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         try:
             from src.core.resilience import resilience_manager
         except ImportError as exc:
@@ -454,7 +458,7 @@ class AdminResilienceStatusAdapter(AdminApiAdapter):
 
 
 class AdminResetErrorStatsAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         try:
             from src.core.resilience import resilience_manager
         except ImportError as exc:
@@ -486,7 +490,7 @@ class AdminCircuitHistoryAdapter(AdminApiAdapter):
         super().__init__()
         self.limit = limit
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         history = HealthMonitor.get_circuit_history(self.limit)
         context.add_audit_metadata(
             action="circuit_history",

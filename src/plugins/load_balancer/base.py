@@ -3,6 +3,8 @@
 定义负载均衡策略的接口
 """
 
+from __future__ import annotations
+
 from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -22,7 +24,7 @@ class ProviderCandidate:
     model: Any | None = None  # Model 对象（如果需要模型信息）
     metadata: dict[str, Any] | None = None  # 额外元数据
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.metadata is None:
             self.metadata = {}
 
@@ -38,7 +40,7 @@ class SelectionResult:
     weight: float  # 该提供商的权重
     selection_metadata: dict[str, Any] | None = None  # 选择过程的元数据
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.selection_metadata is None:
             self.selection_metadata = {}
 
@@ -57,9 +59,9 @@ class LoadBalancerStrategy(BasePlugin):
         author: str = "Unknown",
         description: str = "",
         api_version: str = "1.0",
-        dependencies: list[str] = None,
-        provides: list[str] = None,
-        config: dict[str, Any] = None,
+        dependencies: list[str] | None = None,
+        provides: list[str] | None = None,
+        config: dict[str, Any] | None = None,
     ):
         """
         初始化负载均衡策略
@@ -119,7 +121,7 @@ class LoadBalancerStrategy(BasePlugin):
         success: bool,
         response_time: float | None = None,
         error: Exception | None = None,
-    ):
+    ) -> Any:
         """
         记录请求结果（用于动态调整策略）
 

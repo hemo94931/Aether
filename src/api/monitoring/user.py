@@ -1,5 +1,8 @@
 """普通用户可访问的监控与审计端点。"""
 
+from __future__ import annotations
+
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -13,6 +16,7 @@ from src.core.logger import logger
 from src.database import get_db
 from src.models.database import ApiKey, AuditLog
 from src.plugins.manager import get_plugin_manager
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(prefix="/api/monitoring", tags=["Monitoring"])
 pipeline = ApiRequestPipeline()
@@ -26,7 +30,7 @@ async def get_my_audit_logs(
     limit: int = Query(50, description="返回数量限制"),
     offset: int = Query(0, ge=0, description="偏移量"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取我的审计日志
 
@@ -54,7 +58,7 @@ async def get_my_audit_logs(
 
 
 @router.get("/rate-limit-status")
-async def get_rate_limit_status(request: Request, db: Session = Depends(get_db)):
+async def get_rate_limit_status(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取速率限制状态
 
@@ -78,7 +82,7 @@ class AuthenticatedApiAdapter(ApiAdapter):
 
     mode = ApiMode.USER
 
-    def authorize(self, context):  # type: ignore[override]
+    def authorize(self, context: ApiRequestContext) -> None:  # type: ignore[override]
         if not context.user:
             raise HTTPException(status_code=401, detail="未登录")
 
@@ -90,7 +94,7 @@ class UserAuditLogsAdapter(AuthenticatedApiAdapter):
     limit: int
     offset: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
         if not user:
@@ -136,7 +140,7 @@ class UserAuditLogsAdapter(AuthenticatedApiAdapter):
 
 
 class UserRateLimitStatusAdapter(AuthenticatedApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
         if not user:
@@ -174,7 +178,7 @@ class UserRateLimitStatusAdapter(AuthenticatedApiAdapter):
         return {"user_id": user.id, "api_keys": rate_limit_info}
 
 
-def _get_rate_limit_plugin():
+def _get_rate_limit_plugin() -> Any:
     try:
         plugin_manager = get_plugin_manager()
         return plugin_manager.get_plugin("rate_limit")

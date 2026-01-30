@@ -3,6 +3,8 @@
 包含所有插件类型共享的类和接口
 """
 
+from __future__ import annotations
+
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
@@ -28,10 +30,10 @@ class PluginMetadata:
     author: str = "Unknown"
     description: str = ""
     api_version: str = "1.0"
-    dependencies: list[str] = None
-    provides: list[str] = None
+    dependencies: list[str] | None = None
+    provides: list[str] | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.dependencies is None:
             self.dependencies = []
         if self.provides is None:
@@ -52,9 +54,9 @@ class BasePlugin(ABC):
         author: str = "Unknown",
         description: str = "",
         api_version: str = "1.0",
-        dependencies: list[str] = None,
-        provides: list[str] = None,
-        config: dict[str, Any] = None,
+        dependencies: list[str] | None = None,
+        provides: list[str] | None = None,
+        config: dict[str, Any] | None = None,
     ):
         """
         初始化插件
@@ -103,13 +105,13 @@ class BasePlugin(ABC):
             logger.warning(f"Failed to initialize plugin {self.name}: {e}")
             return False
 
-    async def _do_initialize(self):
+    async def _do_initialize(self) -> None:
         """
         子类可以重写此方法来实现特定的初始化逻辑
         """
         pass
 
-    async def shutdown(self):
+    async def shutdown(self) -> Any:
         """
         关闭插件，清理资源
         """
@@ -123,7 +125,7 @@ class BasePlugin(ABC):
         finally:
             self._initialized = False
 
-    async def _do_shutdown(self):
+    async def _do_shutdown(self) -> None:
         """
         子类可以重写此方法来实现特定的清理逻辑
         """
@@ -153,7 +155,7 @@ class BasePlugin(ABC):
             HealthStatus.HEALTHY if (self._initialized and self.enabled) else HealthStatus.UNHEALTHY
         )
 
-    def configure(self, config: dict[str, Any]):
+    def configure(self, config: dict[str, Any]) -> Any:
         """
         配置插件
 
@@ -198,5 +200,5 @@ class BasePlugin(ABC):
                 missing_deps.append(dep)
         return missing_deps
 
-    def __repr__(self):
+    def __repr__(self) -> None:
         return f"<{self.__class__.__name__}(name={self.name}, priority={self.priority}, enabled={self.enabled}, version={self.metadata.version})>"

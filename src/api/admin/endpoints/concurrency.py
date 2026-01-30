@@ -2,6 +2,7 @@
 Key RPM 限制管理 API
 """
 
+from typing import Any
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, Request
@@ -14,6 +15,7 @@ from src.database import get_db
 from src.models.database import ProviderAPIKey
 from src.models.endpoint_models import KeyRpmStatusResponse
 from src.services.rate_limit.concurrency_manager import get_concurrency_manager
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(tags=["RPM Control"])
 pipeline = ApiRequestPipeline()
@@ -71,7 +73,7 @@ async def reset_key_rpm(
 class AdminKeyRpmAdapter(AdminApiAdapter):
     key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == self.key_id).first()
         if not key:
@@ -91,7 +93,7 @@ class AdminKeyRpmAdapter(AdminApiAdapter):
 class AdminResetKeyRpmAdapter(AdminApiAdapter):
     key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         concurrency_manager = await get_concurrency_manager()
         await concurrency_manager.reset_key_rpm(key_id=self.key_id)
         return {"message": "RPM 计数已重置"}

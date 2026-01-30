@@ -3,6 +3,8 @@
 基于Python字典的简单内存缓存实现
 """
 
+from __future__ import annotations
+
 import asyncio
 import threading
 import time
@@ -18,7 +20,7 @@ class MemoryCachePlugin(CachePlugin):
     使用OrderedDict实现LRU缓存
     """
 
-    def __init__(self, name: str = "memory", config: dict[str, Any] = None):
+    def __init__(self, name: str = "memory", config: dict[str, Any] | None = None):
         super().__init__(name, config)
         self._cache: OrderedDict = OrderedDict()
         self._expiry: dict[str, float] = {}
@@ -38,10 +40,10 @@ class MemoryCachePlugin(CachePlugin):
         except:
             pass  # 忽略事件循环错误
 
-    def _start_cleanup_task(self):
+    def _start_cleanup_task(self) -> None:
         """启动后台清理任务"""
 
-        async def cleanup_loop():
+        async def cleanup_loop() -> None:
             while self.enabled:
                 await asyncio.sleep(self._cleanup_interval)
                 await self._cleanup_expired()
@@ -53,7 +55,7 @@ class MemoryCachePlugin(CachePlugin):
             # 没有运行的事件循环，稍后再启动
             pass
 
-    async def _cleanup_expired(self):
+    async def _cleanup_expired(self) -> None:
         """清理过期的缓存项"""
         now = time.time()
         expired_keys = []
@@ -68,7 +70,7 @@ class MemoryCachePlugin(CachePlugin):
                 self._expiry.pop(key, None)
                 self._evictions += 1
 
-    def _check_size(self):
+    def _check_size(self) -> None:
         """检查并维护缓存大小限制"""
         if len(self._cache) >= self.max_size:
             # 删除最老的项（LRU）
@@ -183,7 +185,7 @@ class MemoryCachePlugin(CachePlugin):
             "cleanup_interval": self._cleanup_interval,
         }
 
-    async def _do_shutdown(self):
+    async def _do_shutdown(self) -> None:
         """清理资源"""
         # 取消清理任务
         if self._cleanup_task:
@@ -193,7 +195,7 @@ class MemoryCachePlugin(CachePlugin):
             except asyncio.CancelledError:
                 pass
 
-    def __del__(self):
+    def __del__(self) -> None:
         """清理资源"""
         if hasattr(self, "_cleanup_task") and self._cleanup_task:
             self._cleanup_task.cancel()

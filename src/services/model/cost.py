@@ -858,7 +858,7 @@ class ModelCostService:
         )
 
     @classmethod
-    def clear_cache(cls):
+    def clear_cache(cls) -> None:
         """清理价格相关缓存。"""
         cls._price_cache.clear()
         cls._cache_price_cache.clear()

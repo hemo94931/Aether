@@ -8,6 +8,8 @@ Provider 操作 API 路由
 - 配置管理
 """
 
+from __future__ import annotations
+
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
@@ -146,14 +148,14 @@ def _serialize_data(data: Any) -> Any:
 
 
 @router.get("/architectures", response_model=list[ArchitectureInfo])
-async def list_architectures(_: User = Depends(require_admin)):
+async def list_architectures(_: User = Depends(require_admin)) -> Any:
     """获取所有可用的架构"""
     registry = get_registry()
     return registry.to_dict_list()
 
 
 @router.get("/architectures/{architecture_id}", response_model=ArchitectureInfo)
-async def get_architecture(architecture_id: str, _: User = Depends(require_admin)):
+async def get_architecture(architecture_id: str, _: User = Depends(require_admin)) -> Any:
     """获取指定架构的详情"""
     registry = get_registry()
     arch = registry.get(architecture_id)
@@ -167,7 +169,7 @@ async def get_provider_ops_status(
     provider_id: str,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """获取 Provider 的操作状态"""
     service = ProviderOpsService(db)
 
@@ -200,7 +202,7 @@ async def get_provider_ops_config(
     provider_id: str,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """
     获取 Provider 的操作配置（脱敏）
 
@@ -251,7 +253,7 @@ async def save_provider_ops_config(
     request: SaveConfigRequest,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """保存 Provider 的操作配置"""
     service = ProviderOpsService(db)
 
@@ -287,7 +289,7 @@ async def verify_provider_auth(
     request: SaveConfigRequest,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """
     验证 Provider 认证配置
 
@@ -343,7 +345,7 @@ async def delete_provider_ops_config(
     provider_id: str,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """删除 Provider 的操作配置"""
     service = ProviderOpsService(db)
     success = service.delete_config(provider_id)
@@ -360,7 +362,7 @@ async def connect_provider(
     request: ConnectRequest,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """建立与 Provider 的连接"""
     service = ProviderOpsService(db)
 
@@ -377,7 +379,7 @@ async def disconnect_provider(
     provider_id: str,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """断开与 Provider 的连接"""
     service = ProviderOpsService(db)
     await service.disconnect(provider_id)
@@ -395,7 +397,7 @@ async def execute_action(
     request: ExecuteActionRequest,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """执行指定操作"""
     service = ProviderOpsService(db)
 
@@ -423,7 +425,7 @@ async def get_balance(
     refresh: bool = True,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """
     获取余额（优先返回缓存，后台异步刷新）
 
@@ -449,7 +451,7 @@ async def refresh_balance(
     provider_id: str,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """立即刷新余额（同步等待结果）"""
     service = ProviderOpsService(db)
     result = await service.query_balance(provider_id)
@@ -470,7 +472,7 @@ async def checkin(
     provider_id: str,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """签到（快捷方法）"""
     service = ProviderOpsService(db)
     result = await service.checkin(provider_id)
@@ -491,7 +493,7 @@ async def batch_query_balance(
     provider_ids: list[str] | None = None,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
-):
+) -> Any:
     """批量查询余额"""
     service = ProviderOpsService(db)
     results = await service.batch_query_balance(provider_ids)

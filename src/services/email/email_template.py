@@ -3,6 +3,8 @@
 提供验证码邮件的 HTML 和纯文本模板，支持从数据库加载自定义模板
 """
 
+from __future__ import annotations
+
 import html
 import re
 from html.parser import HTMLParser
@@ -16,12 +18,12 @@ from src.services.system.config import SystemConfigService
 class HTMLToTextParser(HTMLParser):
     """HTML 转纯文本解析器"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.text_parts = []
         self.skip_data = False
 
-    def handle_starttag(self, tag, attrs):  # noqa: ARG002
+    def handle_starttag(self, tag: Any, attrs: Any) -> None:  # noqa: ARG002
         if tag in ("script", "style", "head"):
             self.skip_data = True
         elif tag == "br":
@@ -29,13 +31,13 @@ class HTMLToTextParser(HTMLParser):
         elif tag in ("p", "div", "tr", "h1", "h2", "h3", "h4", "h5", "h6"):
             self.text_parts.append("\n")
 
-    def handle_endtag(self, tag):
+    def handle_endtag(self, tag: Any) -> None:
         if tag in ("script", "style", "head"):
             self.skip_data = False
         elif tag in ("p", "div", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "td"):
             self.text_parts.append("\n")
 
-    def handle_data(self, data):
+    def handle_data(self, data: Any) -> None:
         if not self.skip_data:
             text = data.strip()
             if text:
@@ -310,7 +312,7 @@ class EmailTemplate:
 
     @staticmethod
     def get_verification_code_html(
-        code: str, expire_minutes: int = 5, db: Session | None = None, **kwargs
+        code: str, expire_minutes: int = 5, db: Session | None = None, **kwargs: Any
     ) -> str:
         """
         获取验证码邮件 HTML
@@ -345,7 +347,7 @@ class EmailTemplate:
 
     @staticmethod
     def get_verification_code_text(
-        code: str, expire_minutes: int = 5, db: Session | None = None, **kwargs
+        code: str, expire_minutes: int = 5, db: Session | None = None, **kwargs: Any
     ) -> str:
         """
         获取验证码邮件纯文本（从 HTML 自动生成）
@@ -364,7 +366,7 @@ class EmailTemplate:
 
     @staticmethod
     def get_password_reset_html(
-        reset_link: str, expire_minutes: int = 30, db: Session | None = None, **kwargs
+        reset_link: str, expire_minutes: int = 30, db: Session | None = None, **kwargs: Any
     ) -> str:
         """
         获取密码重置邮件 HTML
@@ -399,7 +401,7 @@ class EmailTemplate:
 
     @staticmethod
     def get_password_reset_text(
-        reset_link: str, expire_minutes: int = 30, db: Session | None = None, **kwargs
+        reset_link: str, expire_minutes: int = 30, db: Session | None = None, **kwargs: Any
     ) -> str:
         """
         获取密码重置邮件纯文本（从 HTML 自动生成）

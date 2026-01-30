@@ -403,7 +403,7 @@ async def _proxy_request(
 async def upload_file(
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     上传文件到 Gemini Files API
 
@@ -463,7 +463,7 @@ async def list_files(
     db: Session = Depends(get_db),
     pageSize: int | None = None,
     pageToken: str | None = None,
-):
+) -> Any:
     """
     列出已上传的文件
 
@@ -524,7 +524,7 @@ async def get_file(
     file_name: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取指定文件的元数据
 
@@ -580,7 +580,7 @@ async def delete_file(
     file_name: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     删除指定文件
 

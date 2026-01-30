@@ -51,7 +51,7 @@ class TokenCounterPlugin(BasePlugin):
     支持不同模型的Token计数
     """
 
-    def __init__(self, name: str = "token_counter", config: dict[str, Any] = None):
+    def __init__(self, name: str = "token_counter", config: dict[str, Any] | None = None):
         # 调用父类初始化，设置metadata
         super().__init__(
             name=name, config=config, description="Token Counter Plugin", version="1.0.0"

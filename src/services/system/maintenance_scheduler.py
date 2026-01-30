@@ -12,6 +12,9 @@
 使用 APScheduler 进行任务调度，支持时区配置。
 """
 
+from __future__ import annotations
+
+from typing import Any
 import asyncio
 from datetime import datetime, timedelta, timezone
 
@@ -32,12 +35,12 @@ from src.utils.compression import compress_json
 class MaintenanceScheduler:
     """系统维护任务调度器"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.running = False
         self._interval_tasks = []
         self._stats_aggregation_lock = asyncio.Lock()
 
-    async def start(self):
+    async def start(self) -> Any:
         """启动调度器"""
         if self.running:
             logger.warning("Maintenance scheduler already running")
@@ -112,7 +115,7 @@ class MaintenanceScheduler:
         # 启动时执行一次初始化任务
         asyncio.create_task(self._run_startup_tasks())
 
-    async def _run_startup_tasks(self):
+    async def _run_startup_tasks(self) -> None:
         """启动时执行的初始化任务"""
         # 延迟一点执行，确保系统完全启动
         await asyncio.sleep(2)
@@ -129,7 +132,7 @@ class MaintenanceScheduler:
         except Exception as e:
             logger.exception(f"启动时统计聚合任务出错: {e}")
 
-    async def stop(self):
+    async def stop(self) -> Any:
         """停止调度器"""
         if not self.running:
             return
@@ -142,15 +145,15 @@ class MaintenanceScheduler:
 
     # ========== 任务函数（APScheduler 直接调用异步函数） ==========
 
-    async def _scheduled_stats_aggregation(self, backfill: bool = False):
+    async def _scheduled_stats_aggregation(self, backfill: bool = False) -> None:
         """统计聚合任务（定时调用）"""
         await self._perform_stats_aggregation(backfill=backfill)
 
-    async def _scheduled_cleanup(self):
+    async def _scheduled_cleanup(self) -> None:
         """清理任务（定时调用）"""
         await self._perform_cleanup()
 
-    async def _scheduled_monitor(self):
+    async def _scheduled_monitor(self) -> None:
         """监控任务（定时调用）"""
         try:
             from src.database import log_pool_status
@@ -159,21 +162,21 @@ class MaintenanceScheduler:
         except Exception as e:
             logger.exception(f"连接池监控任务出错: {e}")
 
-    async def _scheduled_pending_cleanup(self):
+    async def _scheduled_pending_cleanup(self) -> None:
         """Pending 清理任务（定时调用）"""
         await self._perform_pending_cleanup()
 
-    async def _scheduled_audit_cleanup(self):
+    async def _scheduled_audit_cleanup(self) -> None:
         """审计日志清理任务（定时调用）"""
         await self._perform_audit_cleanup()
 
-    async def _scheduled_provider_checkin(self):
+    async def _scheduled_provider_checkin(self) -> None:
         """Provider 签到任务（定时调用）"""
         await self._perform_provider_checkin()
 
     # ========== 实际任务实现 ==========
 
-    async def _perform_stats_aggregation(self, backfill: bool = False):
+    async def _perform_stats_aggregation(self, backfill: bool = False) -> None:
         """执行统计聚合任务
 
         Args:
@@ -389,7 +392,7 @@ class MaintenanceScheduler:
             finally:
                 db.close()
 
-    async def _perform_pending_cleanup(self):
+    async def _perform_pending_cleanup(self) -> None:
         """执行 pending 状态清理"""
         db = create_session()
         try:
@@ -414,7 +417,7 @@ class MaintenanceScheduler:
         finally:
             db.close()
 
-    async def _perform_audit_cleanup(self):
+    async def _perform_audit_cleanup(self) -> None:
         """执行审计日志清理任务"""
         db = create_session()
         try:
@@ -478,7 +481,7 @@ class MaintenanceScheduler:
         finally:
             db.close()
 
-    async def _perform_provider_checkin(self):
+    async def _perform_provider_checkin(self) -> None:
         """执行 Provider 签到任务
 
         遍历所有已配置 provider_ops 的 Provider，触发签到。
@@ -561,7 +564,7 @@ class MaintenanceScheduler:
         finally:
             db.close()
 
-    async def _perform_cleanup(self):
+    async def _perform_cleanup(self) -> None:
         """执行清理任务"""
         db = create_session()
         try:

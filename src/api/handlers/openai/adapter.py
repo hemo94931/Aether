@@ -4,6 +4,8 @@ OpenAI Chat Adapter - 基于 ChatAdapterBase 的 OpenAI Chat API 适配器
 处理 /v1/chat/completions 端点的 OpenAI Chat 格式请求。
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 import httpx
@@ -37,7 +39,7 @@ class OpenAIChatAdapter(ChatAdapterBase):
     def __init__(self, allowed_api_formats: list[str] | None = None):
         super().__init__(allowed_api_formats or ["OPENAI"])
 
-    def _validate_request_body(self, original_request_body: dict, path_params: dict = None):
+    def _validate_request_body(self, original_request_body: dict, path_params: dict | None = None) -> None:
         """验证请求体"""
         if not isinstance(original_request_body, dict):
             return self._error_response(
@@ -66,7 +68,7 @@ class OpenAIChatAdapter(ChatAdapterBase):
                 max_tokens=original_request_body.get("max_tokens"),
             )
 
-    def _build_audit_metadata(self, payload: dict[str, Any], request_obj) -> dict[str, Any]:
+    def _build_audit_metadata(self, payload: dict[str, Any], request_obj: Any) -> dict[str, Any]:
         """构建 OpenAI Chat 特定的审计元数据"""
         role_counts = {}
         for message in request_obj.messages:

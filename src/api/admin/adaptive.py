@@ -9,6 +9,9 @@
 - adaptive_mode 是计算字段，基于 rpm_limit 是否为 NULL
 """
 
+from __future__ import annotations
+
+from typing import Any
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -21,6 +24,7 @@ from src.core.exceptions import InvalidRequestException, translate_pydantic_erro
 from src.database import get_db
 from src.models.database import ProviderAPIKey
 from src.services.rate_limit.adaptive_rpm import get_adaptive_rpm_manager
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(prefix="/api/admin/adaptive", tags=["Adaptive RPM"])
 pipeline = ApiRequestPipeline()
@@ -82,7 +86,7 @@ async def list_adaptive_keys(
     request: Request,
     provider_id: str | None = Query(None, description="按 Provider 过滤"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取所有启用自适应模式的Key列表
 
@@ -101,7 +105,7 @@ async def toggle_adaptive_mode(
     key_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     Toggle the RPM control mode for a specific key
 
@@ -122,7 +126,7 @@ async def get_adaptive_stats(
     key_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取指定Key的自适应 RPM 统计信息
 
@@ -144,7 +148,7 @@ async def reset_adaptive_learning(
     key_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     Reset the adaptive learning state for a specific key
 
@@ -169,7 +173,7 @@ async def set_rpm_limit(
     request: Request,
     limit: int = Query(..., ge=1, le=100, description="RPM limit value (1-100)"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     Set key to fixed RPM limit mode
 
@@ -188,7 +192,7 @@ async def set_rpm_limit(
 async def get_adaptive_summary(
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取自适应 RPM 的全局统计摘要
 
@@ -208,7 +212,7 @@ async def get_adaptive_summary(
 class ListAdaptiveKeysAdapter(AdminApiAdapter):
     provider_id: str | None = None
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         # 自适应模式：rpm_limit = NULL
         query = context.db.query(ProviderAPIKey).filter(ProviderAPIKey.rpm_limit.is_(None))
         if self.provider_id:
@@ -240,7 +244,7 @@ class ListAdaptiveKeysAdapter(AdminApiAdapter):
 class ToggleAdaptiveModeAdapter(AdminApiAdapter):
     key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         key = context.db.query(ProviderAPIKey).filter(ProviderAPIKey.id == self.key_id).first()
         if not key:
             raise HTTPException(status_code=404, detail="Key not found")
@@ -288,7 +292,7 @@ class ToggleAdaptiveModeAdapter(AdminApiAdapter):
 class GetAdaptiveStatsAdapter(AdminApiAdapter):
     key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         key = context.db.query(ProviderAPIKey).filter(ProviderAPIKey.id == self.key_id).first()
         if not key:
             raise HTTPException(status_code=404, detail="Key not found")
@@ -315,7 +319,7 @@ class GetAdaptiveStatsAdapter(AdminApiAdapter):
 class ResetAdaptiveLearningAdapter(AdminApiAdapter):
     key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         key = context.db.query(ProviderAPIKey).filter(ProviderAPIKey.id == self.key_id).first()
         if not key:
             raise HTTPException(status_code=404, detail="Key not found")
@@ -330,7 +334,7 @@ class SetRPMLimitAdapter(AdminApiAdapter):
     key_id: str
     limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         key = context.db.query(ProviderAPIKey).filter(ProviderAPIKey.id == self.key_id).first()
         if not key:
             raise HTTPException(status_code=404, detail="Key not found")
@@ -350,7 +354,7 @@ class SetRPMLimitAdapter(AdminApiAdapter):
 
 
 class AdaptiveSummaryAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         # 自适应模式：rpm_limit = NULL
         adaptive_keys = (
             context.db.query(ProviderAPIKey).filter(ProviderAPIKey.rpm_limit.is_(None)).all()

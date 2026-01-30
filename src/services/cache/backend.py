@@ -10,6 +10,8 @@
 - 其他需要缓存的服务
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import time
@@ -87,7 +89,7 @@ class LocalCache(BaseCacheBackend):
             self._cache.move_to_end(key)
             return self._cache[key]
 
-    async def set(self, key: str, value: Any, ttl: int = None) -> None:
+    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
         """设置缓存值（线程安全）"""
         async with self._lock:
             if ttl is None:
@@ -195,7 +197,7 @@ class RedisCache(BaseCacheBackend):
             logger.error(f"[RedisCache] 获取缓存失败: {key}, 错误: {e}")
             return None
 
-    async def set(self, key: str, value: Any, ttl: int = None) -> None:
+    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
         """设置缓存值"""
         if ttl is None:
             ttl = self._default_ttl

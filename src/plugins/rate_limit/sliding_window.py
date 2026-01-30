@@ -45,7 +45,7 @@ class SlidingWindow:
         self.requests: deque[float] = deque()
         self.last_access_time: float = time.time()
 
-    def _cleanup(self):
+    def _cleanup(self) -> None:
         """清理过期的请求记录"""
         current_time = time.time()
         self.last_access_time = current_time  # 更新最后访问时间
@@ -119,7 +119,7 @@ class SlidingWindowStrategy(RateLimitStrategy):
     # 默认窗口过期时间（秒）- 超过此时间未访问的窗口将被清理
     DEFAULT_WINDOW_EXPIRY = 3600  # 1小时
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("sliding_window")
         self.windows: dict[str, SlidingWindow] = {}
         self._lock = asyncio.Lock()
@@ -184,7 +184,7 @@ class SlidingWindowStrategy(RateLimitStrategy):
 
         return evicted
 
-    async def _maybe_cleanup(self):
+    async def _maybe_cleanup(self) -> None:
         """检查是否需要执行清理操作"""
         current_time = time.time()
 
@@ -225,7 +225,7 @@ class SlidingWindowStrategy(RateLimitStrategy):
 
         return self.windows[key]
 
-    async def check_limit(self, key: str, **kwargs) -> RateLimitResult:
+    async def check_limit(self, key: str, **kwargs: Any) -> RateLimitResult:
         """
         检查速率限制
 
@@ -264,7 +264,7 @@ class SlidingWindowStrategy(RateLimitStrategy):
                 ),
             )
 
-    async def consume(self, key: str, amount: int = 1, **kwargs) -> bool:
+    async def consume(self, key: str, amount: int = 1, **kwargs: Any) -> bool:
         """
         消费配额
 
@@ -286,7 +286,7 @@ class SlidingWindowStrategy(RateLimitStrategy):
 
             return success
 
-    async def reset(self, key: str):
+    async def reset(self, key: str) -> Any:
         """
         重置滑动窗口
 
@@ -324,7 +324,7 @@ class SlidingWindowStrategy(RateLimitStrategy):
                 "reset_at": window.get_reset_time().isoformat(),
             }
 
-    def configure(self, config: dict[str, Any]):
+    def configure(self, config: dict[str, Any]) -> Any:
         """
         配置策略
 

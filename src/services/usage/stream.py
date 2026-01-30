@@ -3,6 +3,8 @@
 处理流式响应的token计算和使用量记录
 """
 
+from __future__ import annotations
+
 import json
 import re
 from typing import Any
@@ -132,7 +134,7 @@ class StreamUsageTracker:
         self.error_message = None  # 错误消息(如果有)
         self.attempt_id = attempt_id
 
-    def set_error_status(self, status_code: int, error_message: str):
+    def set_error_status(self, status_code: int, error_message: str) -> None:
         """
         设置错误状态
 
@@ -144,7 +146,7 @@ class StreamUsageTracker:
         self.error_message = error_message
         logger.debug(f"ID:{self.request_id} | 流式响应错误状态已设置 | 状态码:{status_code} | 错误:{error_message[:100]}")
 
-    def _update_complete_response(self, chunk: dict[str, Any]):
+    def _update_complete_response(self, chunk: dict[str, Any]) -> None:
         """根据响应块更新完整响应结构"""
         try:
             # 更新响应ID
@@ -590,7 +592,7 @@ class StreamUsageTracker:
                         # 如果连最简单的日志都失败了，放弃
                         pass
 
-    async def _record_usage(self):
+    async def _record_usage(self) -> None:
         """记录最终的使用量"""
         try:
             if self.request_start_time and self.end_time:
@@ -839,7 +841,7 @@ class EnhancedStreamUsageTracker(StreamUsageTracker):
         # 继承父类的SSE解析缓冲区
         # 这些已经在父类中初始化了
 
-    def _init_tokenizer(self):
+    def _init_tokenizer(self) -> None:
         """初始化分词器（如果可用）"""
         try:
             # 尝试导入tiktoken用于更准确的token计算

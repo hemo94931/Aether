@@ -4,6 +4,7 @@
 提供系统支持的能力列表，供前端展示和配置使用。
 """
 
+from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/api/capabilities", tags=["System Catalog"])
 
 
 @router.get("")
-async def list_capabilities():
+async def list_capabilities() -> Any:
     """
     获取所有能力定义
 
@@ -49,7 +50,7 @@ async def list_capabilities():
 
 
 @router.get("/user-configurable")
-async def list_user_configurable_capabilities():
+async def list_user_configurable_capabilities() -> Any:
     """
     获取用户可配置的能力列表
 
@@ -84,7 +85,7 @@ async def list_user_configurable_capabilities():
 async def get_model_supported_capabilities(
     model_name: str,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取指定模型支持的能力列表
 

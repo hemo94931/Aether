@@ -3,6 +3,8 @@
 根据数据库中的配置，将用户请求的模型映射到提供商的实际模型
 """
 
+from __future__ import annotations
+
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.cache_utils import SyncLRUCache
@@ -212,12 +214,12 @@ class ModelMapperMiddleware:
 
         return True, None
 
-    def clear_cache(self):
+    def clear_cache(self) -> None:
         """清空缓存"""
         self._cache.clear()
         logger.debug("Model mapping cache cleared")
 
-    def refresh_cache(self, provider_id: str | None = None):
+    def refresh_cache(self, provider_id: str | None = None) -> None:
         """
         刷新缓存
 

@@ -3,6 +3,8 @@
 定义缓存插件的接口
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 from abc import abstractmethod
@@ -25,9 +27,9 @@ class CachePlugin(BasePlugin):
         author: str = "Unknown",
         description: str = "",
         api_version: str = "1.0",
-        dependencies: list[str] = None,
-        provides: list[str] = None,
-        config: dict[str, Any] = None,
+        dependencies: list[str] | None = None,
+        provides: list[str] | None = None,
+        config: dict[str, Any] | None = None,
     ):
         """
         初始化缓存插件
@@ -158,7 +160,7 @@ class CachePlugin(BasePlugin):
         """
         pass
 
-    def generate_key(self, *args, **kwargs) -> str:
+    def generate_key(self, *args: Any, **kwargs: Any) -> str:
         """
         生成缓存键
 
@@ -205,7 +207,7 @@ class CachePlugin(BasePlugin):
         """
         return json.loads(value)
 
-    def configure(self, config: dict[str, Any]):
+    def configure(self, config: dict[str, Any]) -> Any:
         """
         配置插件
 

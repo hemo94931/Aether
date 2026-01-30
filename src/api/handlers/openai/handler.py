@@ -5,6 +5,9 @@ OpenAI Chat Handler - 基于通用 Chat Handler 基类的简化实现
 代码量从原来的 ~1315 行减少到 ~100 行。
 """
 
+from __future__ import annotations
+
+from starlette.requests import Request
 from typing import Any
 
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
@@ -63,7 +66,7 @@ class OpenAIChatHandler(ChatHandlerBase):
         result["model"] = mapped_model
         return result
 
-    async def _convert_request(self, request):
+    async def _convert_request(self, request: Request) -> None:
         """
         将请求转换为 OpenAI 格式的 Pydantic 对象
 

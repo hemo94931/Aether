@@ -335,7 +335,7 @@ def get_adaptive_reservation_manager() -> AdaptiveReservationManager:
     return _reservation_manager
 
 
-def reset_adaptive_reservation_manager():
+def reset_adaptive_reservation_manager() -> None:
     """重置全局单例（用于测试）"""
     global _reservation_manager
     _reservation_manager = None

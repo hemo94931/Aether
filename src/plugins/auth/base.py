@@ -3,6 +3,8 @@
 定义认证插件的接口和认证上下文
 """
 
+from __future__ import annotations
+
 from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -28,7 +30,7 @@ class AuthContext:
     quota_info: dict[str, Any] = None
     metadata: dict[str, Any] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.permissions is None:
             self.permissions = {}
         if self.metadata is None:
@@ -49,9 +51,9 @@ class AuthPlugin(BasePlugin):
         author: str = "Unknown",
         description: str = "",
         api_version: str = "1.0",
-        dependencies: list[str] = None,
-        provides: list[str] = None,
-        config: dict[str, Any] = None,
+        dependencies: list[str] | None = None,
+        provides: list[str] | None = None,
+        config: dict[str, Any] | None = None,
     ):
         """
         初始化认证插件

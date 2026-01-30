@@ -88,7 +88,7 @@ _LAZY_IMPORTS = {
 }
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> None:
     """延迟导入以避免循环依赖"""
     if name in _LAZY_IMPORTS:
         module_path, attr_name = _LAZY_IMPORTS[name]

@@ -1,5 +1,8 @@
 """管理员 Provider 管理路由。"""
 
+from __future__ import annotations
+
+from typing import Any
 import asyncio
 from datetime import datetime, timezone
 
@@ -19,6 +22,7 @@ from src.database import get_db
 from src.models.admin_requests import CreateProviderRequest, UpdateProviderRequest
 from src.models.database import GlobalModel, Provider, ProviderAPIKey
 from src.services.cache.provider_cache import ProviderCacheService
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(tags=["Provider CRUD"])
 pipeline = ApiRequestPipeline()
@@ -96,7 +100,7 @@ async def list_providers(
     limit: int = Query(100, ge=1, le=500),
     is_active: bool | None = None,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取提供商列表
 
@@ -123,7 +127,7 @@ async def list_providers(
 
 
 @router.post("/")
-async def create_provider(request: Request, db: Session = Depends(get_db)):
+async def create_provider(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     创建新提供商
 
@@ -155,7 +159,7 @@ async def create_provider(request: Request, db: Session = Depends(get_db)):
 
 
 @router.put("/{provider_id}")
-async def update_provider(provider_id: str, request: Request, db: Session = Depends(get_db)):
+async def update_provider(provider_id: str, request: Request, db: Session = Depends(get_db)) -> None:
     """
     更新提供商配置
 
@@ -191,7 +195,7 @@ async def update_provider(provider_id: str, request: Request, db: Session = Depe
 
 
 @router.delete("/{provider_id}")
-async def delete_provider(provider_id: str, request: Request, db: Session = Depends(get_db)):
+async def delete_provider(provider_id: str, request: Request, db: Session = Depends(get_db)) -> None:
     """
     删除提供商
 
@@ -213,7 +217,7 @@ class AdminListProvidersAdapter(AdminApiAdapter):
         self.limit = limit
         self.is_active = is_active
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         query = db.query(Provider)
         if self.is_active is not None:
@@ -251,7 +255,7 @@ class AdminListProvidersAdapter(AdminApiAdapter):
 
 
 class AdminCreateProviderAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         payload = context.ensure_json_body()
 
@@ -333,7 +337,7 @@ class AdminUpdateProviderAdapter(AdminApiAdapter):
     def __init__(self, provider_id: str):
         self.provider_id = provider_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         payload = context.ensure_json_body()
 
@@ -412,7 +416,7 @@ class AdminDeleteProviderAdapter(AdminApiAdapter):
     def __init__(self, provider_id: str):
         self.provider_id = provider_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:
@@ -483,7 +487,7 @@ class AdminGetProviderMappingPreviewAdapter(AdminApiAdapter):
     def __init__(self, provider_id: str):
         self.provider_id = provider_id
 
-    async def handle(self, context) -> ProviderMappingPreviewResponse:  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> ProviderMappingPreviewResponse:  # type: ignore[override]
         db = context.db
 
         # 获取 Provider

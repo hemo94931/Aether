@@ -1,5 +1,8 @@
 """用户个人 API 端点。"""
 
+from __future__ import annotations
+
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -27,6 +30,7 @@ from src.models.database import ApiKey, GlobalModel, Model, Provider, Usage, Use
 from src.services.usage.service import UsageService
 from src.services.user.apikey import ApiKeyService
 from src.services.user.preference import PreferenceService
+from src.api.base.context import ApiRequestContext
 
 
 router = APIRouter(prefix="/api/users/me", tags=["User Profile"])
@@ -34,7 +38,7 @@ pipeline = ApiRequestPipeline()
 
 
 @router.get("")
-async def get_my_profile(request: Request, db: Session = Depends(get_db)):
+async def get_my_profile(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取当前用户信息
 
@@ -47,7 +51,7 @@ async def get_my_profile(request: Request, db: Session = Depends(get_db)):
 
 
 @router.put("")
-async def update_my_profile(request: Request, db: Session = Depends(get_db)):
+async def update_my_profile(request: Request, db: Session = Depends(get_db)) -> None:
     """
     更新个人信息
 
@@ -62,7 +66,7 @@ async def update_my_profile(request: Request, db: Session = Depends(get_db)):
 
 
 @router.patch("/password")
-async def change_my_password(request: Request, db: Session = Depends(get_db)):
+async def change_my_password(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     修改密码
 
@@ -80,7 +84,7 @@ async def change_my_password(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/api-keys")
-async def list_my_api_keys(request: Request, db: Session = Depends(get_db)):
+async def list_my_api_keys(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取 API 密钥列表
 
@@ -94,7 +98,7 @@ async def list_my_api_keys(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/api-keys")
-async def create_my_api_key(request: Request, db: Session = Depends(get_db)):
+async def create_my_api_key(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     创建 API 密钥
 
@@ -115,7 +119,7 @@ async def get_my_api_key(
     request: Request,
     include_key: bool = Query(False, description="是否返回完整密钥"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取 API 密钥详情
 
@@ -135,7 +139,7 @@ async def get_my_api_key(
 
 
 @router.delete("/api-keys/{key_id}")
-async def delete_my_api_key(key_id: str, request: Request, db: Session = Depends(get_db)):
+async def delete_my_api_key(key_id: str, request: Request, db: Session = Depends(get_db)) -> None:
     """
     删除 API 密钥
 
@@ -149,7 +153,7 @@ async def delete_my_api_key(key_id: str, request: Request, db: Session = Depends
 
 
 @router.patch("/api-keys/{key_id}")
-async def toggle_my_api_key(key_id: str, request: Request, db: Session = Depends(get_db)):
+async def toggle_my_api_key(key_id: str, request: Request, db: Session = Depends(get_db)) -> Any:
     """
     切换 API 密钥状态
 
@@ -174,7 +178,7 @@ async def get_my_usage(
     limit: int = Query(100, ge=1, le=200, description="每页记录数，默认100，最大200"),
     offset: int = Query(0, ge=0, le=2000, description="偏移量，用于分页，最大2000"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取使用统计
 
@@ -200,7 +204,7 @@ async def get_my_active_requests(
     request: Request,
     ids: str | None = Query(None, description="请求 ID 列表，逗号分隔"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取活跃请求状态
 
@@ -219,7 +223,7 @@ async def get_my_interval_timeline(
     hours: int = Query(24, ge=1, le=720, description="分析最近多少小时的数据"),
     limit: int = Query(5000, ge=100, le=20000, description="最大返回数据点数量"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取请求间隔时间线
 
@@ -235,7 +239,7 @@ async def get_my_interval_timeline(
 async def get_my_activity_heatmap(
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取活动热力图数据
 
@@ -249,7 +253,7 @@ async def get_my_activity_heatmap(
 
 
 @router.get("/providers")
-async def list_available_providers(request: Request, db: Session = Depends(get_db)):
+async def list_available_providers(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取可用提供商列表
 
@@ -268,7 +272,7 @@ async def list_available_models(
     limit: int = Query(100, ge=1, le=1000, description="返回记录数限制"),
     search: str | None = Query(None, description="搜索关键词"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取用户可用的模型列表
 
@@ -290,7 +294,7 @@ async def list_available_models(
 
 
 @router.get("/endpoint-status")
-async def get_endpoint_status(request: Request, db: Session = Depends(get_db)):
+async def get_endpoint_status(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取端点健康状态
 
@@ -313,7 +317,7 @@ async def update_api_key_providers(
     api_key_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     更新 API 密钥可用提供商
 
@@ -334,7 +338,7 @@ async def update_api_key_capabilities(
     api_key_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     更新 API 密钥能力配置
 
@@ -354,7 +358,7 @@ async def update_api_key_capabilities(
 
 
 @router.get("/preferences")
-async def get_my_preferences(request: Request, db: Session = Depends(get_db)):
+async def get_my_preferences(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取偏好设置
 
@@ -367,7 +371,7 @@ async def get_my_preferences(request: Request, db: Session = Depends(get_db)):
 
 
 @router.put("/preferences")
-async def update_my_preferences(request: Request, db: Session = Depends(get_db)):
+async def update_my_preferences(request: Request, db: Session = Depends(get_db)) -> None:
     """
     更新偏好设置
 
@@ -386,7 +390,7 @@ async def update_my_preferences(request: Request, db: Session = Depends(get_db))
 
 
 @router.get("/model-capabilities")
-async def get_model_capability_settings(request: Request, db: Session = Depends(get_db)):
+async def get_model_capability_settings(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取模型能力配置
 
@@ -399,7 +403,7 @@ async def get_model_capability_settings(request: Request, db: Session = Depends(
 
 
 @router.put("/model-capabilities")
-async def update_model_capability_settings(request: Request, db: Session = Depends(get_db)):
+async def update_model_capability_settings(request: Request, db: Session = Depends(get_db)) -> None:
     """
     更新模型能力配置
 
@@ -418,14 +422,14 @@ async def update_model_capability_settings(request: Request, db: Session = Depen
 class MeProfileAdapter(AuthenticatedApiAdapter):
     """获取当前用户信息的适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         return PreferenceService.get_user_with_preferences(context.db, context.user.id)
 
 
 class UpdateProfileAdapter(AuthenticatedApiAdapter):
     """更新用户个人信息的适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
         payload = context.ensure_json_body()
@@ -462,7 +466,7 @@ class UpdateProfileAdapter(AuthenticatedApiAdapter):
 class ChangePasswordAdapter(AuthenticatedApiAdapter):
     """修改用户密码的适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
         payload = context.ensure_json_body()
@@ -504,7 +508,7 @@ class ChangePasswordAdapter(AuthenticatedApiAdapter):
 class ListMyApiKeysAdapter(AuthenticatedApiAdapter):
     """获取用户 API 密钥列表的适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
 
@@ -576,7 +580,7 @@ class ListMyApiKeysAdapter(AuthenticatedApiAdapter):
 class CreateMyApiKeyAdapter(AuthenticatedApiAdapter):
     """创建 API 密钥的适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         payload = context.ensure_json_body()
         try:
             request = CreateMyApiKeyRequest.model_validate(payload)
@@ -609,7 +613,7 @@ class GetMyFullKeyAdapter(AuthenticatedApiAdapter):
 
     key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
 
@@ -643,7 +647,7 @@ class GetMyApiKeyDetailAdapter(AuthenticatedApiAdapter):
 
     key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
 
@@ -674,7 +678,7 @@ class DeleteMyApiKeyAdapter(AuthenticatedApiAdapter):
 
     key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         api_key = (
             context.db.query(ApiKey)
             .filter(ApiKey.id == self.key_id, ApiKey.user_id == context.user.id)
@@ -695,7 +699,7 @@ class ToggleMyApiKeyAdapter(AuthenticatedApiAdapter):
 
     key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         api_key = (
             context.db.query(ApiKey)
             .filter(ApiKey.id == self.key_id, ApiKey.user_id == context.user.id)
@@ -725,7 +729,7 @@ class GetUsageAdapter(AuthenticatedApiAdapter):
     limit: int = 100
     offset: int = 0
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from sqlalchemy import or_
 
         from src.models.database import ProviderEndpoint
@@ -983,7 +987,7 @@ class GetActiveRequestsAdapter(AuthenticatedApiAdapter):
 
     ids: str | None = None
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from src.services.usage import UsageService
 
         db = context.db
@@ -1005,7 +1009,7 @@ class GetMyIntervalTimelineAdapter(AuthenticatedApiAdapter):
     hours: int
     limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
 
@@ -1022,7 +1026,7 @@ class GetMyIntervalTimelineAdapter(AuthenticatedApiAdapter):
 class GetMyActivityHeatmapAdapter(AuthenticatedApiAdapter):
     """获取用户活动热力图数据的适配器（带 Redis 缓存）"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         user = context.user
         result = await UsageService.get_cached_heatmap(
             db=context.db,
@@ -1045,7 +1049,7 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
     limit: int
     search: str | None
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from sqlalchemy import or_
 
         from src.api.base.models_service import AccessRestrictions
@@ -1215,7 +1219,7 @@ class ListAvailableModelsAdapter(AuthenticatedApiAdapter):
 class ListAvailableProvidersAdapter(AuthenticatedApiAdapter):
     """获取可用提供商列表的适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from sqlalchemy.orm import selectinload
 
 
@@ -1288,7 +1292,7 @@ class UpdateApiKeyProvidersAdapter(AuthenticatedApiAdapter):
 
     api_key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
         payload = context.ensure_json_body()
@@ -1339,7 +1343,7 @@ class UpdateApiKeyCapabilitiesAdapter(AuthenticatedApiAdapter):
 
     api_key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from src.core.key_capabilities import CAPABILITY_DEFINITIONS, CapabilityConfigMode
         from src.models.database import AuditEventType
         from src.services.system.audit import audit_service
@@ -1403,7 +1407,7 @@ class UpdateApiKeyCapabilitiesAdapter(AuthenticatedApiAdapter):
 class GetPreferencesAdapter(AuthenticatedApiAdapter):
     """获取用户偏好设置的适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         preferences = PreferenceService.get_or_create_preferences(context.db, context.user.id)
         return {
             "avatar_url": preferences.avatar_url,
@@ -1426,7 +1430,7 @@ class GetPreferencesAdapter(AuthenticatedApiAdapter):
 class UpdatePreferencesAdapter(AuthenticatedApiAdapter):
     """更新用户偏好设置的适配器"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         payload = context.ensure_json_body()
         try:
             request = UpdatePreferencesRequest.model_validate(payload)
@@ -1455,7 +1459,7 @@ class UpdatePreferencesAdapter(AuthenticatedApiAdapter):
 class GetModelCapabilitySettingsAdapter(AuthenticatedApiAdapter):
     """获取用户的模型能力配置"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         user = context.user
         return {
             "model_capability_settings": user.model_capability_settings or {},
@@ -1465,7 +1469,7 @@ class GetModelCapabilitySettingsAdapter(AuthenticatedApiAdapter):
 class UpdateModelCapabilitySettingsAdapter(AuthenticatedApiAdapter):
     """更新用户的模型能力配置"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from src.core.key_capabilities import CAPABILITY_DEFINITIONS, CapabilityConfigMode
         from src.models.database import AuditEventType
         from src.services.cache.user_cache import UserCacheService
@@ -1539,7 +1543,7 @@ class GetEndpointStatusAdapter(AuthenticatedApiAdapter):
     _cache_ttl = 60  # 缓存60秒
 
     @classmethod
-    async def _get_cache(cls):
+    async def _get_cache(cls) -> Any:
         """获取缓存后端实例（懒加载）"""
         if cls._cache_backend is None:
             from src.services.cache.backend import get_cache_backend
@@ -1551,7 +1555,7 @@ class GetEndpointStatusAdapter(AuthenticatedApiAdapter):
             )
         return cls._cache_backend
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from src.services.health.endpoint import EndpointHealthService
 
         db = context.db

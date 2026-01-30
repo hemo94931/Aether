@@ -4,6 +4,7 @@
 """
 
 
+from typing import Any
 from sqlalchemy.orm import Session
 
 from src.models.database import GlobalModel, Model, Provider
@@ -26,7 +27,7 @@ class ProviderService:
         self.router = ModelRoutingMiddleware(db)
         self.cost_service = ModelCostService(db)
 
-    async def _check_model_availability(self, model_name: str):
+    async def _check_model_availability(self, model_name: str) -> None:
         """
         检查模型是否可用（严格白名单模式）
 
@@ -55,7 +56,7 @@ class ProviderService:
 
         return None
 
-    async def _check_provider_model_availability(self, provider_id: str, model_name: str):
+    async def _check_provider_model_availability(self, provider_id: str, model_name: str) -> None:
         """
         检查特定提供商是否支持特定模型
 
@@ -115,7 +116,7 @@ class ProviderService:
         """
         return self.router.get_available_models()
 
-    def select_provider(self, model_name: str, preferred_provider=None):
+    def select_provider(self, model_name: str, preferred_provider: Any | None = None) -> Any:
         """
         选择提供商
 

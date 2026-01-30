@@ -4,6 +4,8 @@
 
 
 
+from __future__ import annotations
+
 def extract_error_message(error: Exception, status_code: int | None = None) -> str:
     """
     从异常中提取错误消息，优先使用上游原始响应（用于链路追踪/调试）

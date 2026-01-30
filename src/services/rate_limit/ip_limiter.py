@@ -4,6 +4,8 @@ IP 级别的速率限制服务
 提供基于 IP 地址的速率限制，防止暴力破解和 DDoS 攻击
 """
 
+from __future__ import annotations
+
 import ipaddress
 
 from src.clients.redis_client import get_redis_client

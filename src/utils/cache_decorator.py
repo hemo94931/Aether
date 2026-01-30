@@ -38,7 +38,7 @@ def cache_result(key_prefix: str, ttl: int = 60, user_specific: bool = True) -> 
 
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
-        async def wrapper(*args, **kwargs) -> Any:
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             redis_client = get_redis_client_sync()
 
             # 如果 Redis 不可用，直接执行原函数

@@ -4,6 +4,8 @@ Claude Chat Adapter - 基于 ChatAdapterBase 的 Claude Chat API 适配器
 处理 /v1/messages 端点的 Claude Chat 格式请求。
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 import httpx
@@ -96,7 +98,7 @@ class ClaudeChatAdapter(ChatAdapterBase):
         """
         return input_tokens + cache_creation_input_tokens + cache_read_input_tokens
 
-    def _validate_request_body(self, original_request_body: dict, path_params: dict = None):
+    def _validate_request_body(self, original_request_body: dict, path_params: dict | None = None) -> None:
         """验证请求体"""
         try:
             if not isinstance(original_request_body, dict):
@@ -124,7 +126,7 @@ class ClaudeChatAdapter(ChatAdapterBase):
             )
         return request
 
-    def _build_audit_metadata(self, _payload: dict[str, Any], request_obj) -> dict[str, Any]:
+    def _build_audit_metadata(self, _payload: dict[str, Any], request_obj: Any) -> dict[str, Any]:
         """构建 Claude Chat 特定的审计元数据"""
         role_counts: dict[str, int] = {}
         for message in request_obj.messages:
@@ -201,7 +203,7 @@ class ClaudeChatAdapter(ChatAdapterBase):
     # build_request_body 使用基类实现，通过 format_conversion_registry 自动转换 OPENAI -> CLAUDE
 
 
-def build_claude_adapter(x_app_header: str | None):
+def build_claude_adapter(x_app_header: str | None) -> Any:
     """根据 x-app 头部构造 Chat 或 Claude Code 适配器。"""
     if x_app_header and x_app_header.lower() == "cli":
         from src.api.handlers.claude_cli.adapter import ClaudeCliAdapter
@@ -228,7 +230,7 @@ class ClaudeTokenCountAdapter(ApiAdapter):
             return authorization.replace("Bearer ", "")
         return None
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         payload = context.ensure_json_body()
 
         try:

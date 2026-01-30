@@ -2,6 +2,9 @@
 数据库模型定义
 """
 
+from __future__ import annotations
+
+from typing import Any
 import hashlib
 import secrets
 import uuid
@@ -131,7 +134,7 @@ class User(Base):
     )
     audit_logs = relationship("AuditLog", back_populates="user", passive_deletes=True)
 
-    def set_password(self, password: str):
+    def set_password(self, password: str) -> None:
         """设置密码"""
         self.password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode(
             "utf-8"
@@ -373,7 +376,7 @@ class Usage(Base):
     provider_endpoint = relationship("ProviderEndpoint")
     provider_api_key = relationship("ProviderAPIKey")
 
-    def get_request_body(self):
+    def get_request_body(self) -> Any:
         """获取请求体（自动解压）"""
         if self.request_body is not None:
             return self.request_body
@@ -383,7 +386,7 @@ class Usage(Base):
             return decompress_json(self.request_body_compressed)
         return None
 
-    def get_response_body(self):
+    def get_response_body(self) -> Any:
         """获取响应体（自动解压）"""
         if self.response_body is not None:
             return self.response_body

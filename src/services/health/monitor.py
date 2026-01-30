@@ -12,6 +12,8 @@
 - circuit_breaker_by_format: {"CLAUDE": {"open": false, "open_at": null, ...}, ...}
 """
 
+from __future__ import annotations
+
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any

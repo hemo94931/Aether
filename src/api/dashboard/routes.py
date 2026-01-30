@@ -1,5 +1,8 @@
 """仪表盘统计 API 端点。"""
 
+from __future__ import annotations
+
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -17,6 +20,7 @@ from src.models.database import ApiKey, Provider, RequestCandidate, StatsDaily, 
 from src.models.database import User as DBUser
 from src.services.system.stats_aggregator import StatsAggregatorService
 from src.utils.cache_decorator import cache_result
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 pipeline = ApiRequestPipeline()
@@ -44,7 +48,7 @@ def format_tokens(num: int) -> str:
 
 
 @router.get("/stats")
-async def get_dashboard_stats(request: Request, db: Session = Depends(get_db)):
+async def get_dashboard_stats(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取仪表盘统计数据
 
@@ -77,7 +81,7 @@ async def get_recent_requests(
     request: Request,
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取最近请求列表
 
@@ -104,7 +108,7 @@ async def get_recent_requests(
 
 
 @router.get("/provider-status")
-async def get_provider_status(request: Request, db: Session = Depends(get_db)):
+async def get_provider_status(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取提供商状态
 
@@ -125,7 +129,7 @@ async def get_daily_stats(
     request: Request,
     days: int = Query(7, ge=1, le=30),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取每日统计数据
 
@@ -157,13 +161,13 @@ class DashboardAdapter(ApiAdapter):
 
     mode = ApiMode.USER  # 普通用户也可访问仪表盘
 
-    def authorize(self, context):  # type: ignore[override]
+    def authorize(self, context: ApiRequestContext) -> None:  # type: ignore[override]
         if not context.user:
             raise HTTPException(status_code=401, detail="未登录")
 
 
 class DashboardStatsAdapter(DashboardAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         user = context.user
         if not user:
             raise HTTPException(status_code=401, detail="未登录")
@@ -178,7 +182,7 @@ class DashboardStatsAdapter(DashboardAdapter):
 
 class AdminDashboardStatsAdapter(AdminApiAdapter):
     @cache_result(key_prefix="dashboard:admin:stats", ttl=CacheTTL.DASHBOARD_STATS, user_specific=False)
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """管理员仪表盘统计 - 使用预聚合数据优化性能"""
         from zoneinfo import ZoneInfo
         from src.services.system.stats_aggregator import APP_TIMEZONE
@@ -509,7 +513,7 @@ class AdminDashboardStatsAdapter(AdminApiAdapter):
 
 class UserDashboardStatsAdapter(DashboardAdapter):
     @cache_result(key_prefix="dashboard:user:stats", ttl=30, user_specific=True)
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from zoneinfo import ZoneInfo
         from src.services.system.stats_aggregator import APP_TIMEZONE
 
@@ -724,7 +728,7 @@ class UserDashboardStatsAdapter(DashboardAdapter):
 class DashboardRecentRequestsAdapter(DashboardAdapter):
     limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
         query = db.query(Usage)
@@ -756,7 +760,7 @@ class DashboardRecentRequestsAdapter(DashboardAdapter):
 
 class DashboardProviderStatusAdapter(DashboardAdapter):
     @cache_result(key_prefix="dashboard:provider:status", ttl=60, user_specific=False)
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         user = context.user
         providers = db.query(Provider).filter(Provider.is_active.is_(True)).all()
@@ -787,7 +791,7 @@ class DashboardDailyStatsAdapter(DashboardAdapter):
     days: int
 
     @cache_result(key_prefix="dashboard:daily:stats", ttl=CacheTTL.DASHBOARD_DAILY, user_specific=True)
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from zoneinfo import ZoneInfo
         from src.services.system.stats_aggregator import APP_TIMEZONE
 

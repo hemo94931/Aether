@@ -3,6 +3,9 @@
 """
 
 
+from __future__ import annotations
+
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer
 from pydantic import ValidationError
@@ -39,6 +42,7 @@ from src.services.system.config import SystemConfigService
 from src.services.user.service import UserService
 from src.services.email import EmailSenderService, EmailVerificationService
 from src.utils.request_utils import get_client_ip, get_user_agent
+from src.api.base.context import ApiRequestContext
 
 
 def validate_email_suffix(db: Session, email: str) -> tuple[bool, str | None]:
@@ -93,7 +97,7 @@ pipeline = ApiRequestPipeline()
 
 # API端点
 @router.get("/registration-settings", response_model=RegistrationSettingsResponse)
-async def registration_settings(request: Request, db: Session = Depends(get_db)):
+async def registration_settings(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取注册相关配置
 
@@ -105,7 +109,7 @@ async def registration_settings(request: Request, db: Session = Depends(get_db))
 
 
 @router.get("/settings")
-async def auth_settings(request: Request, db: Session = Depends(get_db)):
+async def auth_settings(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取认证设置
 
@@ -117,7 +121,7 @@ async def auth_settings(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(request: Request, db: Session = Depends(get_db)):
+async def login(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     用户登录
 
@@ -133,7 +137,7 @@ async def login(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/refresh", response_model=RefreshTokenResponse)
-async def refresh_token(request: Request, db: Session = Depends(get_db)):
+async def refresh_token(request: Request, db: Session = Depends(get_db)) -> None:
     """
     刷新访问令牌
 
@@ -145,7 +149,7 @@ async def refresh_token(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/register", response_model=RegisterResponse)
-async def register(request: Request, db: Session = Depends(get_db)):
+async def register(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     用户注册
 
@@ -159,7 +163,7 @@ async def register(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/me")
-async def get_current_user_info(request: Request, db: Session = Depends(get_db)):
+async def get_current_user_info(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取当前用户信息
 
@@ -171,7 +175,7 @@ async def get_current_user_info(request: Request, db: Session = Depends(get_db))
 
 
 @router.patch("/password")
-async def change_password(request: Request, db: Session = Depends(get_db)):
+async def change_password(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     修改密码
 
@@ -183,7 +187,7 @@ async def change_password(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/logout", response_model=LogoutResponse)
-async def logout(request: Request, db: Session = Depends(get_db)):
+async def logout(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     用户登出
 
@@ -194,7 +198,7 @@ async def logout(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/send-verification-code", response_model=SendVerificationCodeResponse)
-async def send_verification_code(request: Request, db: Session = Depends(get_db)):
+async def send_verification_code(request: Request, db: Session = Depends(get_db)) -> None:
     """
     发送邮箱验证码
 
@@ -208,7 +212,7 @@ async def send_verification_code(request: Request, db: Session = Depends(get_db)
 
 
 @router.post("/verify-email", response_model=VerifyEmailResponse)
-async def verify_email(request: Request, db: Session = Depends(get_db)):
+async def verify_email(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     验证邮箱验证码
 
@@ -222,7 +226,7 @@ async def verify_email(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/verification-status", response_model=VerificationStatusResponse)
-async def verification_status(request: Request, db: Session = Depends(get_db)):
+async def verification_status(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     查询邮箱验证状态
 
@@ -240,12 +244,12 @@ async def verification_status(request: Request, db: Session = Depends(get_db)):
 class AuthPublicAdapter(ApiAdapter):
     mode = ApiMode.PUBLIC
 
-    def authorize(self, context):  # type: ignore[override]
+    def authorize(self, context: ApiRequestContext) -> None:  # type: ignore[override]
         return None
 
 
 class AuthLoginAdapter(AuthPublicAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         payload = context.ensure_json_body()
 
@@ -319,7 +323,7 @@ class AuthLoginAdapter(AuthPublicAdapter):
 
 
 class AuthRefreshAdapter(AuthPublicAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         payload = context.ensure_json_body()
         refresh_request = RefreshTokenRequest.model_validate(payload)
@@ -374,7 +378,7 @@ class AuthRefreshAdapter(AuthPublicAdapter):
 
 
 class AuthRegistrationSettingsAdapter(AuthPublicAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """公开返回注册相关配置"""
         db = context.db
 
@@ -394,7 +398,7 @@ class AuthRegistrationSettingsAdapter(AuthPublicAdapter):
 
 
 class AuthSettingsAdapter(AuthPublicAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """公开返回认证设置"""
         db = context.db
 
@@ -409,7 +413,7 @@ class AuthSettingsAdapter(AuthPublicAdapter):
 
 
 class AuthRegisterAdapter(AuthPublicAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from src.models.database import SystemConfig
 
         db = context.db
@@ -545,7 +549,7 @@ class AuthRegisterAdapter(AuthPublicAdapter):
 
 
 class AuthCurrentUserAdapter(AuthenticatedApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         user = context.user
         return {
             "id": user.id,
@@ -566,7 +570,7 @@ class AuthCurrentUserAdapter(AuthenticatedApiAdapter):
 
 
 class AuthChangePasswordAdapter(AuthenticatedApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         payload = context.ensure_json_body()
         old_password = payload.get("old_password")
         new_password = payload.get("new_password")
@@ -584,7 +588,7 @@ class AuthChangePasswordAdapter(AuthenticatedApiAdapter):
 
 
 class AuthLogoutAdapter(AuthenticatedApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """用户登出，将 Token 加入黑名单"""
         user = context.user
         client_ip = get_client_ip(context.request)
@@ -621,7 +625,7 @@ class AuthLogoutAdapter(AuthenticatedApiAdapter):
 
 
 class AuthSendVerificationCodeAdapter(AuthPublicAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """发送邮箱验证码"""
         db = context.db
         payload = context.ensure_json_body()
@@ -702,7 +706,7 @@ class AuthSendVerificationCodeAdapter(AuthPublicAdapter):
 
 
 class AuthVerifyEmailAdapter(AuthPublicAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """验证邮箱验证码"""
         db = context.db
         payload = context.ensure_json_body()
@@ -744,7 +748,7 @@ class AuthVerifyEmailAdapter(AuthPublicAdapter):
 
 
 class AuthVerificationStatusAdapter(AuthPublicAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """查询邮箱验证状态"""
         payload = context.ensure_json_body()
 

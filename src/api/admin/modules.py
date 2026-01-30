@@ -12,6 +12,7 @@ from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.pipeline import ApiRequestPipeline
 from src.core.exceptions import InvalidRequestException, NotFoundException
 from src.core.modules import ModuleStatus, get_module_registry
+from src.api.base.context import ApiRequestContext
 from src.database import get_db
 
 router = APIRouter(prefix="/api/admin/modules", tags=["Admin - Modules"])
@@ -69,7 +70,7 @@ class SetModuleEnabledRequest(BaseModel):
 
 
 @router.get("/status")
-async def get_all_modules_status(request: Request, db: Session = Depends(get_db)):
+async def get_all_modules_status(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取所有模块状态
 
@@ -86,7 +87,7 @@ async def get_all_modules_status(request: Request, db: Session = Depends(get_db)
 @router.get("/status/{module_name}")
 async def get_module_status(
     module_name: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """
     获取单个模块状态
 
@@ -105,7 +106,7 @@ async def get_module_status(
 @router.put("/status/{module_name}/enabled")
 async def set_module_enabled(
     module_name: str, request: Request, db: Session = Depends(get_db)
-):
+) -> Any:
     """
     设置模块启用状态
 
@@ -131,7 +132,7 @@ async def set_module_enabled(
 class AdminGetAllModulesStatusAdapter(AdminApiAdapter):
     """获取所有模块状态"""
 
-    async def handle(self, context) -> dict[str, Any]:
+    async def handle(self, context: ApiRequestContext) -> dict[str, Any]:
         registry = get_module_registry()
         all_status = await registry.get_all_status_async(context.db)
 
@@ -147,7 +148,7 @@ class AdminGetModuleStatusAdapter(AdminApiAdapter):
 
     module_name: str
 
-    async def handle(self, context) -> dict[str, Any]:
+    async def handle(self, context: ApiRequestContext) -> dict[str, Any]:
         registry = get_module_registry()
         status = await registry.get_module_status_async(self.module_name, context.db)
 
@@ -163,7 +164,7 @@ class AdminSetModuleEnabledAdapter(AdminApiAdapter):
 
     module_name: str
 
-    async def handle(self, context) -> dict[str, Any]:
+    async def handle(self, context: ApiRequestContext) -> dict[str, Any]:
         registry = get_module_registry()
 
         # 检查模块是否存在

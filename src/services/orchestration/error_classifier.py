@@ -4,6 +4,8 @@
 负责错误分类和处理策略决定
 """
 
+from __future__ import annotations
+
 import json
 from enum import Enum
 from typing import Any
@@ -100,7 +102,7 @@ class ErrorClassifier:
     def __init__(
         self,
         db: Session,
-        adaptive_manager: Any = None,
+        adaptive_manager: Any | None = None,
         cache_scheduler: CacheAwareScheduler | None = None,
     ) -> None:
         """

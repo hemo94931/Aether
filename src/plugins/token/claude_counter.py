@@ -3,6 +3,8 @@ Claude Token计数插件
 专门为Claude模型设计的Token计数器
 """
 
+from __future__ import annotations
+
 import json
 import re
 from typing import Any
@@ -61,7 +63,7 @@ class ClaudeTokenCounterPlugin(TokenCounterPlugin):
         },
     }
 
-    def __init__(self, name: str = "claude", config: dict[str, Any] = None):
+    def __init__(self, name: str = "claude", config: dict[str, Any] | None = None):
         super().__init__(name, config)
 
         # 价格表（每1M tokens的价格 USD）

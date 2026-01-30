@@ -1,5 +1,7 @@
 """令牌桶速率限制策略，支持 Redis 分布式后端"""
 
+from __future__ import annotations
+
 import asyncio
 import os
 import time
@@ -28,7 +30,7 @@ class TokenBucket:
         self.tokens = capacity
         self.last_refill = time.time()
 
-    def _refill(self):
+    def _refill(self) -> None:
         """补充令牌"""
         now = time.time()
         time_passed = now - self.last_refill
@@ -80,7 +82,7 @@ class TokenBucketStrategy(RateLimitStrategy):
     - 适合处理不均匀的流量模式
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("token_bucket")
         self.buckets: dict[str, TokenBucket] = {}
         self._lock = asyncio.Lock()
@@ -129,7 +131,7 @@ class TokenBucketStrategy(RateLimitStrategy):
     def _want_redis_backend(self) -> bool:
         return self._backend_mode in {"auto", "redis"}
 
-    async def _ensure_backend(self):
+    async def _ensure_backend(self) -> None:
         if self._redis_checked:
             return
         self._redis_checked = True
@@ -142,7 +144,7 @@ class TokenBucketStrategy(RateLimitStrategy):
         elif self._backend_mode == "redis":
             logger.warning("RATE_LIMIT_BACKEND=redis 但 Redis 客户端不可用，回退到内存桶")
 
-    async def check_limit(self, key: str, **kwargs) -> RateLimitResult:
+    async def check_limit(self, key: str, **kwargs: Any) -> RateLimitResult:
         """
         检查速率限制
 
@@ -190,7 +192,7 @@ class TokenBucketStrategy(RateLimitStrategy):
                 ),
             )
 
-    async def consume(self, key: str, amount: int = 1, **kwargs) -> bool:
+    async def consume(self, key: str, amount: int = 1, **kwargs: Any) -> bool:
         """
         消费令牌
 
@@ -227,7 +229,7 @@ class TokenBucketStrategy(RateLimitStrategy):
 
             return success
 
-    async def reset(self, key: str):
+    async def reset(self, key: str) -> Any:
         """
         重置令牌桶
 
@@ -278,7 +280,7 @@ class TokenBucketStrategy(RateLimitStrategy):
                 "reset_at": bucket.get_reset_time().isoformat(),
             }
 
-    def configure(self, config: dict[str, Any]):
+    def configure(self, config: dict[str, Any]) -> Any:
         """
         配置策略
 
@@ -349,7 +351,7 @@ class RedisTokenBucketBackend:
     return {allowed, tokens, retry_after}
     """
 
-    def __init__(self, redis_client):
+    def __init__(self, redis_client: Any) -> None:
         self.redis = redis_client
         self._consume_script = self.redis.register_script(self._SCRIPT)
 
@@ -413,7 +415,7 @@ class RedisTokenBucketBackend:
         remaining = int(float(result[1]))
         return allowed, remaining
 
-    async def reset(self, key: str):
+    async def reset(self, key: str) -> Any:
         await self.redis.delete(self._redis_key(key))
 
     async def get_stats(self, key: str, capacity: int, refill_rate: float) -> dict[str, Any]:

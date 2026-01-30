@@ -3,6 +3,8 @@ JWT认证插件
 支持JWT Bearer token认证
 """
 
+from __future__ import annotations
+
 import hashlib
 
 from fastapi import Request
@@ -22,7 +24,7 @@ class JwtAuthPlugin(AuthPlugin):
     支持从Authorization Bearer header中提取JWT token进行认证
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(name="jwt", priority=20)  # 高优先级，优先于API Key
 
     def get_credentials(self, request: Request) -> str | None:

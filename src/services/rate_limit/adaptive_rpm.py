@@ -13,6 +13,8 @@
 3. 安全探测：允许在稳定后尝试更高 RPM
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from typing import Any, cast
 

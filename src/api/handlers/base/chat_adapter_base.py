@@ -18,6 +18,7 @@ Chat Adapter 通用基类
 
 from __future__ import annotations
 
+from sqlalchemy.orm import Session
 import time
 import traceback
 from abc import abstractmethod
@@ -129,7 +130,7 @@ class ChatAdapterBase(ApiAdapter):
     def __init__(self, allowed_api_formats: list[str] | None = None):
         self.allowed_api_formats = allowed_api_formats or [self.FORMAT_ID]
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         """处理 Chat API 请求"""
         http_request = context.request
         user = context.user
@@ -262,14 +263,14 @@ class ChatAdapterBase(ApiAdapter):
     def _create_handler(
         self,
         *,
-        db,
-        user,
-        api_key,
+        db: Session,
+        user: Any,
+        api_key: Any,
         request_id: str,
         client_ip: str,
         user_agent: str,
         start_time: float,
-    ):
+    ) -> Any:
         """创建 Handler 实例 - 子类可覆盖"""
         return self.HANDLER_CLASS(
             db=db,
@@ -305,7 +306,7 @@ class ChatAdapterBase(ApiAdapter):
         return merged
 
     @abstractmethod
-    def _validate_request_body(self, original_request_body: dict, path_params: dict = None):
+    def _validate_request_body(self, original_request_body: dict, path_params: dict | None = None) -> None:
         """
         验证请求体 - 子类必须实现
 
@@ -318,7 +319,7 @@ class ChatAdapterBase(ApiAdapter):
         """
         pass
 
-    def _extract_message_count(self, payload: dict[str, Any], request_obj) -> int:
+    def _extract_message_count(self, payload: dict[str, Any], request_obj: Any) -> int:
         """
         提取消息数量 - 子类可覆盖
 
@@ -329,7 +330,7 @@ class ChatAdapterBase(ApiAdapter):
             messages = request_obj.messages
         return len(messages) if isinstance(messages, list) else 0
 
-    def _build_audit_metadata(self, payload: dict[str, Any], request_obj) -> dict[str, Any]:
+    def _build_audit_metadata(self, payload: dict[str, Any], request_obj: Any) -> dict[str, Any]:
         """
         构建审计日志元数据 - 子类可覆盖
         """
@@ -351,9 +352,9 @@ class ChatAdapterBase(ApiAdapter):
         self,
         e: Exception,
         *,
-        db,
-        user,
-        api_key,
+        db: Session,
+        user: Any,
+        api_key: Any,
         model: str,
         stream: bool,
         start_time: float,
@@ -422,9 +423,9 @@ class ChatAdapterBase(ApiAdapter):
         self,
         e: Exception,
         *,
-        db,
-        user,
-        api_key,
+        db: Session,
+        user: Any,
+        api_key: Any,
         model: str,
         stream: bool,
         start_time: float,
@@ -710,7 +711,7 @@ def register_adapter(adapter_class: type[ChatAdapterBase]) -> type[ChatAdapterBa
     return adapter_class
 
 
-def _ensure_adapters_loaded():
+def _ensure_adapters_loaded() -> None:
     """确保所有 Adapter 已被加载（触发注册）"""
     global _ADAPTERS_LOADED
     if _ADAPTERS_LOADED:

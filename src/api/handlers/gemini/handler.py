@@ -6,6 +6,7 @@ Gemini Chat Handler
 
 from __future__ import annotations
 
+from starlette.requests import Request
 from typing import Any
 
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
@@ -102,7 +103,7 @@ class GeminiChatHandler(ChatHandlerBase):
             return str(path_params["model"])
         return "unknown"
 
-    async def _convert_request(self, request):
+    async def _convert_request(self, request: Request) -> None:
         """
         将请求转换为 Gemini 格式的 Pydantic 对象
 

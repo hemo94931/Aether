@@ -8,6 +8,8 @@
 4. Redis 缓存优化
 """
 
+from __future__ import annotations
+
 import json
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -25,7 +27,7 @@ CACHE_TTL_SECONDS = 30  # 缓存 30 秒
 CACHE_KEY_PREFIX = "health:endpoint:"
 
 
-def _get_redis_client():
+def _get_redis_client() -> Any:
     """获取 Redis 客户端，失败返回 None"""
     try:
         from src.clients.redis_client import redis_client

@@ -6,7 +6,7 @@ OAuth 认证模块
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.core.modules.base import (
     ModuleCategory,
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 
-def _get_router():
+def _get_router() -> Any:
     """延迟导入路由（避免启动时加载重依赖/副作用）。"""
     # 延迟 discover，避免 alembic/mypy 等场景导入时触发 entry_points 解析
     from src.services.auth.oauth.registry import get_oauth_provider_registry

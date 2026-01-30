@@ -4,6 +4,7 @@
 基于 GlobalModel 的聚合视图
 """
 
+from typing import Any
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, Request
@@ -13,6 +14,7 @@ from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.pipeline import ApiRequestPipeline
 from src.database import get_db
 from src.models.database import GlobalModel, Model
+from src.api.base.context import ApiRequestContext
 from src.models.pydantic_models import (
     ModelCapabilities,
     ModelCatalogItem,
@@ -59,7 +61,7 @@ class AdminGetModelCatalogAdapter(AdminApiAdapter):
     2. Model 表提供关联提供商和价格
     """
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db: Session = context.db
 
         # 1. 获取所有活跃的 GlobalModel

@@ -3,6 +3,8 @@
 定义通知的接口和数据结构
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 from abc import abstractmethod
@@ -90,7 +92,7 @@ class NotificationPlugin(BasePlugin):
     提供统一的重试机制，子类只需实现 _do_send 和 _do_send_batch 方法
     """
 
-    def __init__(self, name: str = "notification", config: dict[str, Any] = None):
+    def __init__(self, name: str = "notification", config: dict[str, Any] | None = None):
         # 调用父类初始化，设置metadata
         super().__init__(
             name=name, config=config, description="Notification Plugin", version="1.0.0"

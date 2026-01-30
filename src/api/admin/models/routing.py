@@ -8,6 +8,8 @@ GlobalModel 请求链路预览 API
 - Key 的并发配置和健康状态
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, Request
@@ -30,6 +32,7 @@ from src.models.database import (
     ProviderEndpoint,
 )
 from src.services.cache.aware_scheduler import CacheAwareScheduler
+from src.api.base.context import ApiRequestContext
 from src.services.system.config import SystemConfigService
 
 router = APIRouter(prefix="/global", tags=["Admin - Global Models"])
@@ -204,7 +207,7 @@ class AdminGetModelRoutingPreviewAdapter(AdminApiAdapter):
 
     global_model_id: str
 
-    async def handle(self, context) -> ModelRoutingPreviewResponse:  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> ModelRoutingPreviewResponse:  # type: ignore[override]
         db = context.db
 
         # 获取 GlobalModel

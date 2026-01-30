@@ -4,6 +4,8 @@
 为异步函数和操作提供超时保护
 """
 
+from __future__ import annotations
+
 import asyncio
 from functools import wraps
 from typing import Any, TypeVar
@@ -25,7 +27,7 @@ class AsyncTimeoutError(TimeoutError):
         self.timeout = timeout
 
 
-def with_timeout(seconds: float, operation_name: str | None = None):
+def with_timeout(seconds: float, operation_name: str | None = None) -> Any:
     """
     装饰器：为异步函数添加超时保护
 
@@ -45,7 +47,7 @@ def with_timeout(seconds: float, operation_name: str | None = None):
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             op_name = operation_name or func.__name__
             try:
                 return await asyncio.wait_for(func(*args, **kwargs), timeout=seconds)
@@ -63,10 +65,10 @@ def with_timeout(seconds: float, operation_name: str | None = None):
 
 
 async def run_with_timeout(
-    coro,
+    coro: Any,
     timeout: float,
     operation_name: str = "operation",
-    default: T = None,
+    default: T | None = None,
     raise_on_timeout: bool = True,
 ) -> T:
     """
@@ -117,16 +119,16 @@ class TimeoutContext:
         self.operation_name = operation_name
         self._task: asyncio.Task | None = None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> None:
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         # asyncio.timeout 在 Python 3.11+ 可用
         # 这里使用更通用的方式
         pass
 
 
-async def with_timeout_context(timeout: float, operation_name: str = "operation"):
+async def with_timeout_context(timeout: float, operation_name: str = "operation") -> Any:
     """
     超时上下文管理器（Python 3.11+ asyncio.timeout 的替代）
 

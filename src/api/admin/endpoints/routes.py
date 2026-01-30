@@ -2,6 +2,9 @@
 ProviderEndpoint CRUD 管理 API
 """
 
+from __future__ import annotations
+
+from typing import Any
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,6 +21,7 @@ from src.core.exceptions import InvalidRequestException, NotFoundException
 from src.core.logger import logger
 from src.database import get_db
 from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint
+from src.api.base.context import ApiRequestContext
 from src.models.endpoint_models import (
     ProviderEndpointCreate,
     ProviderEndpointResponse,
@@ -215,7 +219,7 @@ class AdminListProviderEndpointsAdapter(AdminApiAdapter):
     skip: int
     limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:
@@ -270,7 +274,7 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
     provider_id: str
     endpoint_data: ProviderEndpointCreate
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:
@@ -340,7 +344,7 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
 class AdminGetProviderEndpointAdapter(AdminApiAdapter):
     endpoint_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         endpoint = (
             db.query(ProviderEndpoint, Provider)
@@ -390,7 +394,7 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
     endpoint_id: str
     endpoint_data: ProviderEndpointUpdate
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         endpoint = (
             db.query(ProviderEndpoint).filter(ProviderEndpoint.id == self.endpoint_id).first()
@@ -459,7 +463,7 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
 class AdminDeleteProviderEndpointAdapter(AdminApiAdapter):
     endpoint_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         endpoint = (
             db.query(ProviderEndpoint).filter(ProviderEndpoint.id == self.endpoint_id).first()

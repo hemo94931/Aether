@@ -2,6 +2,9 @@
 请求链路追踪 API 端点
 """
 
+from __future__ import annotations
+
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -15,6 +18,7 @@ from src.database import get_db
 from src.models.database import Provider, ProviderEndpoint, ProviderAPIKey
 from src.core.crypto import crypto_service
 from src.services.request.candidate import RequestCandidateService
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(prefix="/api/admin/monitoring/trace", tags=["Admin - Monitoring: Trace"])
 pipeline = ApiRequestPipeline()
@@ -69,7 +73,7 @@ async def get_request_trace(
     request_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取请求的完整追踪信息
 
@@ -122,7 +126,7 @@ async def get_provider_failure_rate(
     request: Request,
     limit: int = Query(100, ge=1, le=1000, description="统计最近的尝试数量"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取提供商的失败率统计
 
@@ -153,7 +157,7 @@ async def get_provider_failure_rate(
 class AdminGetRequestTraceAdapter(AdminApiAdapter):
     request_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         # 只查询 candidates
@@ -326,7 +330,7 @@ class AdminProviderFailureRateAdapter(AdminApiAdapter):
     provider_id: str
     limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         result = RequestCandidateService.get_candidate_stats_by_provider(
             db=context.db,
             provider_id=self.provider_id,

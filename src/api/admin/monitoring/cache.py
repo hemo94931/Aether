@@ -4,6 +4,8 @@
 提供缓存亲和性统计、管理和监控功能
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 

@@ -4,6 +4,8 @@ API Key认证插件
 """
 
 
+from __future__ import annotations
+
 from fastapi import Request
 from sqlalchemy.orm import Session
 
@@ -21,7 +23,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
     支持从x-api-key header或Authorization Bearer token中提取API Key
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(name="api_key", priority=10)
 
     def get_credentials(self, request: Request) -> str | None:

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from typing import Any, Callable
 import os
 from datetime import datetime
 
@@ -26,7 +27,7 @@ class TaskScheduler:
 
     _instance: TaskScheduler | None = None
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.scheduler = AsyncIOScheduler(timezone=APP_TIMEZONE)
         self._started = False
 
@@ -39,13 +40,13 @@ class TaskScheduler:
 
     def add_cron_job(
         self,
-        func,
+        func: Callable[..., Any],
         hour: int,
         minute: int = 0,
-        job_id: str = None,
-        name: str = None,
-        **kwargs,
-    ):
+        job_id: str | None = None,
+        name: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
         """
         添加 cron 定时任务
 
@@ -78,14 +79,14 @@ class TaskScheduler:
 
     def add_interval_job(
         self,
-        func,
-        seconds: int = None,
-        minutes: int = None,
-        hours: int = None,
-        job_id: str = None,
-        name: str = None,
-        **kwargs,
-    ):
+        func: Callable[..., Any],
+        seconds: int | None = None,
+        minutes: int | None = None,
+        hours: int | None = None,
+        job_id: str | None = None,
+        name: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
         """
         添加间隔执行任务
 
@@ -133,7 +134,7 @@ class TaskScheduler:
 
         logger.info(f"已注册间隔任务: {display_name}, 执行间隔: {interval_desc}")
 
-    def start(self):
+    def start(self) -> Any:
         """启动调度器"""
         if self._started:
             logger.warning("调度器已在运行中")
@@ -146,7 +147,7 @@ class TaskScheduler:
         # 打印下次执行时间
         self._log_next_run_times()
 
-    def stop(self):
+    def stop(self) -> Any:
         """停止调度器"""
         if not self._started:
             return
@@ -155,7 +156,7 @@ class TaskScheduler:
         self._started = False
         logger.info("定时任务调度器已停止")
 
-    def _log_next_run_times(self):
+    def _log_next_run_times(self) -> None:
         """记录所有任务的下次执行时间"""
         jobs = self.scheduler.get_jobs()
         if not jobs:

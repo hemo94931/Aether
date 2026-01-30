@@ -2,6 +2,9 @@
 Provider API Keys 管理
 """
 
+from __future__ import annotations
+
+from typing import Any
 import json
 import uuid
 from dataclasses import dataclass
@@ -25,6 +28,7 @@ from src.models.endpoint_models import (
     EndpointAPIKeyUpdate,
 )
 from src.services.cache.provider_cache import ProviderCacheService
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(tags=["Provider Keys"])
 pipeline = ApiRequestPipeline()
@@ -207,7 +211,7 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
     key_id: str
     key_data: EndpointAPIKeyUpdate
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == self.key_id).first()
         if not key:
@@ -378,7 +382,7 @@ class AdminRevealEndpointKeyAdapter(AdminApiAdapter):
 
     key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == self.key_id).first()
         if not key:
@@ -436,7 +440,7 @@ class AdminRevealEndpointKeyAdapter(AdminApiAdapter):
 class AdminDeleteEndpointKeyAdapter(AdminApiAdapter):
     key_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == self.key_id).first()
         if not key:
@@ -472,7 +476,7 @@ class AdminDeleteEndpointKeyAdapter(AdminApiAdapter):
 
 
 class AdminGetKeysGroupedByFormatAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         # Key 属于 Provider：按 key.api_formats 分组展示
@@ -677,7 +681,7 @@ class AdminListProviderKeysAdapter(AdminApiAdapter):
     skip: int
     limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:
@@ -702,7 +706,7 @@ class AdminCreateProviderKeyAdapter(AdminApiAdapter):
     provider_id: str
     key_data: EndpointAPIKeyCreate
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:

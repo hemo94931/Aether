@@ -68,7 +68,7 @@ def build_proxy_url(proxy_config: dict[str, Any]) -> str | None:
     if not proxy_config.get("enabled", True):
         return None
 
-    proxy_url = proxy_config.get("url")
+    proxy_url: str | None = proxy_config.get("url")
     if not proxy_url:
         return None
 
@@ -113,7 +113,7 @@ class HTTPClientPool:
     # 代理客户端缓存上限（避免内存泄漏）
     _max_proxy_clients: int = 50
 
-    def __new__(cls):
+    def __new__(cls) -> "HTTPClientPool":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
@@ -214,7 +214,7 @@ class HTTPClientPool:
             }
             default_config.update(kwargs)
 
-            cls._clients[name] = httpx.AsyncClient(**default_config)
+            cls._clients[name] = httpx.AsyncClient(**default_config)  # type: ignore[arg-type]
             logger.debug(f"创建命名HTTP客户端: {name}")
 
         return cls._clients[name]
@@ -304,7 +304,7 @@ class HTTPClientPool:
             if proxy_url:
                 client_config["proxy"] = proxy_url
 
-            client = httpx.AsyncClient(**client_config)
+            client = httpx.AsyncClient(**client_config)  # type: ignore[arg-type]
             cls._proxy_clients[cache_key] = (client, time.time())
 
             logger.debug(
@@ -315,7 +315,7 @@ class HTTPClientPool:
             return client
 
     @classmethod
-    async def close_all(cls):
+    async def close_all(cls) -> None:
         """关闭所有HTTP客户端"""
         if cls._default_client is not None:
             await cls._default_client.aclose()
@@ -341,7 +341,7 @@ class HTTPClientPool:
 
     @classmethod
     @asynccontextmanager
-    async def get_temp_client(cls, **kwargs: Any):
+    async def get_temp_client(cls, **kwargs: Any) -> Any:
         """
         获取临时HTTP客户端(上下文管理器)
 
@@ -363,7 +363,7 @@ class HTTPClientPool:
         }
         default_config.update(kwargs)
 
-        client = httpx.AsyncClient(**default_config)
+        client = httpx.AsyncClient(**default_config)  # type: ignore[arg-type]
         try:
             yield client
         finally:
@@ -412,7 +412,7 @@ class HTTPClientPool:
             logger.debug(f"创建带代理的HTTP客户端(一次性): {proxy_config.get('url', 'unknown')}")
 
         client_config.update(kwargs)
-        return httpx.AsyncClient(**client_config)
+        return httpx.AsyncClient(**client_config)  # type: ignore[arg-type]
 
     @classmethod
     def get_pool_stats(cls) -> dict[str, Any]:
@@ -431,6 +431,6 @@ def get_http_client() -> httpx.AsyncClient:
     return HTTPClientPool.get_default_client()
 
 
-async def close_http_clients():
+async def close_http_clients() -> None:
     """关闭所有HTTP客户端的便捷函数"""
     await HTTPClientPool.close_all()

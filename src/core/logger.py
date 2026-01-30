@@ -21,6 +21,8 @@
     logger.exception("异常，带堆栈")
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import sys
@@ -115,19 +117,19 @@ if not DISABLE_FILE_LOG:
         file_log_config["diagnose"] = False
 
     # 主日志文件 - 所有级别
-    logger.add(
+    logger.add(  # type: ignore[call-overload]
         log_dir / "app.log",
         level="DEBUG",
-        **file_log_config,  # type: ignore[arg-type]
+        **file_log_config,
     )
 
     # 错误日志文件 - 仅 ERROR 及以上
     error_log_config = file_log_config.copy()
     error_log_config["rotation"] = "50 MB"
-    logger.add(
+    logger.add(  # type: ignore[call-overload]
         log_dir / "error.log",
         level="ERROR",
-        **error_log_config,  # type: ignore[arg-type]
+        **error_log_config,
     )
 
 # ============================================================================

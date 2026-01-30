@@ -9,6 +9,8 @@
 5. 流式平滑输出
 """
 
+from __future__ import annotations
+
 import asyncio
 import codecs
 import json

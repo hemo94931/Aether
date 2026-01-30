@@ -1,6 +1,7 @@
 """公开模块状态 API（供登录页等使用）"""
 
 
+from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -20,7 +21,7 @@ class AuthModuleInfo(BaseModel):
 
 
 @router.get("/auth-status", response_model=list[AuthModuleInfo])
-async def get_auth_modules_status(db: Session = Depends(get_db)):
+async def get_auth_modules_status(db: Session = Depends(get_db)) -> Any:
     """
     获取认证模块状态（公开接口）
 

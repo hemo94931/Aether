@@ -7,6 +7,7 @@
 - 关键数据（计费）仍然立即 commit
 """
 
+from typing import Any
 import asyncio
 
 from src.core.logger import logger
@@ -26,13 +27,13 @@ class BatchCommitter:
         self._lock = asyncio.Lock()
         self._task = None
 
-    async def start(self):
+    async def start(self) -> Any:
         """启动后台批量提交任务"""
         if self._task is None:
             self._task = asyncio.create_task(self._batch_commit_loop())
             logger.info(f"批量提交器已启动，间隔: {self.interval_seconds}s")
 
-    async def stop(self):
+    async def stop(self) -> Any:
         """停止后台任务"""
         if self._task:
             self._task.cancel()
@@ -43,7 +44,7 @@ class BatchCommitter:
             self._task = None
             logger.info("批量提交器已停止")
 
-    def mark_dirty(self, session: Session):
+    def mark_dirty(self, session: Session) -> Any:
         """标记 Session 有待提交的更改"""
         # 请求级事务由中间件统一 commit/rollback；避免后台任务在请求中途误提交。
         if session is None:
@@ -52,7 +53,7 @@ class BatchCommitter:
             return
         self._pending_sessions.add(session)
 
-    async def _batch_commit_loop(self):
+    async def _batch_commit_loop(self) -> None:
         """后台批量提交循环"""
         while True:
             try:
@@ -65,7 +66,7 @@ class BatchCommitter:
             except Exception as e:
                 logger.error(f"批量提交出错: {e}")
 
-    async def _commit_all(self):
+    async def _commit_all(self) -> None:
         """提交所有待处理的 Session"""
         async with self._lock:
             if not self._pending_sessions:
@@ -107,13 +108,13 @@ def get_batch_committer() -> BatchCommitter:
     return _batch_committer
 
 
-async def init_batch_committer():
+async def init_batch_committer() -> None:
     """初始化并启动批量提交器"""
     committer = get_batch_committer()
     await committer.start()
 
 
-async def shutdown_batch_committer():
+async def shutdown_batch_committer() -> None:
     """关闭批量提交器"""
     committer = get_batch_committer()
     await committer.stop()

@@ -2,6 +2,8 @@
 系统配置服务
 """
 
+from __future__ import annotations
+
 import json
 import time
 from enum import Enum
@@ -174,7 +176,7 @@ class SystemConfigService:
     }
 
     @classmethod
-    def get_config(cls, db: Session, key: str, default: Any = None) -> Any | None:
+    def get_config(cls, db: Session, key: str, default: Any | None = None) -> Any | None:
         """获取系统配置值（带进程内缓存）"""
         # 1. 检查进程内缓存
         hit, cached_value = _get_cached_config(key)
@@ -225,7 +227,7 @@ class SystemConfigService:
         return result
 
     @staticmethod
-    def set_config(db: Session, key: str, value: Any, description: str = None) -> SystemConfig:
+    def set_config(db: Session, key: str, value: Any, description: str | None = None) -> SystemConfig:
         """设置系统配置值"""
         config = db.query(SystemConfig).filter(SystemConfig.key == key).first()
 
@@ -309,7 +311,7 @@ class SystemConfigService:
         return False
 
     @classmethod
-    def init_default_configs(cls, db: Session):
+    def init_default_configs(cls, db: Session) -> None:
         """初始化默认配置"""
         for key, default_config in cls.DEFAULT_CONFIGS.items():
             if not db.query(SystemConfig).filter(SystemConfig.key == key).first():

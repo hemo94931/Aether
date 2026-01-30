@@ -20,6 +20,9 @@
 """
 
 
+from __future__ import annotations
+
+from typing import Any
 from sqlalchemy.orm import Session
 
 from src.config.constants import CacheTTL
@@ -102,7 +105,7 @@ class UserCacheService:
         return user
 
     @staticmethod
-    async def invalidate_user_cache(user_id: str, email: str | None = None):
+    async def invalidate_user_cache(user_id: str, email: str | None = None) -> Any:
         """
         清除用户缓存
 

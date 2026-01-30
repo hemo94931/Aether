@@ -4,6 +4,8 @@ Provider 操作服务
 提供操作执行、凭据管理、缓存等业务逻辑。
 """
 
+from __future__ import annotations
+
 import asyncio
 import os
 from dataclasses import asdict

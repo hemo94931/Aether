@@ -1,5 +1,8 @@
 """管理员使用情况统计路由。"""
 
+from __future__ import annotations
+
+from typing import Any
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -21,6 +24,7 @@ from src.models.database import (
     User,
 )
 from src.services.usage.service import UsageService
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(prefix="/api/admin/usage", tags=["Admin - Usage"])
 pipeline = ApiRequestPipeline()
@@ -37,7 +41,7 @@ async def get_usage_aggregation(
     end_date: datetime | None = None,
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取使用情况聚合统计
 
@@ -77,7 +81,7 @@ async def get_usage_stats(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取使用情况总体统计
 
@@ -105,7 +109,7 @@ async def get_usage_stats(
 async def get_activity_heatmap(
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取活动热力图数据
 
@@ -132,7 +136,7 @@ async def get_usage_records(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取使用记录列表
 
@@ -180,7 +184,7 @@ async def get_active_requests(
     request: Request,
     ids: str | None = Query(None, description="逗号分隔的请求 ID 列表，用于查询特定请求的状态"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取活跃请求的状态
 
@@ -207,7 +211,7 @@ async def get_usage_detail(
     usage_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取使用记录详情
 
@@ -262,7 +266,7 @@ class AdminUsageStatsAdapter(AdminApiAdapter):
         self.start_date = start_date
         self.end_date = end_date
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         query = db.query(Usage)
         if self.start_date:
@@ -327,7 +331,7 @@ class AdminUsageStatsAdapter(AdminApiAdapter):
 class AdminActivityHeatmapAdapter(AdminApiAdapter):
     """Activity heatmap adapter with Redis caching."""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         result = await UsageService.get_cached_heatmap(
             db=context.db,
             user_id=None,
@@ -343,7 +347,7 @@ class AdminUsageByModelAdapter(AdminApiAdapter):
         self.end_date = end_date
         self.limit = limit
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         query = db.query(
             Usage.model,
@@ -390,7 +394,7 @@ class AdminUsageByUserAdapter(AdminApiAdapter):
         self.end_date = end_date
         self.limit = limit
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         query = (
             db.query(
@@ -440,7 +444,7 @@ class AdminUsageByProviderAdapter(AdminApiAdapter):
         self.end_date = end_date
         self.limit = limit
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         # 从 request_candidates 表统计每个 Provider 的尝试次数和成功率
@@ -554,7 +558,7 @@ class AdminUsageByApiFormatAdapter(AdminApiAdapter):
         self.end_date = end_date
         self.limit = limit
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         query = db.query(
             Usage.api_format,
@@ -629,7 +633,7 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
         self.limit = limit
         self.offset = offset
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from sqlalchemy import or_
 
         from src.utils.database_helpers import escape_like_pattern, safe_truncate_escaped
@@ -879,7 +883,7 @@ class AdminActiveRequestsAdapter(AdminApiAdapter):
     def __init__(self, ids: str | None):
         self.ids = ids
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from src.services.usage import UsageService
 
         db = context.db
@@ -901,7 +905,7 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
 
     usage_id: str
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         usage_record = db.query(Usage).filter(Usage.id == self.usage_id).first()
         if not usage_record:
@@ -972,7 +976,7 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
             "tiered_pricing": tiered_pricing_info,
         }
 
-    async def _get_tiered_pricing_info(self, db, usage_record) -> dict | None:
+    async def _get_tiered_pricing_info(self, db: Session, usage_record: Any) -> dict | None:
         """获取阶梯计费信息"""
         from src.services.model.cost import ModelCostService
 
@@ -1036,7 +1040,7 @@ async def analyze_cache_affinity_ttl(
     api_key_id: str | None = Query(None, description="指定 API Key ID"),
     hours: int = Query(168, ge=1, le=720, description="分析最近多少小时的数据"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     分析用户请求间隔分布，推荐合适的缓存亲和性 TTL。
 
@@ -1060,7 +1064,7 @@ async def analyze_cache_hit(
     api_key_id: str | None = Query(None, description="指定 API Key ID"),
     hours: int = Query(168, ge=1, le=720, description="分析最近多少小时的数据"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     分析缓存命中情况。
 
@@ -1087,7 +1091,7 @@ class CacheAffinityTTLAnalysisAdapter(AdminApiAdapter):
         self.api_key_id = api_key_id
         self.hours = hours
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         result = UsageService.analyze_cache_affinity_ttl(
@@ -1121,7 +1125,7 @@ class CacheHitAnalysisAdapter(AdminApiAdapter):
         self.api_key_id = api_key_id
         self.hours = hours
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         result = UsageService.get_cache_hit_analysis(
@@ -1149,7 +1153,7 @@ async def get_interval_timeline(
     user_id: str | None = Query(None, description="指定用户 ID"),
     include_user_info: bool = Query(False, description="是否包含用户信息（用于管理员多用户视图）"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取请求间隔时间线数据，用于散点图展示。
 
@@ -1184,7 +1188,7 @@ class IntervalTimelineAdapter(AdminApiAdapter):
         self.user_id = user_id
         self.include_user_info = include_user_info
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         result = UsageService.get_interval_timeline(

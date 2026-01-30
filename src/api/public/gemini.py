@@ -10,6 +10,7 @@ Gemini API 专属端点
 - /v1beta/models (列表) 和 /v1beta/models/{model} (详情) 由 models.py 统一处理
 """
 
+from typing import Any
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
@@ -53,7 +54,7 @@ async def generate_content(
     model: str,
     http_request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     Gemini generateContent API
 
@@ -95,7 +96,7 @@ async def stream_generate_content(
     model: str,
     http_request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     Gemini streamGenerateContent API
 
@@ -133,7 +134,7 @@ async def generate_content_v1(
     model: str,
     http_request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     Gemini generateContent API (v1 兼容)
 
@@ -147,7 +148,7 @@ async def stream_generate_content_v1(
     model: str,
     http_request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     Gemini streamGenerateContent API (v1 兼容)
 

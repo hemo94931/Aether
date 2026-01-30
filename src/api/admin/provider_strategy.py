@@ -2,6 +2,9 @@
 提供商策略管理 API 端点
 """
 
+from __future__ import annotations
+
+from typing import Any
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -16,6 +19,7 @@ from src.core.exceptions import InvalidRequestException, translate_pydantic_erro
 from src.core.logger import logger
 from src.database import get_db
 from src.models.database import Provider
+from src.api.base.context import ApiRequestContext
 from src.models.database_extensions import ProviderUsageTracking
 
 router = APIRouter(prefix="/api/admin/provider-strategy", tags=["Provider Strategy"])
@@ -37,7 +41,7 @@ async def update_provider_billing(
     provider_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     更新提供商计费配置
 
@@ -73,7 +77,7 @@ async def get_provider_stats(
     request: Request,
     hours: int = 24,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取提供商统计数据
 
@@ -112,14 +116,14 @@ async def reset_provider_quota(
     provider_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """Reset provider quota usage to zero"""
     adapter = AdminProviderResetQuotaAdapter(provider_id=provider_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/strategies")
-async def list_available_strategies(request: Request, db: Session = Depends(get_db)):
+async def list_available_strategies(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取可用负载均衡策略列表
 
@@ -142,7 +146,7 @@ class AdminProviderBillingAdapter(AdminApiAdapter):
     def __init__(self, provider_id: str):
         self.provider_id = provider_id
 
-    async def handle(self, context):
+    async def handle(self, context: ApiRequestContext) -> Any:
         db = context.db
         payload = context.ensure_json_body()
         try:
@@ -215,7 +219,7 @@ class AdminProviderStatsAdapter(AdminApiAdapter):
         self.provider_id = provider_id
         self.hours = hours
 
-    async def handle(self, context):
+    async def handle(self, context: ApiRequestContext) -> Any:
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:
@@ -271,7 +275,7 @@ class AdminProviderResetQuotaAdapter(AdminApiAdapter):
     def __init__(self, provider_id: str):
         self.provider_id = provider_id
 
-    async def handle(self, context):
+    async def handle(self, context: ApiRequestContext) -> Any:
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:
@@ -297,7 +301,7 @@ class AdminProviderResetQuotaAdapter(AdminApiAdapter):
 
 
 class AdminListStrategiesAdapter(AdminApiAdapter):
-    async def handle(self, context):
+    async def handle(self, context: ApiRequestContext) -> Any:
         from src.plugins.manager import get_plugin_manager
 
         plugin_manager = get_plugin_manager()

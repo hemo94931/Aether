@@ -3,6 +3,9 @@
 独立余额Key：不关联用户配额，有独立余额限制，用于给非注册用户使用。
 """
 
+from __future__ import annotations
+
+from typing import Any
 import os
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -18,6 +21,7 @@ from src.database import get_db
 from src.models.api import CreateApiKeyRequest
 from src.models.database import ApiKey
 from src.services.user.apikey import ApiKeyService
+from src.api.base.context import ApiRequestContext
 
 
 # 应用时区配置，默认为 Asia/Shanghai
@@ -71,7 +75,7 @@ async def list_standalone_api_keys(
     limit: int = Query(100, ge=1, le=500),
     is_active: bool | None = None,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     列出所有独立余额 API Keys
 
@@ -101,7 +105,7 @@ async def create_standalone_api_key(
     request: Request,
     key_data: CreateApiKeyRequest,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     创建独立余额 API Key
 
@@ -138,7 +142,7 @@ async def create_standalone_api_key(
 @router.put("/{key_id}")
 async def update_api_key(
     key_id: str, request: Request, key_data: CreateApiKeyRequest, db: Session = Depends(get_db)
-):
+) -> Any:
     """
     更新独立余额 API Key
 
@@ -174,7 +178,7 @@ async def update_api_key(
 
 
 @router.patch("/{key_id}")
-async def toggle_api_key(key_id: str, request: Request, db: Session = Depends(get_db)):
+async def toggle_api_key(key_id: str, request: Request, db: Session = Depends(get_db)) -> Any:
     """
     切换 API Key 启用状态
 
@@ -193,7 +197,7 @@ async def toggle_api_key(key_id: str, request: Request, db: Session = Depends(ge
 
 
 @router.delete("/{key_id}")
-async def delete_api_key(key_id: str, request: Request, db: Session = Depends(get_db)):
+async def delete_api_key(key_id: str, request: Request, db: Session = Depends(get_db)) -> None:
     """
     删除 API Key
 
@@ -210,7 +214,7 @@ async def delete_api_key(key_id: str, request: Request, db: Session = Depends(ge
 
 
 @router.patch("/{key_id}/lock")
-async def toggle_lock_api_key(key_id: str, request: Request, db: Session = Depends(get_db)):
+async def toggle_lock_api_key(key_id: str, request: Request, db: Session = Depends(get_db)) -> Any:
     """
     切换 API Key 锁定状态
 
@@ -233,7 +237,7 @@ async def add_balance_to_key(
     key_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     调整独立余额 API Key 的余额
 
@@ -295,7 +299,7 @@ async def get_api_key_detail(
     request: Request,
     include_key: bool = Query(False, description="Include full decrypted key in response"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取 API Key 详情
 
@@ -335,7 +339,7 @@ class AdminListStandaloneKeysAdapter(AdminApiAdapter):
         self.limit = limit
         self.is_active = is_active
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         # 只查询独立余额Keys
         query = db.query(ApiKey).filter(ApiKey.is_standalone == True)
@@ -396,7 +400,7 @@ class AdminCreateStandaloneKeyAdapter(AdminApiAdapter):
     def __init__(self, key_data: CreateApiKeyRequest):
         self.key_data = key_data
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         # 独立Key必须设置初始余额
@@ -458,7 +462,7 @@ class AdminUpdateApiKeyAdapter(AdminApiAdapter):
         self.key_id = key_id
         self.key_data = key_data
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         api_key = db.query(ApiKey).filter(ApiKey.id == self.key_id).first()
         if not api_key:
@@ -533,7 +537,7 @@ class AdminToggleApiKeyAdapter(AdminApiAdapter):
     def __init__(self, key_id: str):
         self.key_id = key_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         api_key = db.query(ApiKey).filter(ApiKey.id == self.key_id).first()
         if not api_key:
@@ -566,7 +570,7 @@ class AdminToggleLockApiKeyAdapter(AdminApiAdapter):
     def __init__(self, key_id: str):
         self.key_id = key_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         api_key = db.query(ApiKey).filter(ApiKey.id == self.key_id).first()
         if not api_key:
@@ -597,7 +601,7 @@ class AdminDeleteApiKeyAdapter(AdminApiAdapter):
     def __init__(self, key_id: str):
         self.key_id = key_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         api_key = db.query(ApiKey).filter(ApiKey.id == self.key_id).first()
         if not api_key:
@@ -625,7 +629,7 @@ class AdminAddBalanceAdapter(AdminApiAdapter):
         self.key_id = key_id
         self.amount_usd = amount_usd
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         # 使用 ApiKeyService 增加余额
@@ -658,7 +662,7 @@ class AdminGetFullKeyAdapter(AdminApiAdapter):
     def __init__(self, key_id: str):
         self.key_id = key_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from src.core.crypto import crypto_service
 
         db = context.db
@@ -697,7 +701,7 @@ class AdminGetKeyDetailAdapter(AdminApiAdapter):
     def __init__(self, key_id: str):
         self.key_id = key_id
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         api_key = db.query(ApiKey).filter(ApiKey.id == self.key_id).first()

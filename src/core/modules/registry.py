@@ -35,7 +35,7 @@ class ModuleRegistry:
 
     _instance: ModuleRegistry | None = None
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._modules: dict[str, ModuleDefinition] = {}
         self._initialized: set[str] = set()
 

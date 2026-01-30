@@ -5,6 +5,8 @@ Usage Redis Streams consumer.
 """
 
 
+from __future__ import annotations
+
 import asyncio
 import json
 import os
@@ -178,7 +180,7 @@ class UsageQueueConsumer:
                 logger.exception(f"[usage-queue] Consumer loop error: {exc}")
                 await asyncio.sleep(1)
 
-    async def _maybe_claim_pending(self, redis_client) -> None:
+    async def _maybe_claim_pending(self, redis_client: Any) -> None:
         now = time.time()
         if now - self._last_claim < self._claim_interval:
             return
@@ -200,7 +202,7 @@ class UsageQueueConsumer:
         _, messages = result[:2]
         await self._process_messages(redis_client, messages)
 
-    async def _read_new(self, redis_client) -> None:
+    async def _read_new(self, redis_client: Any) -> None:
         result = await redis_client.xreadgroup(
             groupname=self._stream_group,
             consumername=self._consumer,
@@ -213,7 +215,7 @@ class UsageQueueConsumer:
         for _stream, messages in result:
             await self._process_messages(redis_client, messages)
 
-    async def _process_messages(self, redis_client, messages: list) -> None:
+    async def _process_messages(self, redis_client: Any, messages: list) -> None:
         """批量处理消息，区分 STREAMING（状态更新）和其他事件（记录写入）"""
         if not messages:
             return
@@ -247,7 +249,7 @@ class UsageQueueConsumer:
 
     async def _process_streaming_batch(
         self,
-        redis_client,
+        redis_client: Any,
         messages: list[tuple[str, UsageEvent]],
     ) -> None:
         """批量处理 STREAMING 事件（状态更新）"""
@@ -269,8 +271,8 @@ class UsageQueueConsumer:
 
     async def _process_record_batch(
         self,
-        redis_client,
-        messages: list[tuple[str, dict[str, Any], UsageEvent]],
+                redis_client: Any,
+                messages: list[tuple[str, dict[str, Any], UsageEvent]],
     ) -> None:
         """批量处理记录类型的事件"""
         db = create_session()
@@ -335,10 +337,10 @@ class UsageQueueConsumer:
 
     async def _handle_processing_error(
         self,
-        redis_client,
-        message_id: str,
-        fields: dict[str, Any],
-        error: Exception,
+                redis_client: Any,
+                message_id: str,
+                fields: dict[str, Any],
+                error: Exception,
     ) -> None:
         retries = await self._get_delivery_count(redis_client, message_id)
         if retries >= self._max_retries:
@@ -366,7 +368,7 @@ class UsageQueueConsumer:
                 f"[usage-queue] Processing failed (attempt {retries}): {message_id} error={error}"
             )
 
-    async def _get_delivery_count(self, redis_client, message_id: str) -> int:
+    async def _get_delivery_count(self, redis_client: Any, message_id: str) -> int:
         try:
             pending = await redis_client.xpending_range(
                 self._stream_key,
@@ -481,7 +483,7 @@ class UsageQueueConsumer:
         else:
             await self._apply_record_event(event)
 
-    async def _log_metrics(self, redis_client) -> None:
+    async def _log_metrics(self, redis_client: Any) -> None:
         now = time.time()
         if now - self._last_metrics_log < self._metrics_interval:
             return

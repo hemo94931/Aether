@@ -8,6 +8,9 @@
 使用统一的 TaskScheduler 进行调度。
 """
 
+from __future__ import annotations
+
+from typing import Any
 from datetime import datetime, timezone
 
 from src.core.enums import ProviderBillingType
@@ -20,10 +23,10 @@ from src.services.system.scheduler import get_scheduler
 class QuotaScheduler:
     """额度周期重置调度器"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.running = False
 
-    async def start(self):
+    async def start(self) -> Any:
         """启动调度器"""
         if self.running:
             logger.warning("Quota scheduler already running")
@@ -45,7 +48,7 @@ class QuotaScheduler:
         # 启动时立即执行一次检查
         await self._check_and_reset_quotas()
 
-    async def stop(self):
+    async def stop(self) -> Any:
         """停止调度器"""
         if not self.running:
             return
@@ -53,11 +56,11 @@ class QuotaScheduler:
         self.running = False
         logger.info("Quota scheduler stopped")
 
-    async def _scheduled_quota_check(self):
+    async def _scheduled_quota_check(self) -> None:
         """额度检查任务（定时调用）"""
         await self._check_and_reset_quotas()
 
-    async def _check_and_reset_quotas(self):
+    async def _check_and_reset_quotas(self) -> None:
         """检查并重置周期额度"""
 
         db = create_session()
@@ -114,7 +117,7 @@ class QuotaScheduler:
         finally:
             db.close()
 
-    async def force_reset(self, provider_id: str = None):
+    async def force_reset(self, provider_id: str | None = None) -> Any:
         """手动强制重置额度"""
         db = create_session()
         try:

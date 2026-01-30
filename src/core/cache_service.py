@@ -2,6 +2,8 @@
 缓存服务 - 统一的缓存抽象层
 """
 
+from __future__ import annotations
+
 import json
 from typing import Any
 

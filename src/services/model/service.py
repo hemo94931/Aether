@@ -2,6 +2,8 @@
 模型管理服务
 """
 
+from __future__ import annotations
+
 import asyncio
 
 from sqlalchemy import and_
@@ -234,7 +236,7 @@ class ModelService:
             raise InvalidRequestException("更新模型失败，请检查输入数据")
 
     @staticmethod
-    def delete_model(db: Session, model_id: str):  # UUID
+    def delete_model(db: Session, model_id: str) -> None:  # UUID
         """删除模型
 
         删除逻辑：

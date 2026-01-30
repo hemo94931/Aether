@@ -4,6 +4,8 @@ GlobalModel 服务层
 提供 GlobalModel 的 CRUD 操作、查询和统计功能
 """
 
+from __future__ import annotations
+
 from typing import cast
 
 from sqlalchemy.orm import Session, joinedload
@@ -122,7 +124,7 @@ class GlobalModelService:
         # 按次计费配置
         default_price_per_request: float | None = None,
         # 阶梯计费配置（必填）
-        default_tiered_pricing: dict = None,
+        default_tiered_pricing: dict | None = None,
         # Key 能力配置
         supported_capabilities: list[str] | None = None,
         # 模型配置（JSON）

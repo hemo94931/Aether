@@ -15,12 +15,15 @@ CLI Adapter 通用基类
 - 可选覆盖 compute_total_input_context() 自定义总输入上下文计算
 """
 
+from __future__ import annotations
+
 import time
 import traceback
 from typing import Any
 
 import httpx
 from fastapi import HTTPException, Request
+from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse
 
 from src.api.base.adapter import ApiAdapter, ApiMode
@@ -124,7 +127,7 @@ class CliAdapterBase(ApiAdapter):
         """
         return get_adapter_protected_keys(cls._get_api_format())
 
-    async def handle(self, context: ApiRequestContext):
+    async def handle(self, context: ApiRequestContext) -> Any:
         """处理 CLI API 请求"""
         http_request = context.request
         user = context.user
@@ -332,9 +335,9 @@ class CliAdapterBase(ApiAdapter):
         self,
         e: Exception,
         *,
-        db,
-        user,
-        api_key,
+        db: Session,
+        user: Any,
+        api_key: Any,
         model: str,
         stream: bool,
         start_time: float,
@@ -403,9 +406,9 @@ class CliAdapterBase(ApiAdapter):
         self,
         e: Exception,
         *,
-        db,
-        user,
-        api_key,
+        db: Session,
+        user: Any,
+        api_key: Any,
         model: str,
         stream: bool,
         start_time: float,
@@ -748,7 +751,7 @@ def register_cli_adapter(adapter_class: type[CliAdapterBase]) -> type[CliAdapter
     return adapter_class
 
 
-def _ensure_cli_adapters_loaded():
+def _ensure_cli_adapters_loaded() -> None:
     """确保所有 CLI Adapter 已被加载（触发注册）"""
     global _CLI_ADAPTERS_LOADED
     if _CLI_ADAPTERS_LOADED:

@@ -259,7 +259,7 @@ class RequestResult:
         # 尝试从异常中提取 metadata
         existing_metadata = getattr(exception, "request_metadata", None)
 
-        def get_meta_value(meta, key, default=None):
+        def get_meta_value(meta: Any, key: str, default: Any | None = None) -> Any:
             """从 metadata 中提取值，支持字典和对象两种形式"""
             if meta is None:
                 return default
@@ -347,7 +347,7 @@ class StreamWithMetadata:
         self.response_headers_container = response_headers_container
         self._metadata_updated = False
 
-    def update_metadata_with_response_headers(self):
+    def update_metadata_with_response_headers(self) -> None:
         """使用实际的响应头更新元数据"""
         if self.response_headers_container and "headers" in self.response_headers_container:
             if not self._metadata_updated:
@@ -356,8 +356,8 @@ class StreamWithMetadata:
                 )
                 self._metadata_updated = True
 
-    def __aiter__(self):
+    def __aiter__(self) -> None:
         return self.stream
 
-    async def __anext__(self):
+    async def __anext__(self) -> None:
         return await self.stream.__anext__()

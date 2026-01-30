@@ -2,6 +2,8 @@
 封装请求执行逻辑，包含并发控制与链路追踪。
 """
 
+from __future__ import annotations
+
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -48,7 +50,7 @@ class ExecutionError(Exception):
 
 
 class RequestExecutor:
-    def __init__(self, db: Session, concurrency_manager, adaptive_manager):
+    def __init__(self, db: Session, concurrency_manager: Any, adaptive_manager: Any) -> None:
         self.db = db
         self.concurrency_manager = concurrency_manager
         self.adaptive_manager = adaptive_manager
@@ -56,11 +58,11 @@ class RequestExecutor:
     async def execute(
         self,
         *,
-        candidate,
+        candidate: Any,
         candidate_id: str,
         candidate_index: int,
-        user_api_key,
-        request_func: Callable,
+        user_api_key: Any,
+        request_func: Callable[..., Any],
         request_id: str | None,
         api_format: str | APIFormat,
         model_name: str,

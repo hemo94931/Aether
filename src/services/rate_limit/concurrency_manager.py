@@ -10,6 +10,7 @@ RPM 限制管理器 - 支持 Redis 或内存的 Key 级别 RPM 限制
 
 from __future__ import annotations
 
+from typing import Any
 import asyncio
 import math
 import os
@@ -30,13 +31,13 @@ class ConcurrencyManager:
     _key_rpm_bucket_seconds: int = 60
     _key_rpm_key_ttl_seconds: int = 120  # 2 分钟，足够覆盖当前分钟与边界
 
-    def __new__(cls):
+    def __new__(cls) -> "ConcurrencyManager":
         """单例模式"""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         """初始化内存后端结构（只执行一次）"""
         if hasattr(self, "_memory_initialized"):
             return
@@ -90,7 +91,7 @@ class ConcurrencyManager:
         if self._cleanup_task is not None:
             return  # 已经启动
 
-        async def cleanup_loop():
+        async def cleanup_loop() -> None:
             """后台清理循环"""
             while True:
                 try:
@@ -452,7 +453,7 @@ class ConcurrencyManager:
         key_rpm_limit: int | None,
         is_cached_user: bool = False,
         cache_reservation_ratio: float | None = None,
-    ):
+    ) -> Any:
         """
         RPM 限制上下文管理器（支持缓存用户优先级）
 

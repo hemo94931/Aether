@@ -7,6 +7,7 @@ OpenAI API 端点
 注意: /v1/models 端点由 models.py 统一处理，根据请求头返回对应格式
 """
 
+from typing import Any
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
@@ -25,7 +26,7 @@ pipeline = ApiRequestPipeline()
 async def create_chat_completion(
     http_request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     OpenAI Chat Completions API
 
@@ -58,7 +59,7 @@ async def create_chat_completion(
 async def create_responses(
     http_request: Request,
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     OpenAI Responses API (CLI)
 

@@ -3,6 +3,10 @@
 采用模块化架构设计
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -32,7 +36,7 @@ from src.plugins.manager import get_plugin_manager
 
 
 
-async def initialize_providers():
+async def initialize_providers() -> None:
     """从数据库初始化提供商（仅用于日志记录）"""
     from sqlalchemy.orm import Session, selectinload
 
@@ -61,9 +65,9 @@ async def initialize_providers():
             logger.info(f"从数据库加载了 {len(providers)} 个活跃提供商")
             for provider in providers:
                 # 统计端点信息
-                endpoint_count = len(provider.endpoints) if provider.endpoints else 0
+                endpoint_count = len(provider.endpoints) if provider.endpoints else 0  # type: ignore[arg-type]
                 active_endpoints = (
-                    sum(1 for ep in provider.endpoints if ep.is_active) if provider.endpoints else 0
+                    sum(1 for ep in provider.endpoints if ep.is_active) if provider.endpoints else 0  # type: ignore[misc,attr-defined]
                 )
 
                 logger.info(f"提供商: {provider.name} (端点: {active_endpoints}/{endpoint_count})")
@@ -76,7 +80,7 @@ async def initialize_providers():
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> Any:
     """应用生命周期管理"""
     # 禁用uvicorn的access日志(在子进程中执行)
     import logging
@@ -213,7 +217,7 @@ async def lifespan(app: FastAPI):
         await quota_scheduler.start()
     else:
         logger.info("检测到其他 worker 已运行额度调度器，本实例跳过")
-        quota_scheduler = None
+        quota_scheduler = None  # type: ignore[assignment]
 
     # 启动维护调度器
     maintenance_scheduler_active = await task_coordinator.acquire("maintenance_scheduler")
@@ -222,7 +226,7 @@ async def lifespan(app: FastAPI):
         await maintenance_scheduler.start()
     else:
         logger.info("检测到其他 worker 已运行维护调度器，本实例跳过")
-        maintenance_scheduler = None
+        maintenance_scheduler = None  # type: ignore[assignment]
 
     # 启动模型自动获取调度器
     model_fetch_scheduler_active = await task_coordinator.acquire("model_fetch_scheduler")
@@ -231,7 +235,7 @@ async def lifespan(app: FastAPI):
         await model_fetch_scheduler.start()
     else:
         logger.info("检测到其他 worker 已运行模型获取调度器，本实例跳过")
-        model_fetch_scheduler = None
+        model_fetch_scheduler = None  # type: ignore[assignment]
 
     # 启动统一的定时任务调度器
     from src.services.system.scheduler import get_scheduler
@@ -416,9 +420,9 @@ app = FastAPI(
 # - propagate_provider_exceptions=True (默认): 不注册，让异常传播到路由层以记录 provider_request_headers
 # - propagate_provider_exceptions=False: 注册全局处理器统一处理
 if not config.propagate_provider_exceptions:
-    app.add_exception_handler(ProxyException, ExceptionHandlers.handle_proxy_exception)
-app.add_exception_handler(Exception, ExceptionHandlers.handle_generic_exception)
-app.add_exception_handler(HTTPException, ExceptionHandlers.handle_http_exception)
+    app.add_exception_handler(ProxyException, ExceptionHandlers.handle_proxy_exception)  # type: ignore[arg-type]
+app.add_exception_handler(Exception, ExceptionHandlers.handle_generic_exception)  # type: ignore[arg-type]
+app.add_exception_handler(HTTPException, ExceptionHandlers.handle_http_exception)  # type: ignore[arg-type]
 
 # 添加插件中间件（包含认证、审计、速率限制等功能）
 app.add_middleware(PluginMiddleware)
@@ -455,7 +459,7 @@ app.include_router(monitoring_router)  # 监控端点
 
 
 
-def main():
+def main() -> Any:
     # 初始化新日志系统
     debug_mode = config.environment == "development"
     # 日志系统已在导入时自动初始化

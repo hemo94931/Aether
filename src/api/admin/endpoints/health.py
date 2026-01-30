@@ -2,6 +2,9 @@
 Endpoint 健康监控 API
 """
 
+from __future__ import annotations
+
+from typing import Any
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -25,6 +28,7 @@ from src.models.endpoint_models import (
 )
 from src.services.health.endpoint import EndpointHealthService
 from src.services.health.monitor import health_monitor
+from src.api.base.context import ApiRequestContext
 
 router = APIRouter(tags=["Endpoint Health"])
 pipeline = ApiRequestPipeline()
@@ -58,7 +62,7 @@ async def get_endpoint_health_status(
     request: Request,
     lookback_hours: int = Query(6, ge=1, le=72, description="回溯的小时数"),
     db: Session = Depends(get_db),
-):
+) -> Any:
     """
     获取端点健康状态（简化视图，与用户端点统一）
 
@@ -218,7 +222,7 @@ async def recover_all_keys_health(
 
 
 class AdminHealthSummaryAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         summary = health_monitor.get_all_health_status(context.db)
         return HealthSummaryResponse(**summary)
 
@@ -229,7 +233,7 @@ class AdminEndpointHealthStatusAdapter(AdminApiAdapter):
 
     lookback_hours: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         from src.services.health.endpoint import EndpointHealthService
 
         db = context.db
@@ -256,7 +260,7 @@ class AdminApiFormatHealthMonitorAdapter(AdminApiAdapter):
     lookback_hours: int
     per_format_limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         now = datetime.now(timezone.utc)
         since = now - timedelta(hours=self.lookback_hours)
@@ -463,7 +467,7 @@ class AdminKeyHealthAdapter(AdminApiAdapter):
     key_id: str
     api_format: str | None = None
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         health_data = health_monitor.get_key_health(context.db, self.key_id, self.api_format)
         if not health_data:
             raise NotFoundException(f"Key {self.key_id} 不存在")
@@ -501,7 +505,7 @@ class AdminRecoverKeyHealthAdapter(AdminApiAdapter):
     key_id: str
     api_format: str | None = None
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == self.key_id).first()
         if not key:
@@ -544,7 +548,7 @@ class AdminRecoverKeyHealthAdapter(AdminApiAdapter):
 class AdminRecoverAllKeysHealthAdapter(AdminApiAdapter):
     """批量恢复所有熔断 Key 的健康状态"""
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
 
         # 查找所有有熔断格式的 Key（检查 circuit_breaker_by_format JSON 字段）

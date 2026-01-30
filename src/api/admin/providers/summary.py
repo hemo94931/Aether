@@ -2,6 +2,7 @@
 Provider 摘要与健康监控 API
 """
 
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -22,6 +23,7 @@ from src.models.database import (
     ProviderEndpoint,
     RequestCandidate,
 )
+from src.api.base.context import ApiRequestContext
 from src.models.endpoint_models import (
     EndpointHealthEvent,
     EndpointHealthMonitor,
@@ -338,7 +340,7 @@ class AdminProviderHealthMonitorAdapter(AdminApiAdapter):
     lookback_hours: int
     per_endpoint_limit: int
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:
@@ -447,7 +449,7 @@ class AdminProviderHealthMonitorAdapter(AdminApiAdapter):
 
 
 class AdminProviderSummaryAdapter(AdminApiAdapter):
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         providers = (
             db.query(Provider)
@@ -462,7 +464,7 @@ class AdminUpdateProviderSettingsAdapter(AdminApiAdapter):
     provider_id: str
     update_data: ProviderUpdateRequest
 
-    async def handle(self, context):  # type: ignore[override]
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         db = context.db
         provider = db.query(Provider).filter(Provider.id == self.provider_id).first()
         if not provider:

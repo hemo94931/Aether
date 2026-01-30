@@ -91,7 +91,7 @@ class GeminiChatAdapter(ChatAdapterBase):
         """
         return original_request_body.copy()
 
-    def _validate_request_body(self, original_request_body: dict, path_params: dict = None):
+    def _validate_request_body(self, original_request_body: dict, path_params: dict | None = None) -> None:
         """验证请求体"""
         path_params = path_params or {}
         is_stream = path_params.get("stream", False)
@@ -124,14 +124,14 @@ class GeminiChatAdapter(ChatAdapterBase):
         request.stream = is_stream
         return request
 
-    def _extract_message_count(self, payload: dict[str, Any], request_obj) -> int:
+    def _extract_message_count(self, payload: dict[str, Any], request_obj: Any) -> int:
         """提取消息数量"""
         contents = payload.get("contents", [])
         if hasattr(request_obj, "contents"):
             contents = request_obj.contents
         return len(contents) if isinstance(contents, list) else 0
 
-    def _build_audit_metadata(self, payload: dict[str, Any], request_obj) -> dict[str, Any]:
+    def _build_audit_metadata(self, payload: dict[str, Any], request_obj: Any) -> dict[str, Any]:
         """构建 Gemini Chat 特定的审计元数据"""
         role_counts: dict[str, int] = {}
 

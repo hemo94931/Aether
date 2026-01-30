@@ -3,6 +3,8 @@
 统一管理和协调所有插件系统
 """
 
+from __future__ import annotations
+
 import asyncio
 import importlib
 import inspect
@@ -82,7 +84,7 @@ class PluginManager:
         # 应用配置
         self._apply_config()
 
-    def _auto_discover_plugins(self):
+    def _auto_discover_plugins(self) -> None:
         """自动发现和加载插件"""
         plugins_dir = Path(__file__).parent
 
@@ -125,7 +127,7 @@ class PluginManager:
             # 解析失败，假设兼容
             return True
 
-    def _load_plugin_from_module(self, module: Any, plugin_type: str):
+    def _load_plugin_from_module(self, module: Any, plugin_type: str) -> None:
         """从模块加载插件类"""
         base_class = self.PLUGIN_TYPES[plugin_type]
 
@@ -149,7 +151,7 @@ class PluginManager:
                 except Exception as e:
                     logger.error(f"Failed to instantiate plugin {name}: {e}")
 
-    def _apply_config(self):
+    def _apply_config(self) -> None:
         """应用配置到插件"""
         for plugin_type, plugins in self.plugins.items():
             type_config = self.config.get(plugin_type, {})
@@ -164,7 +166,7 @@ class PluginManager:
                 if plugin_config:
                     plugin.configure(plugin_config)
 
-    def register_plugin(self, plugin_type: str, plugin: Any, set_as_default: bool = False):
+    def register_plugin(self, plugin_type: str, plugin: Any, set_as_default: bool = False) -> None:
         """
         注册插件
 
@@ -192,7 +194,7 @@ class PluginManager:
 
         logger.debug(f"Registered {plugin_type} plugin: {plugin.name}")
 
-    def unregister_plugin(self, plugin_type: str, plugin_name: str):
+    def unregister_plugin(self, plugin_type: str, plugin_name: str) -> Any:
         """
         注销插件
 
@@ -267,7 +269,7 @@ class PluginManager:
         return [p for p in plugins if getattr(p, "enabled", True)]
 
     async def execute_plugin_chain(
-        self, plugin_type: str, method_name: str, *args, **kwargs
+        self, plugin_type: str, method_name: str, *args: Any, **kwargs: Any
     ) -> Any:
         """
         执行插件链（按优先级）
@@ -385,7 +387,7 @@ class PluginManager:
 
         return results
 
-    async def shutdown_all(self):
+    async def shutdown_all(self) -> None:
         """
         关闭所有插件
         """
@@ -572,7 +574,7 @@ def get_plugin_manager(config: dict[str, Any] | None = None) -> PluginManager:
     return _plugin_manager
 
 
-def reset_plugin_manager():
+def reset_plugin_manager() -> None:
     """重置插件管理器（用于测试）"""
     global _plugin_manager
     with _plugin_manager_lock:

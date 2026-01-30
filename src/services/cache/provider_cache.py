@@ -6,6 +6,8 @@ Provider 缓存服务 - 减少 Provider 和 ProviderAPIKey 查询
 """
 
 
+from __future__ import annotations
+
 from sqlalchemy.orm import Session
 
 from src.config.constants import CacheTTL

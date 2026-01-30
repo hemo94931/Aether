@@ -3,6 +3,8 @@
 定义速率限制策略的接口
 """
 
+from __future__ import annotations
+
 from abc import abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,7 +26,7 @@ class RateLimitResult:
     message: str | None = None
     headers: dict[str, str] | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.headers is None:
             self.headers = {}
             if self.remaining is not None:
@@ -49,9 +51,9 @@ class RateLimitStrategy(BasePlugin):
         author: str = "Unknown",
         description: str = "",
         api_version: str = "1.0",
-        dependencies: list[str] = None,
-        provides: list[str] = None,
-        config: dict[str, Any] = None,
+        dependencies: list[str] | None = None,
+        provides: list[str] | None = None,
+        config: dict[str, Any] | None = None,
     ):
         """
         初始化速率限制策略
@@ -80,7 +82,7 @@ class RateLimitStrategy(BasePlugin):
         )
 
     @abstractmethod
-    async def check_limit(self, key: str, **kwargs) -> RateLimitResult:
+    async def check_limit(self, key: str, **kwargs: Any) -> RateLimitResult:
         """
         检查速率限制
 
@@ -94,7 +96,7 @@ class RateLimitStrategy(BasePlugin):
         pass
 
     @abstractmethod
-    async def consume(self, key: str, amount: int = 1, **kwargs) -> bool:
+    async def consume(self, key: str, amount: int = 1, **kwargs: Any) -> bool:
         """
         消费配额
 
@@ -109,7 +111,7 @@ class RateLimitStrategy(BasePlugin):
         pass
 
     @abstractmethod
-    async def reset(self, key: str):
+    async def reset(self, key: str) -> Any:
         """
         重置限制
 

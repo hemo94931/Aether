@@ -1,5 +1,8 @@
 """Management Token 服务"""
 
+from __future__ import annotations
+
+from typing import Any
 import ipaddress
 from datetime import datetime, timezone
 
@@ -44,7 +47,7 @@ def validate_ip_list(ips: list[str] | None) -> list[str] | None:
     return validated
 
 
-def parse_expires_at(v, allow_past: bool = False) -> datetime | None:
+def parse_expires_at(v: Any, allow_past: bool = False) -> datetime | None:
     """解析过期时间，确保时区安全
 
     前端 datetime-local 输入返回本地时间字符串（无时区信息）。

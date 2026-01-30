@@ -2,6 +2,8 @@
 API端点请求/响应模型定义
 """
 
+from __future__ import annotations
+
 import re
 from datetime import datetime
 from typing import Any, Literal
@@ -21,7 +23,7 @@ class LoginRequest(BaseModel):
 
     @classmethod
     @field_validator("password")
-    def validate_password(cls, v):
+    def validate_password(cls, v: Any) -> Any:
         """验证密码不为空且去除前后空格"""
         v = v.strip()
         if not v:
@@ -29,7 +31,7 @@ class LoginRequest(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_login(self):
+    def validate_login(self) -> Any:
         """根据认证类型校验并规范化登录标识"""
         identifier = self.email.strip()
 
@@ -84,7 +86,7 @@ class RegisterRequest(BaseModel):
 
     @field_validator("email")
     @classmethod
-    def validate_email(cls, v):
+    def validate_email(cls, v: Any) -> Any:
         """验证邮箱格式（如果提供）"""
         if v is None:
             return None
@@ -98,7 +100,7 @@ class RegisterRequest(BaseModel):
 
     @classmethod
     @field_validator("username")
-    def validate_username(cls, v):
+    def validate_username(cls, v: Any) -> Any:
         """验证用户名格式"""
         v = v.strip()
         if not v:
@@ -109,7 +111,7 @@ class RegisterRequest(BaseModel):
 
     @classmethod
     @field_validator("password")
-    def validate_password(cls, v):
+    def validate_password(cls, v: Any) -> Any:
         """验证密码强度"""
         if len(v) < 6:
             raise ValueError("密码至少需要6个字符")
@@ -145,7 +147,7 @@ class SendVerificationCodeRequest(BaseModel):
 
     @field_validator("email")
     @classmethod
-    def validate_email(cls, v):
+    def validate_email(cls, v: Any) -> Any:
         """验证邮箱格式"""
         email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
         if not re.match(email_pattern, v):
@@ -169,7 +171,7 @@ class VerifyEmailRequest(BaseModel):
 
     @field_validator("email")
     @classmethod
-    def validate_email(cls, v):
+    def validate_email(cls, v: Any) -> Any:
         """验证邮箱格式"""
         email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
         if not re.match(email_pattern, v):
@@ -178,7 +180,7 @@ class VerifyEmailRequest(BaseModel):
 
     @field_validator("code")
     @classmethod
-    def validate_code(cls, v):
+    def validate_code(cls, v: Any) -> Any:
         """验证验证码格式"""
         v = v.strip()
         if not v.isdigit():
@@ -202,7 +204,7 @@ class VerificationStatusRequest(BaseModel):
 
     @field_validator("email")
     @classmethod
-    def validate_email(cls, v):
+    def validate_email(cls, v: Any) -> Any:
         """验证邮箱格式"""
         v = v.strip().lower()
         if not v:
@@ -248,7 +250,7 @@ class CreateUserRequest(BaseModel):
 
     @field_validator("quota_usd", mode="before")
     @classmethod
-    def validate_quota_usd(cls, v):
+    def validate_quota_usd(cls, v: Any) -> Any:
         """验证配额值，null表示使用系统默认配额"""
         if v is None:
             return None
@@ -274,7 +276,7 @@ class CreateUserRequest(BaseModel):
 
     @field_validator("username")
     @classmethod
-    def validate_username(cls, v):
+    def validate_username(cls, v: Any) -> Any:
         """验证用户名格式"""
         v = v.strip()
         if not v:
@@ -285,7 +287,7 @@ class CreateUserRequest(BaseModel):
 
     @classmethod
     @field_validator("password")
-    def validate_password(cls, v):
+    def validate_password(cls, v: Any) -> Any:
         """验证密码强度"""
         if len(v) < 6:
             raise ValueError("密码至少需要6个字符")
@@ -313,7 +315,7 @@ class UpdateUserRequest(BaseModel):
 
     @field_validator("quota_usd", mode="before")
     @classmethod
-    def validate_quota_usd(cls, v):
+    def validate_quota_usd(cls, v: Any) -> Any:
         """验证配额值，允许null表示无限制"""
         if v is None:
             return None

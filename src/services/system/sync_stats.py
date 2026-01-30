@@ -4,6 +4,8 @@ API密钥统计同步服务
 """
 
 
+from __future__ import annotations
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 

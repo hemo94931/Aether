@@ -2,6 +2,8 @@
 公告系统服务
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
 
 from sqlalchemy import or_

@@ -19,6 +19,8 @@ WARNING: 多进程环境注意事项
 参考：src/services/health_monitor.py 中的实现
 """
 
+from __future__ import annotations
+
 import time
 from collections import defaultdict
 from typing import Any
@@ -49,7 +51,7 @@ class StickyPriorityStrategy(LoadBalancerStrategy):
         详见模块文档说明。
     """
 
-    def __init__(self, config: dict[str, Any] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         config = config or {}  # 确保 config 不为 None
         super().__init__(
             name="sticky_priority",
@@ -324,7 +326,7 @@ class StickyPriorityStrategy(LoadBalancerStrategy):
         # 选择权重最大的健康提供商
         return max(healthy_candidates, key=lambda c: c.weight)
 
-    def _record_selection(self, provider: Any, is_sticky: bool = True):
+    def _record_selection(self, provider: Any, is_sticky: bool = True) -> None:
         """记录选择统计"""
         self._stats["total_selections"] += 1
         provider_id = str(provider.id)
@@ -342,7 +344,7 @@ class StickyPriorityStrategy(LoadBalancerStrategy):
         success: bool,
         response_time: float | None = None,
         error: Exception | None = None,
-    ):
+    ) -> Any:
         """
         记录请求结果，更新健康状态
 
@@ -422,7 +424,7 @@ class StickyPriorityStrategy(LoadBalancerStrategy):
             },
         }
 
-    async def reset_provider_health(self, provider_id: str):
+    async def reset_provider_health(self, provider_id: str) -> None:
         """重置指定提供商的健康状态"""
         if provider_id in self._provider_health:
             self._provider_health[provider_id] = {
@@ -434,7 +436,7 @@ class StickyPriorityStrategy(LoadBalancerStrategy):
             }
             logger.info(f"Reset health status for provider {provider_id}")
 
-    async def clear_sticky_cache(self, cache_key: str | None = None):
+    async def clear_sticky_cache(self, cache_key: str | None = None) -> None:
         """
         清除粘性提供商缓存
 

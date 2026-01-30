@@ -4,6 +4,8 @@
 提供完整的输入验证和安全过滤
 """
 
+from __future__ import annotations
+
 import re
 from datetime import datetime
 from typing import Any

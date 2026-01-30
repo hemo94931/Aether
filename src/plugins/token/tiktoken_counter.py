@@ -3,6 +3,8 @@ Tiktoken Token计数插件
 支持OpenAI和其他使用tiktoken的模型
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from src.core.logger import logger
@@ -56,7 +58,7 @@ class TiktokenCounterPlugin(TokenCounterPlugin):
         "gpt-4o-mini": 3,
     }
 
-    def __init__(self, name: str = "tiktoken", config: dict[str, Any] = None):
+    def __init__(self, name: str = "tiktoken", config: dict[str, Any] | None = None):
         super().__init__(name, config)
 
         if not TIKTOKEN_AVAILABLE:
