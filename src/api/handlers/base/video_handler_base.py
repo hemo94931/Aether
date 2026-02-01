@@ -8,18 +8,25 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
 
+from src.config.settings import config
 from src.core.api_format.conversion.internal_video import InternalVideoTask, VideoStatus
+from src.core.exceptions import ProviderNotAvailableException
+from src.core.logger import logger
 from src.models.database import ApiKey, ProviderAPIKey, ProviderEndpoint, User, VideoTask
 from src.services.billing.rule_service import BillingRuleLookupResult
+from src.services.cache.aware_scheduler import ProviderCandidate
 
 if TYPE_CHECKING:
     import httpx
+
+    from src.services.task.orchestrator import SubmitOutcome
 
 # 敏感信息匹配正则（预编译提升性能）
 _SENSITIVE_PATTERN = re.compile(
@@ -136,6 +143,19 @@ class VideoHandlerBase(ABC):
     ) -> JSONResponse:
         """取消任务"""
 
+    async def handle_remix_task(
+        self,
+        *,
+        task_id: str,
+        http_request: Request,
+        original_headers: dict[str, str],
+        original_request_body: dict[str, Any],
+        query_params: dict[str, str] | None = None,
+        path_params: dict[str, Any] | None = None,
+    ) -> JSONResponse:
+        """Remix 任务（基于已完成视频创建新视频）- 可选实现"""
+        raise HTTPException(status_code=501, detail="Remix not supported for this provider")
+
     @abstractmethod
     async def handle_download_content(
         self,
@@ -164,7 +184,7 @@ class VideoHandlerBase(ABC):
                         status_code=response.status_code,
                         content={"error": payload},
                     )
-            except ValueError, KeyError, TypeError:
+            except (ValueError, KeyError, TypeError):
                 pass
         message = sanitize_error_message(response.text or "Upstream error")
         fallback_payload = self._format_error_payload({"message": message}, response.status_code)
@@ -245,6 +265,75 @@ class VideoHandlerBase(ABC):
             "variables": rule.variables,
             "dimension_mappings": rule.dimension_mappings,
         }
+
+    async def _submit_with_failover(
+        self,
+        *,
+        api_format: str,
+        model_name: str,
+        task_type: str,
+        submit_func: Callable[[ProviderCandidate], Awaitable["httpx.Response"]],
+        extract_external_task_id: Callable[[dict[str, Any]], str | None],
+        supported_auth_types: set[str] | None,
+        allow_format_conversion: bool = False,
+        capability_requirements: dict[str, bool] | None = None,
+        max_candidates: int = 10,
+    ) -> "SubmitOutcome | JSONResponse":
+        """
+        提交阶段故障转移（只负责拿到 external_task_id）。
+
+        返回：
+        - 成功：SubmitOutcome
+        - 上游客户端错误：直接返回脱敏后的 JSONResponse（保留 API 格式差异）
+
+        失败时：
+        - 无可用候选 / 全部失败：抛 HTTPException(503)
+        """
+        # 延迟导入，避免 handler 基类层引入过多依赖导致循环
+        from src.services.task.orchestrator import (
+            AllCandidatesFailedError,
+            AsyncTaskOrchestrator,
+            SubmitOutcome,
+            UpstreamClientRequestError,
+        )
+
+        orchestrator = AsyncTaskOrchestrator(self.db)
+        try:
+            return await orchestrator.submit_with_failover(
+                api_format=api_format,
+                model_name=model_name,
+                affinity_key=str(self.api_key.id),
+                user_api_key=self.api_key,
+                request_id=self.request_id,
+                task_type=task_type,
+                submit_func=submit_func,
+                extract_external_task_id=extract_external_task_id,
+                supported_auth_types=supported_auth_types,
+                allow_format_conversion=allow_format_conversion,
+                capability_requirements=capability_requirements,
+                max_candidates=max_candidates,
+            )
+        except UpstreamClientRequestError as exc:
+            return self._build_error_response(exc.response)
+        except AllCandidatesFailedError as exc:
+            detail = "No available provider for video generation"
+            if config.billing_require_rule:
+                detail = "No available provider with billing rule for video generation"
+            # 记录候选信息到日志
+            logger.warning(
+                "[VideoHandler] All candidates failed: reason=%s, candidate_keys=%s",
+                exc.reason,
+                exc.candidate_keys,
+            )
+            # 创建带有 candidate_keys 的 HTTPException
+            http_exc = HTTPException(status_code=503, detail=detail)
+            http_exc.candidate_keys = exc.candidate_keys  # type: ignore[attr-defined]
+            raise http_exc
+        except ProviderNotAvailableException:
+            detail = "No available provider for video generation"
+            if config.billing_require_rule:
+                detail = "No available provider with billing rule for video generation"
+            raise HTTPException(status_code=503, detail=detail)
 
 
 __all__ = ["VideoHandlerBase", "normalize_gemini_operation_id", "sanitize_error_message"]

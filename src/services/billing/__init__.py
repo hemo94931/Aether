@@ -11,7 +11,7 @@
     from src.services.billing import BillingCalculator, UsageMapper, StandardizedUsage
 
     # 1. 将原始 usage 映射为标准格式
-    usage = UsageMapper.map(raw_usage, api_format="OPENAI")
+    usage = UsageMapper.map(raw_usage, api_format="openai:chat")
 
     # 2. 使用计费计算器计算费用
     calculator = BillingCalculator(template="openai")

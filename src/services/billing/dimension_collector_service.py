@@ -29,7 +29,11 @@ ValueType = Literal["float", "int", "string"]
 
 
 def _normalize_api_format(api_format: str | None) -> str:
-    return (api_format or "").upper()
+    if not api_format:
+        return ""
+    from src.core.api_format.signature import normalize_signature_key
+
+    return normalize_signature_key(api_format)
 
 
 def _normalize_task_type(task_type: str | None) -> str:
@@ -311,6 +315,45 @@ class DimensionCollectorService:
         api = _normalize_api_format(api_format)
         task = _normalize_task_type(task_type)
         api_variants = list({api, api.lower()})
+
+        if task == "video":
+            # VIDEO → base 回退：优先使用 family:video 专用 collector；
+            # 缺失的维度再回退到 family:chat。
+            from src.core.api_format.signature import parse_signature_key
+
+            base_api = api
+            try:
+                sig = parse_signature_key(api)
+                if sig.endpoint_kind.value == "video":
+                    base_api = f"{sig.api_family.value}:chat"
+            except Exception:
+                base_api = api
+            base_variants = list({base_api, base_api.lower()})
+
+            video_collectors = (
+                self.db.query(DimensionCollector)
+                .filter(
+                    DimensionCollector.api_format.in_(api_variants),
+                    DimensionCollector.task_type == "video",
+                    DimensionCollector.is_enabled == True,  # noqa: E712
+                )
+                .all()
+            )
+            base_collectors = (
+                self.db.query(DimensionCollector)
+                .filter(
+                    DimensionCollector.api_format.in_(base_variants),
+                    DimensionCollector.task_type == "video",
+                    DimensionCollector.is_enabled == True,  # noqa: E712
+                )
+                .all()
+            )
+            video_dims: set[str] = {c.dimension_name for c in video_collectors}
+            result: list[DimensionCollector] = list(video_collectors)
+            for c in base_collectors:
+                if c.dimension_name not in video_dims:
+                    result.append(c)
+            return result
 
         if task == "cli":
             # CLI → chat：按维度回退（维度存在 cli collector 则用 cli，否则用 chat）

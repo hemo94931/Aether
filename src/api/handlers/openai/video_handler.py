@@ -17,7 +17,13 @@ from sqlalchemy.orm import Session
 from src.api.handlers.base.video_handler_base import VideoHandlerBase, sanitize_error_message
 from src.clients.http_client import HTTPClientPool
 from src.config.settings import config
-from src.core.api_format import APIFormat, build_upstream_headers, get_extra_headers_from_endpoint
+from src.core.api_format import (
+    ApiFamily,
+    EndpointKind,
+    build_upstream_headers_for_endpoint,
+    get_extra_headers_from_endpoint,
+    make_signature_key,
+)
 from src.core.api_format.conversion.internal_video import (
     InternalVideoRequest,
     InternalVideoTask,
@@ -29,11 +35,14 @@ from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.models.database import ApiKey, ProviderAPIKey, ProviderEndpoint, User, VideoTask
 from src.services.billing.rule_service import BillingRuleLookupResult, BillingRuleService
-from src.services.cache.aware_scheduler import CacheAwareScheduler, ProviderCandidate
+from src.services.cache.aware_scheduler import ProviderCandidate
+from src.services.usage.service import UsageService
 
 
 class OpenAIVideoHandler(VideoHandlerBase):
-    FORMAT_ID = "OPENAI"
+    FORMAT_ID = "openai:video"
+    API_FAMILY = ApiFamily.OPENAI
+    ENDPOINT_KIND = EndpointKind.VIDEO
 
     DEFAULT_BASE_URL = "https://api.openai.com"
 
@@ -72,47 +81,87 @@ class OpenAIVideoHandler(VideoHandlerBase):
         try:
             internal_request = self._normalizer.video_request_to_internal(original_request_body)
         except ValueError as e:
+            # 请求解析失败，记录失败的使用记录
+            await self._record_failed_usage(
+                model="unknown",
+                error_message=str(e),
+                status_code=400,
+                original_request_body=original_request_body,
+                original_headers=original_headers,
+            )
             raise HTTPException(status_code=400, detail=str(e))
-        candidate, candidate_keys, rule_lookup = await self._select_candidate(
-            internal_request.model
-        )
-        if not candidate:
-            detail = "No available provider for video generation"
-            if config.billing_require_rule:
-                detail = "No available provider with billing rule for video generation"
-            raise HTTPException(status_code=503, detail=detail)
+
+        async def _submit(candidate: ProviderCandidate) -> Any:
+            upstream_key, endpoint, _provider_key = await self._resolve_upstream_key(candidate)
+            upstream_url = self._build_upstream_url(endpoint.base_url)
+            headers = self._build_upstream_headers(original_headers, upstream_key, endpoint)
+            client = await HTTPClientPool.get_default_client_async()
+            return await client.post(upstream_url, headers=headers, json=original_request_body)
+
+        def _extract_task_id(payload: dict[str, Any]) -> str | None:
+            value = payload.get("id")
+            return str(value) if value else None
+
+        # 捕获提交阶段的所有错误，记录失败任务
+        try:
+            outcome_or_response = await self._submit_with_failover(
+                api_format=self.FORMAT_ID,
+                model_name=internal_request.model,
+                task_type="video",
+                submit_func=_submit,
+                extract_external_task_id=_extract_task_id,
+                supported_auth_types={"api_key"},
+                allow_format_conversion=False,
+                max_candidates=10,
+            )
+        except HTTPException as exc:
+            # 提交失败（如无可用 provider），创建失败任务记录
+            # 尝试获取 candidate_keys（如果是 AllCandidatesFailedError 转换来的）
+            candidate_keys = getattr(exc, "candidate_keys", None)
+            await self._create_failed_task_and_usage(
+                internal_request=internal_request,
+                original_request_body=original_request_body,
+                original_headers=original_headers,
+                error_code="provider_unavailable",
+                error_message=exc.detail if isinstance(exc.detail, str) else str(exc.detail),
+                status_code=exc.status_code,
+                candidate_keys=candidate_keys,
+            )
+            raise
+
+        if isinstance(outcome_or_response, JSONResponse):
+            # 上游返回客户端错误，也要记录
+            await self._create_failed_task_and_usage(
+                internal_request=internal_request,
+                original_request_body=original_request_body,
+                original_headers=original_headers,
+                error_code="upstream_client_error",
+                error_message="Upstream rejected the request",
+                status_code=outcome_or_response.status_code,
+            )
+            return outcome_or_response
+        outcome = outcome_or_response
 
         # 冻结 billing_rule 配置（用于异步任务的成本一致性）
         # 复用 _select_candidate 中已查询的结果；billing_require_rule=false 时需补查
+        rule_lookup = outcome.rule_lookup
         if rule_lookup is None:
             rule_lookup = BillingRuleService.find_rule(
                 self.db,
-                provider_id=candidate.provider.id,
+                provider_id=outcome.candidate.provider.id,
                 model_name=internal_request.model,
                 task_type="video",
             )
         billing_rule_snapshot = self._build_billing_rule_snapshot(rule_lookup)
 
-        upstream_key, endpoint, provider_key = await self._resolve_upstream_key(candidate)
-        upstream_url = self._build_upstream_url(endpoint.base_url)
-        headers = self._build_upstream_headers(original_headers, upstream_key, endpoint)
-
-        client = await HTTPClientPool.get_default_client_async()
-        response = await client.post(upstream_url, headers=headers, json=original_request_body)
-        if response.status_code >= 400:
-            return self._build_error_response(response)
-
-        payload = response.json()
-        external_task_id = str(payload.get("id") or "")
-        if not external_task_id:
-            raise HTTPException(status_code=502, detail="Upstream returned empty task id")
+        external_task_id = outcome.external_task_id
 
         task = self._create_task_record(
             external_task_id=external_task_id,
-            candidate=candidate,
+            candidate=outcome.candidate,
             original_request_body=original_request_body,
             internal_request=internal_request,
-            candidate_keys=candidate_keys,
+            candidate_keys=outcome.candidate_keys,
             original_headers=original_headers,
             billing_rule_snapshot=billing_rule_snapshot,
         )
@@ -199,6 +248,117 @@ class OpenAIVideoHandler(VideoHandlerBase):
         self.db.commit()
         return JSONResponse({})
 
+    async def handle_remix_task(
+        self,
+        *,
+        task_id: str,
+        http_request: Request,
+        original_headers: dict[str, str],
+        original_request_body: dict[str, Any],
+        query_params: dict[str, str] | None = None,
+        path_params: dict[str, Any] | None = None,
+    ) -> JSONResponse:
+        # 获取原始任务以验证所有权和状态
+        original_task = self._get_task(task_id)
+        if original_task.status != VideoStatus.COMPLETED.value:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Can only remix completed videos (current status: {original_task.status})",
+            )
+        if not original_task.external_task_id:
+            raise HTTPException(status_code=500, detail="Original task missing external_task_id")
+
+        # 获取原始任务的 endpoint 和 key
+        endpoint, key = self._get_endpoint_and_key(original_task)
+        if not key.api_key:
+            raise HTTPException(status_code=500, detail="Provider key not configured")
+        upstream_key = crypto_service.decrypt(key.api_key)
+
+        # 构建 remix 请求的上游 URL
+        upstream_url = self._build_upstream_url(
+            endpoint.base_url, f"{original_task.external_task_id}/remix"
+        )
+        headers = self._build_upstream_headers(original_headers, upstream_key, endpoint)
+
+        client = await HTTPClientPool.get_default_client_async()
+        response = await client.post(upstream_url, headers=headers, json=original_request_body)
+
+        if response.status_code >= 400:
+            return self._build_error_response(response)
+
+        # 解析上游响应
+        try:
+            response_data = response.json()
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=502, detail="Invalid response from upstream")
+
+        external_task_id = response_data.get("id")
+        if not external_task_id:
+            raise HTTPException(status_code=502, detail="Upstream did not return task ID")
+
+        # 解析 remix 请求
+        try:
+            internal_request = self._normalizer.video_request_to_internal(
+                {
+                    "prompt": original_request_body.get("prompt", ""),
+                    "model": original_task.model,
+                    "size": original_task.size,
+                    "seconds": original_task.duration_seconds,
+                }
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        # 复用原始任务的 billing rule snapshot
+        billing_rule_snapshot = None
+        if original_task.request_metadata:
+            billing_rule_snapshot = original_task.request_metadata.get("billing_rule_snapshot")
+
+        # 构建 ProviderCandidate（复用原始任务的 provider 配置）
+        from src.models.database import Provider
+
+        provider = self.db.query(Provider).filter(Provider.id == original_task.provider_id).first()
+        if not provider:
+            raise HTTPException(status_code=500, detail="Provider not found")
+
+        candidate = ProviderCandidate(
+            provider=provider,
+            endpoint=endpoint,
+            key=key,
+        )
+
+        # 创建新任务记录
+        task = self._create_task_record(
+            external_task_id=external_task_id,
+            candidate=candidate,
+            original_request_body={
+                **original_request_body,
+                "remix_video_id": task_id,
+            },
+            internal_request=internal_request,
+            original_headers=original_headers,
+            billing_rule_snapshot=billing_rule_snapshot,
+        )
+
+        try:
+            self.db.add(task)
+            self.db.flush()
+            self.db.commit()
+            self.db.refresh(task)
+        except IntegrityError:
+            self.db.rollback()
+            raise HTTPException(status_code=409, detail="Task already exists")
+
+        internal_task = InternalVideoTask(
+            id=task.id,
+            external_id=external_task_id,
+            status=VideoStatus.SUBMITTED,
+            created_at=task.created_at,
+            original_request=internal_request,
+        )
+        response_body = self._normalizer.video_task_from_internal(internal_task)
+        return JSONResponse(response_body)
+
     async def handle_download_content(
         self,
         *,
@@ -236,9 +396,19 @@ class OpenAIVideoHandler(VideoHandlerBase):
             raise HTTPException(status_code=500, detail="Provider key not configured")
         upstream_key = crypto_service.decrypt(key.api_key)
 
-        upstream_url = self._build_upstream_url(
-            endpoint.base_url, f"{task.external_task_id}/content"
-        )
+        # 支持 variant 查询参数: video (默认), thumbnail, spritesheet
+        variant = (query_params or {}).get("variant", "video")
+        if variant not in {"video", "thumbnail", "spritesheet"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid variant '{variant}'. Must be one of: video, thumbnail, spritesheet",
+            )
+
+        # 构建上游 URL，透传 variant 参数
+        content_path = f"{task.external_task_id}/content"
+        if variant != "video":
+            content_path = f"{content_path}?variant={variant}"
+        upstream_url = self._build_upstream_url(endpoint.base_url, content_path)
         headers = self._build_upstream_headers(original_headers, upstream_key, endpoint)
 
         client = await HTTPClientPool.get_default_client_async()
@@ -299,57 +469,6 @@ class OpenAIVideoHandler(VideoHandlerBase):
     # Helpers
     # ------------------------------------------------------------------
 
-    async def _select_candidate(
-        self, model_name: str
-    ) -> tuple[ProviderCandidate | None, list[dict[str, Any]], BillingRuleLookupResult | None]:
-        """选择候选 key，返回 (选中的候选, 所有候选列表, 选中候选的 billing rule lookup)"""
-        scheduler = CacheAwareScheduler()
-        candidates, _ = await scheduler.list_all_candidates(
-            db=self.db,
-            api_format=APIFormat.OPENAI,
-            model_name=model_name,
-            affinity_key=str(self.api_key.id),
-            user_api_key=self.api_key,
-            max_candidates=10,
-        )
-        # 记录所有候选 key 信息
-        candidate_keys = []
-        selected_candidate = None
-        selected_index = -1
-        selected_rule_lookup: BillingRuleLookupResult | None = None
-        for idx, candidate in enumerate(candidates):
-            auth_type = getattr(candidate.key, "auth_type", "api_key") or "api_key"
-            has_billing_rule = True
-            rule_lookup: BillingRuleLookupResult | None = None
-            if config.billing_require_rule:
-                rule_lookup = BillingRuleService.find_rule(
-                    self.db,
-                    provider_id=candidate.provider.id,
-                    model_name=model_name,
-                    task_type="video",
-                )
-                has_billing_rule = rule_lookup is not None
-            candidate_info = {
-                "index": idx,
-                "provider_id": candidate.provider.id,
-                "provider_name": candidate.provider.name,
-                "endpoint_id": candidate.endpoint.id,
-                "key_id": candidate.key.id,
-                "key_name": candidate.key.name,
-                "auth_type": auth_type,
-                "has_billing_rule": has_billing_rule,
-                "priority": getattr(candidate.key, "priority", 0) or 0,
-            }
-            candidate_keys.append(candidate_info)
-            if selected_candidate is None and auth_type == "api_key" and has_billing_rule:
-                selected_candidate = candidate
-                selected_index = idx
-                selected_rule_lookup = rule_lookup
-        # 标记选中的候选
-        if selected_index >= 0:
-            candidate_keys[selected_index]["selected"] = True
-        return selected_candidate, candidate_keys, selected_rule_lookup
-
     async def _resolve_upstream_key(
         self, candidate: ProviderCandidate
     ) -> tuple[str, ProviderEndpoint, ProviderAPIKey]:
@@ -378,9 +497,13 @@ class OpenAIVideoHandler(VideoHandlerBase):
         self, original_headers: dict[str, str], upstream_key: str, endpoint: ProviderEndpoint
     ) -> dict[str, str]:
         extra_headers = get_extra_headers_from_endpoint(endpoint)
-        return build_upstream_headers(
+        endpoint_sig = make_signature_key(
+            str(getattr(endpoint, "api_family", "")).strip().lower(),
+            str(getattr(endpoint, "endpoint_kind", "")).strip().lower(),
+        )
+        return build_upstream_headers_for_endpoint(
             original_headers,
-            APIFormat.OPENAI,
+            endpoint_sig,
             upstream_key,
             endpoint_headers=extra_headers,
         )
@@ -428,8 +551,11 @@ class OpenAIVideoHandler(VideoHandlerBase):
             provider_id=candidate.provider.id,
             endpoint_id=candidate.endpoint.id,
             key_id=candidate.key.id,
-            client_api_format="OPENAI",
-            provider_api_format=str(candidate.endpoint.api_format),
+            client_api_format=self.FORMAT_ID,
+            provider_api_format=make_signature_key(
+                str(getattr(candidate.endpoint, "api_family", "")).strip().lower(),
+                str(getattr(candidate.endpoint, "endpoint_kind", "")).strip().lower(),
+            ),
             format_converted=False,
             model=internal_request.model,
             prompt=internal_request.prompt,
@@ -472,6 +598,185 @@ class OpenAIVideoHandler(VideoHandlerBase):
             error_message=task.error_message,
             extra={"model": task.model, "size": task.size, "seconds": task.duration_seconds},
         )
+
+    async def _record_failed_usage(
+        self,
+        *,
+        model: str,
+        error_message: str,
+        status_code: int,
+        original_request_body: dict[str, Any],
+        original_headers: dict[str, str],
+    ) -> None:
+        """记录失败请求的使用记录（无任务记录）"""
+        import time
+
+        response_time_ms = int((time.time() - self.start_time) * 1000)
+        safe_headers = {
+            k: v
+            for k, v in original_headers.items()
+            if k.lower() not in {"authorization", "x-api-key", "cookie"}
+        }
+
+        try:
+            await UsageService.record_usage_with_custom_cost(
+                db=self.db,
+                user=self.user,
+                api_key=self.api_key,
+                provider="unknown",
+                model=model,
+                request_type="video",
+                total_cost_usd=0.0,
+                request_cost_usd=0.0,
+                input_tokens=0,
+                output_tokens=0,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+                api_format=self.FORMAT_ID,
+                endpoint_api_format=None,
+                has_format_conversion=False,
+                is_stream=False,
+                response_time_ms=response_time_ms,
+                first_byte_time_ms=None,
+                status_code=status_code,
+                error_message=error_message,
+                metadata={"failure_stage": "request_parsing"},
+                request_headers=safe_headers,
+                request_body=original_request_body,
+                provider_request_headers=None,
+                response_headers=None,
+                client_response_headers=None,
+                response_body=None,
+                request_id=self.request_id,
+                provider_id=None,
+                provider_endpoint_id=None,
+                provider_api_key_id=None,
+                status="failed",
+                target_model=None,
+            )
+        except Exception as exc:
+            logger.warning("Failed to record failed usage: %s", sanitize_error_message(str(exc)))
+
+    async def _create_failed_task_and_usage(
+        self,
+        *,
+        internal_request: InternalVideoRequest,
+        original_request_body: dict[str, Any],
+        original_headers: dict[str, str],
+        error_code: str,
+        error_message: str,
+        status_code: int,
+        candidate_keys: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """创建失败的任务记录和使用记录"""
+        import time
+
+        now = datetime.now(timezone.utc)
+        response_time_ms = int((time.time() - self.start_time) * 1000)
+
+        # 构建请求元数据
+        safe_headers = {
+            k: v
+            for k, v in original_headers.items()
+            if k.lower() not in {"authorization", "x-api-key", "cookie"}
+        }
+        request_metadata: dict[str, Any] = {
+            "client_ip": self.client_ip,
+            "user_agent": self.user_agent,
+            "request_id": self.request_id,
+            "request_headers": safe_headers,
+            "failure_stage": "submit",
+        }
+        # 添加候选链路追踪信息
+        if candidate_keys:
+            request_metadata["candidate_keys"] = candidate_keys
+
+        size = internal_request.extra.get("original_size")
+
+        # 创建失败的任务记录
+        task = VideoTask(
+            id=str(uuid4()),
+            external_task_id=None,
+            user_id=self.user.id,
+            api_key_id=self.api_key.id,
+            provider_id=None,
+            endpoint_id=None,
+            key_id=None,
+            client_api_format=self.FORMAT_ID,
+            provider_api_format=self.FORMAT_ID,
+            format_converted=False,
+            model=internal_request.model,
+            prompt=internal_request.prompt,
+            original_request_body=original_request_body,
+            converted_request_body=original_request_body,
+            duration_seconds=internal_request.duration_seconds,
+            resolution=internal_request.resolution,
+            aspect_ratio=internal_request.aspect_ratio,
+            size=size,
+            status=VideoStatus.FAILED.value,
+            progress_percent=0,
+            error_code=error_code,
+            error_message=error_message,
+            submitted_at=now,
+            completed_at=now,
+            request_metadata=request_metadata,
+        )
+
+        try:
+            self.db.add(task)
+            self.db.commit()
+            self.db.refresh(task)
+        except Exception as exc:
+            self.db.rollback()
+            logger.warning(
+                "Failed to create failed task record: %s", sanitize_error_message(str(exc))
+            )
+            # 即使任务记录失败，仍然尝试记录使用记录
+            task = None
+
+        # 记录使用记录
+        try:
+            await UsageService.record_usage_with_custom_cost(
+                db=self.db,
+                user=self.user,
+                api_key=self.api_key,
+                provider="unknown",
+                model=internal_request.model,
+                request_type="video",
+                total_cost_usd=0.0,
+                request_cost_usd=0.0,
+                input_tokens=0,
+                output_tokens=0,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+                api_format=self.FORMAT_ID,
+                endpoint_api_format=None,
+                has_format_conversion=False,
+                is_stream=False,
+                response_time_ms=response_time_ms,
+                first_byte_time_ms=None,
+                status_code=status_code,
+                error_message=error_message,
+                metadata={
+                    "failure_stage": "submit",
+                    "error_code": error_code,
+                    "video_task_id": task.id if task else None,
+                },
+                request_headers=safe_headers,
+                request_body=original_request_body,
+                provider_request_headers=None,
+                response_headers=None,
+                client_response_headers=None,
+                response_body=None,
+                request_id=self.request_id,
+                provider_id=None,
+                provider_endpoint_id=None,
+                provider_api_key_id=None,
+                status="failed",
+                target_model=None,
+            )
+        except Exception as exc:
+            logger.warning("Failed to record failed usage: %s", sanitize_error_message(str(exc)))
 
 
 __all__ = ["OpenAIVideoHandler"]

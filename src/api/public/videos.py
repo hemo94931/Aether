@@ -90,6 +90,21 @@ async def download_video_content_sora(
     )
 
 
+@router.post("/v1/videos/{task_id}/remix")
+async def remix_video_sora(
+    task_id: str, http_request: Request, db: Session = Depends(get_db)
+) -> Any:
+    adapter = OpenAIVideoAdapter()
+    return await pipeline.run(
+        adapter=adapter,
+        http_request=http_request,
+        db=db,
+        mode=adapter.mode,
+        api_format_hint=adapter.allowed_api_formats[0],
+        path_params={"task_id": task_id},
+    )
+
+
 # -------------------- Gemini Veo compatible --------------------
 
 

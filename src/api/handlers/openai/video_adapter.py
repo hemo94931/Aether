@@ -6,10 +6,12 @@ from __future__ import annotations
 
 from src.api.handlers.base.video_adapter_base import VideoAdapterBase
 from src.api.handlers.base.video_handler_base import VideoHandlerBase
+from src.core.api_format import ApiFamily
 
 
 class OpenAIVideoAdapter(VideoAdapterBase):
-    FORMAT_ID = "OPENAI"
+    FORMAT_ID = "openai:video"
+    API_FAMILY = ApiFamily.OPENAI
     name = "openai.video"
 
     @property

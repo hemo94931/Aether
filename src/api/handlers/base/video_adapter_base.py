@@ -6,7 +6,7 @@ Video Adapter 通用基类
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
@@ -14,7 +14,12 @@ from fastapi.responses import Response
 from src.api.base.adapter import ApiAdapter, ApiMode
 from src.api.base.context import ApiRequestContext
 from src.api.handlers.base.video_handler_base import VideoHandlerBase
-from src.core.api_format import APIFormat, get_auth_handler, get_default_auth_method
+from src.core.api_format import (
+    ApiFamily,
+    EndpointKind,
+    get_auth_handler,
+    get_default_auth_method_for_endpoint,
+)
 from src.core.logger import logger
 
 
@@ -24,21 +29,18 @@ class VideoAdapterBase(ApiAdapter):
     FORMAT_ID: str = "UNKNOWN"
     HANDLER_CLASS: type[VideoHandlerBase]
 
+    # 新架构：结构化标识（逐步替代直接依赖 FORMAT_ID 的语义）
+    API_FAMILY: ClassVar[ApiFamily | None] = None
+    ENDPOINT_KIND: ClassVar[EndpointKind] = EndpointKind.VIDEO
+
     name: str = "video.base"
     mode = ApiMode.STANDARD
 
     def __init__(self, allowed_api_formats: list[str] | None = None):
         self.allowed_api_formats = allowed_api_formats or [self.FORMAT_ID]
 
-    @classmethod
-    def _get_api_format(cls) -> APIFormat:
-        try:
-            return APIFormat[cls.FORMAT_ID]
-        except KeyError:
-            return APIFormat.OPENAI
-
     def extract_api_key(self, request: Request) -> str | None:
-        auth_method = get_default_auth_method(self._get_api_format())
+        auth_method = get_default_auth_method_for_endpoint(self.FORMAT_ID)
         handler = get_auth_handler(auth_method)
         return handler.extract_credentials(request)
 
@@ -89,6 +91,17 @@ class VideoAdapterBase(ApiAdapter):
                 task_id=task_id,
                 http_request=http_request,
                 original_headers=context.original_headers,
+                query_params=context.query_params,
+                path_params=path_params,
+            )
+
+        # Remix task
+        if method == "POST" and path.endswith("/remix") and task_id:
+            return await handler.handle_remix_task(
+                task_id=task_id,
+                http_request=http_request,
+                original_headers=context.original_headers,
+                original_request_body=original_request_body,
                 query_params=context.query_params,
                 path_params=path_params,
             )

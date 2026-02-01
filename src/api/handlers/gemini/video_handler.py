@@ -21,7 +21,13 @@ from src.api.handlers.base.video_handler_base import (
 )
 from src.clients.http_client import HTTPClientPool
 from src.config.settings import config
-from src.core.api_format import APIFormat, build_upstream_headers, get_extra_headers_from_endpoint
+from src.core.api_format import (
+    ApiFamily,
+    EndpointKind,
+    build_upstream_headers_for_endpoint,
+    get_extra_headers_from_endpoint,
+    make_signature_key,
+)
 from src.core.api_format.conversion.internal_video import (
     InternalVideoRequest,
     InternalVideoTask,
@@ -33,11 +39,13 @@ from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.models.database import ApiKey, ProviderAPIKey, ProviderEndpoint, User, VideoTask
 from src.services.billing.rule_service import BillingRuleLookupResult, BillingRuleService
-from src.services.cache.aware_scheduler import CacheAwareScheduler, ProviderCandidate
+from src.services.cache.aware_scheduler import ProviderCandidate
 
 
 class GeminiVeoHandler(VideoHandlerBase):
-    FORMAT_ID = "GEMINI"
+    FORMAT_ID = "gemini:video"
+    API_FAMILY = ApiFamily.GEMINI
+    ENDPOINT_KIND = EndpointKind.VIDEO
 
     DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
 
@@ -84,56 +92,55 @@ class GeminiVeoHandler(VideoHandlerBase):
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        candidate, candidate_keys, rule_lookup = await self._select_candidate(
-            internal_request.model
+        async def _submit(candidate: ProviderCandidate) -> Any:
+            upstream_key, endpoint, _key, auth_info = await self._resolve_upstream_key(candidate)
+            upstream_url = self._build_upstream_url(endpoint.base_url, internal_request.model)
+            headers = self._build_upstream_headers(
+                original_headers, upstream_key, endpoint, auth_info
+            )
+            client = await HTTPClientPool.get_default_client_async()
+            return await client.post(upstream_url, headers=headers, json=original_request_body)
+
+        def _extract_task_id(payload: dict[str, Any]) -> str | None:
+            value = payload.get("name")
+            if not value:
+                return None
+            return normalize_gemini_operation_id(str(value))
+
+        outcome_or_response = await self._submit_with_failover(
+            api_format=self.FORMAT_ID,
+            model_name=internal_request.model,
+            task_type="video",
+            submit_func=_submit,
+            extract_external_task_id=_extract_task_id,
+            supported_auth_types={"api_key", "vertex_ai"},
+            allow_format_conversion=False,
+            max_candidates=10,
         )
-        if not candidate:
-            detail = "No available provider for video generation"
-            if config.billing_require_rule:
-                detail = "No available provider with billing rule for video generation"
-            raise HTTPException(status_code=503, detail=detail)
+        if isinstance(outcome_or_response, JSONResponse):
+            return outcome_or_response
+        outcome = outcome_or_response
 
         # 冻结 billing_rule 配置（用于异步任务的成本一致性）
         # 复用 _select_candidate 中已查询的结果；billing_require_rule=false 时需补查
+        rule_lookup = outcome.rule_lookup
         if rule_lookup is None:
             rule_lookup = BillingRuleService.find_rule(
                 self.db,
-                provider_id=candidate.provider.id,
+                provider_id=outcome.candidate.provider.id,
                 model_name=internal_request.model,
                 task_type="video",
             )
         billing_rule_snapshot = self._build_billing_rule_snapshot(rule_lookup)
 
-        upstream_key, endpoint, key, auth_info = await self._resolve_upstream_key(candidate)
-        upstream_url = self._build_upstream_url(endpoint.base_url, internal_request.model)
-        headers = self._build_upstream_headers(original_headers, upstream_key, endpoint, auth_info)
-
-        api_key_header = (
-            headers.get("x-goog-api-key", "")[:10] + "..."
-            if headers.get("x-goog-api-key")
-            else "MISSING"
-        )
-        logger.info(
-            f"[GeminiVeoHandler] Create task: endpoint_id={endpoint.id}, base_url={endpoint.base_url}, upstream_url={upstream_url}, api_key_prefix={api_key_header}"
-        )
-
-        client = await HTTPClientPool.get_default_client_async()
-        response = await client.post(upstream_url, headers=headers, json=original_request_body)
-        if response.status_code >= 400:
-            return self._build_error_response(response)
-
-        payload = response.json()
-        external_task_id = str(payload.get("name") or "")
-        if not external_task_id:
-            raise HTTPException(status_code=502, detail="Upstream returned empty task id")
-        external_task_id = normalize_gemini_operation_id(external_task_id)
+        external_task_id = outcome.external_task_id
 
         task = self._create_task_record(
             external_task_id=external_task_id,
-            candidate=candidate,
+            candidate=outcome.candidate,
             original_request_body=original_request_body,
             internal_request=internal_request,
-            candidate_keys=candidate_keys,
+            candidate_keys=outcome.candidate_keys,
             original_headers=original_headers,
             billing_rule_snapshot=billing_rule_snapshot,
         )
@@ -308,61 +315,6 @@ class GeminiVeoHandler(VideoHandlerBase):
     # Helpers
     # ------------------------------------------------------------------
 
-    async def _select_candidate(
-        self, model_name: str
-    ) -> tuple[ProviderCandidate | None, list[dict[str, Any]], BillingRuleLookupResult | None]:
-        """选择候选 key，返回 (选中的候选, 所有候选列表, 选中候选的 billing rule lookup)"""
-        scheduler = CacheAwareScheduler()
-        candidates, _ = await scheduler.list_all_candidates(
-            db=self.db,
-            api_format=APIFormat.GEMINI,
-            model_name=model_name,
-            affinity_key=str(self.api_key.id),
-            user_api_key=self.api_key,
-            max_candidates=10,
-        )
-        # 记录所有候选 key 信息
-        candidate_keys = []
-        selected_candidate = None
-        selected_index = -1
-        selected_rule_lookup: BillingRuleLookupResult | None = None
-        for idx, candidate in enumerate(candidates):
-            auth_type = getattr(candidate.key, "auth_type", "api_key") or "api_key"
-            has_billing_rule = True
-            rule_lookup: BillingRuleLookupResult | None = None
-            if config.billing_require_rule:
-                rule_lookup = BillingRuleService.find_rule(
-                    self.db,
-                    provider_id=candidate.provider.id,
-                    model_name=model_name,
-                    task_type="video",
-                )
-                has_billing_rule = rule_lookup is not None
-            candidate_info = {
-                "index": idx,
-                "provider_id": candidate.provider.id,
-                "provider_name": candidate.provider.name,
-                "endpoint_id": candidate.endpoint.id,
-                "key_id": candidate.key.id,
-                "key_name": candidate.key.name,
-                "auth_type": auth_type,
-                "has_billing_rule": has_billing_rule,
-                "priority": getattr(candidate.key, "priority", 0) or 0,
-            }
-            candidate_keys.append(candidate_info)
-            if (
-                selected_candidate is None
-                and auth_type in {"api_key", "vertex_ai"}
-                and has_billing_rule
-            ):
-                selected_candidate = candidate
-                selected_index = idx
-                selected_rule_lookup = rule_lookup
-        # 标记选中的候选
-        if selected_index >= 0:
-            candidate_keys[selected_index]["selected"] = True
-        return selected_candidate, candidate_keys, selected_rule_lookup
-
     async def _resolve_upstream_key(
         self, candidate: ProviderCandidate
     ) -> tuple[str, ProviderEndpoint, ProviderAPIKey, Any | None]:
@@ -399,9 +351,13 @@ class GeminiVeoHandler(VideoHandlerBase):
         auth_info: Any | None,
     ) -> dict[str, str]:
         extra_headers = get_extra_headers_from_endpoint(endpoint)
-        headers = build_upstream_headers(
+        endpoint_sig = make_signature_key(
+            str(getattr(endpoint, "api_family", "")).strip().lower(),
+            str(getattr(endpoint, "endpoint_kind", "")).strip().lower(),
+        )
+        headers = build_upstream_headers_for_endpoint(
             original_headers,
-            APIFormat.GEMINI,
+            endpoint_sig,
             upstream_key,
             endpoint_headers=extra_headers,
         )
@@ -459,8 +415,11 @@ class GeminiVeoHandler(VideoHandlerBase):
             provider_id=candidate.provider.id,
             endpoint_id=candidate.endpoint.id,
             key_id=candidate.key.id,
-            client_api_format="GEMINI",
-            provider_api_format=str(candidate.endpoint.api_format),
+            client_api_format=self.FORMAT_ID,
+            provider_api_format=make_signature_key(
+                str(getattr(candidate.endpoint, "api_family", "")).strip().lower(),
+                str(getattr(candidate.endpoint, "endpoint_kind", "")).strip().lower(),
+            ),
             format_converted=False,
             model=internal_request.model,
             prompt=internal_request.prompt,

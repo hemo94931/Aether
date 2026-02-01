@@ -19,19 +19,20 @@ from src.api.handlers.base.video_handler_base import (
 from src.clients.http_client import HTTPClientPool
 from src.clients.redis_client import get_redis_client
 from src.config.settings import config
-from src.core.api_format import APIFormat, build_upstream_headers, get_extra_headers_from_endpoint
+from src.core.api_format import (
+    build_upstream_headers_for_endpoint,
+    get_extra_headers_from_endpoint,
+    make_signature_key,
+)
 from src.core.api_format.conversion.internal_video import InternalVideoPollResult, VideoStatus
 from src.core.api_format.conversion.normalizers.gemini import GeminiNormalizer
 from src.core.api_format.conversion.normalizers.openai import OpenAINormalizer
 from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.database import create_session
-from src.models.database import ApiKey, Provider, ProviderAPIKey, ProviderEndpoint, User, VideoTask
-from src.services.billing.dimension_collector_service import DimensionCollectorService
-from src.services.billing.formula_engine import BillingIncompleteError, FormulaEngine
-from src.services.billing.rule_service import BillingRuleService
+from src.models.database import ProviderAPIKey, ProviderEndpoint, VideoTask
 from src.services.system.scheduler import get_scheduler
-from src.services.usage.service import UsageService
+from src.services.task.impl.video_telemetry import VideoTelemetry
 
 # 永久性错误指示词（用于降级判断，不应重试）
 _PERMANENT_ERROR_INDICATORS = frozenset(
@@ -71,7 +72,6 @@ class VideoTaskPollerService:
         self.redis = None
         self._openai_normalizer = OpenAINormalizer()
         self._gemini_normalizer = GeminiNormalizer()
-        self._formula_engine = FormulaEngine()
         # 追踪连续失败次数（用于告警）
         self._consecutive_failures = 0
         # 从配置读取参数
@@ -248,7 +248,7 @@ class VideoTaskPollerService:
         # 终态写入 Usage（复用外层 per-task session）
         if task.status in (VideoStatus.COMPLETED.value, VideoStatus.FAILED.value):
             try:
-                await self._record_terminal_usage(db, task)
+                await VideoTelemetry(db, redis_client=self.redis).record_terminal_usage(task)
             except Exception as exc:
                 logger.exception(
                     "Failed to record video usage for task=%s: %s",
@@ -263,289 +263,6 @@ class VideoTaskPollerService:
             task.request_metadata = {}
         # 仅在终态写一次，避免污染 request_metadata
         task.request_metadata["poll_raw_response"] = result.raw_response
-
-    async def _record_terminal_usage(self, db: Session, task: VideoTask) -> None:
-        """
-        为视频任务终态写入 Usage：
-        - COMPLETED: 使用 FormulaEngine 计算 cost（或 no_rule / incomplete -> cost=0）
-        - FAILED: cost=0
-        """
-        request_id = None
-        if isinstance(task.request_metadata, dict):
-            request_id = task.request_metadata.get("request_id")
-        request_id = request_id or task.id
-
-        # 计算异步任务总耗时（ms）
-        response_time_ms = None
-        if task.submitted_at and task.completed_at:
-            delta = task.completed_at - task.submitted_at
-            response_time_ms = int(delta.total_seconds() * 1000)
-
-        # 基础维度（无需 collectors 也可计费）
-        base_dimensions: dict[str, Any] = {
-            "duration_seconds": task.duration_seconds,
-            "resolution": task.resolution,
-            "aspect_ratio": task.aspect_ratio,
-            "size": task.size or "",
-            "retry_count": task.retry_count,
-        }
-
-        # collectors 可用的 metadata（结构稳定，便于配置 path）
-        collector_metadata: dict[str, Any] = {
-            "task": {
-                "id": task.id,
-                "external_task_id": task.external_task_id,
-                "model": task.model,
-                "duration_seconds": task.duration_seconds,
-                "resolution": task.resolution,
-                "aspect_ratio": task.aspect_ratio,
-                "size": task.size,
-                "retry_count": task.retry_count,
-                "video_size_bytes": task.video_size_bytes,
-            },
-            "result": {
-                "video_url": task.video_url,
-                "video_urls": task.video_urls or [],
-            },
-        }
-
-        # 维度采集：base + collectors 覆盖/补全
-        dims = DimensionCollectorService(db).collect_dimensions(
-            api_format=task.provider_api_format,
-            task_type="video",
-            request=task.original_request_body or {},
-            response=(
-                (task.request_metadata or {}).get("poll_raw_response")
-                if isinstance(task.request_metadata, dict)
-                else None
-            ),
-            metadata=collector_metadata,
-            base_dimensions=base_dimensions,
-        )
-
-        # 取冻结的 rule_snapshot；若缺失则回退 DB 查找（兼容旧任务）
-        rule_snapshot = None
-        if isinstance(task.request_metadata, dict):
-            rule_snapshot = task.request_metadata.get("billing_rule_snapshot")
-
-        # 构建 billing_snapshot（写入 Usage.request_metadata）
-        billing_snapshot: dict[str, Any] = {
-            "status": "complete",
-            "missing_required": [],
-            "strict_mode": config.billing_strict_mode,
-        }
-        cost = 0.0
-
-        if task.status == VideoStatus.FAILED.value:
-            billing_snapshot["billed_reason"] = "task_failed"
-        else:
-            # COMPLETED：计算成本
-            expression = None
-            variables = None
-            dimension_mappings = None
-            rule_id = None
-            rule_name = None
-            rule_scope = None
-
-            if isinstance(rule_snapshot, dict) and rule_snapshot.get("status") == "ok":
-                rule_id = rule_snapshot.get("rule_id")
-                rule_name = rule_snapshot.get("rule_name")
-                rule_scope = rule_snapshot.get("scope")
-                expression = rule_snapshot.get("expression")
-                variables = rule_snapshot.get("variables")
-                dimension_mappings = rule_snapshot.get("dimension_mappings")
-            else:
-                lookup = BillingRuleService.find_rule(
-                    db,
-                    provider_id=task.provider_id,
-                    model_name=task.model,
-                    task_type="video",
-                )
-                if lookup:
-                    rule = lookup.rule
-                    rule_id = rule.id
-                    rule_name = rule.name
-                    rule_scope = lookup.scope
-                    expression = rule.expression
-                    variables = rule.variables
-                    dimension_mappings = rule.dimension_mappings
-
-            if not expression:
-                billing_snapshot["status"] = "no_rule"
-                billing_snapshot["cost_breakdown"] = {"total": 0.0}
-                logger.warning(
-                    "No billing rule for video task (request_id=%s, model=%s, provider_id=%s)",
-                    request_id,
-                    task.model,
-                    task.provider_id,
-                )
-            else:
-                billing_snapshot.update(
-                    {
-                        "rule_id": rule_id,
-                        "rule_name": rule_name,
-                        "rule_scope": rule_scope,
-                        "expression": expression,
-                        "variables": variables or {},
-                    }
-                )
-                try:
-                    result = self._formula_engine.evaluate(
-                        expression=expression,
-                        variables=variables or {},
-                        dimensions=dims,
-                        dimension_mappings=dimension_mappings or {},
-                        strict_mode=config.billing_strict_mode,
-                    )
-                    billing_snapshot["status"] = result.status
-                    billing_snapshot["missing_required"] = result.missing_required
-                    billing_snapshot["resolved_values"] = result.resolved_values
-                    if result.status == "complete":
-                        cost = result.cost
-                    else:
-                        logger.error(
-                            "Billing incomplete due to missing required dimensions "
-                            "(request_id=%s, model=%s, missing=%s)",
-                            request_id,
-                            task.model,
-                            result.missing_required,
-                        )
-                        cost = 0.0
-                        await self._maybe_alert_missing_required(
-                            model=task.model,
-                            missing_required=result.missing_required,
-                        )
-                    if result.error:
-                        billing_snapshot["error"] = result.error
-                except BillingIncompleteError as exc:
-                    logger.error(
-                        "Billing strict mode triggered (request_id=%s, model=%s, missing=%s)",
-                        request_id,
-                        task.model,
-                        exc.missing_required,
-                    )
-                    billing_snapshot["status"] = "incomplete"
-                    billing_snapshot["missing_required"] = exc.missing_required
-                    billing_snapshot["resolved_values"] = {}
-                    billing_snapshot["error"] = "strict_mode_missing_required"
-                    cost = 0.0
-
-                    # strict_mode=true：标记任务失败并隐藏产物，避免"免费放行"
-                    task.status = VideoStatus.FAILED.value
-                    task.error_code = "billing_incomplete"
-                    task.error_message = f"Missing required dimensions: {exc.missing_required}"
-                    task.video_url = None
-                    task.video_urls = None
-
-                    await self._maybe_alert_missing_required(
-                        model=task.model,
-                        missing_required=exc.missing_required,
-                    )
-
-                billing_snapshot["cost_breakdown"] = {"total": cost}
-
-        # Usage 元数据（包含 snapshot + dimensions + raw_response_ref）
-        usage_metadata: dict[str, Any] = {
-            "billing_snapshot": billing_snapshot,
-            "dimensions": dims,
-            "raw_response_ref": {
-                "video_task_id": task.id,
-                "field": "video_tasks.request_metadata.poll_raw_response",
-            },
-        }
-
-        # 查询关联对象（用于写入 usage.user_id/api_key_id 等）
-        user_obj = db.query(User).filter(User.id == task.user_id).first()
-        api_key_obj = (
-            db.query(ApiKey).filter(ApiKey.id == task.api_key_id).first()
-            if task.api_key_id
-            else None
-        )
-        provider_obj = (
-            db.query(Provider).filter(Provider.id == task.provider_id).first()
-            if task.provider_id
-            else None
-        )
-        provider_name = provider_obj.name if provider_obj else "unknown"
-
-        await UsageService.record_usage_with_custom_cost(
-            db=db,
-            user=user_obj,
-            api_key=api_key_obj,
-            provider=provider_name,
-            model=task.model,
-            request_type="video",
-            total_cost_usd=cost,
-            request_cost_usd=cost,
-            input_tokens=0,
-            output_tokens=0,
-            cache_creation_input_tokens=0,
-            cache_read_input_tokens=0,
-            api_format=task.client_api_format,
-            endpoint_api_format=task.provider_api_format,
-            has_format_conversion=bool(task.format_converted),
-            is_stream=False,
-            response_time_ms=response_time_ms,
-            first_byte_time_ms=None,
-            status_code=200 if task.status == VideoStatus.COMPLETED.value else 500,
-            error_message=(
-                None
-                if task.status == VideoStatus.COMPLETED.value
-                else (task.error_message or task.error_code or "video_task_failed")
-            ),
-            metadata=usage_metadata,
-            request_headers=(
-                (task.request_metadata or {}).get("request_headers")
-                if isinstance(task.request_metadata, dict)
-                else None
-            ),
-            request_body=task.original_request_body,
-            provider_request_headers=None,
-            response_headers=None,
-            client_response_headers=None,
-            response_body=None,
-            request_id=request_id,
-            provider_id=task.provider_id,
-            provider_endpoint_id=task.endpoint_id,
-            provider_api_key_id=task.key_id,
-            status="completed" if task.status == VideoStatus.COMPLETED.value else "failed",
-            target_model=None,
-        )
-
-    async def _maybe_alert_missing_required(
-        self, *, model: str, missing_required: list[str]
-    ) -> None:
-        """required 维度缺失告警：同一 (model, dimension) 1 小时内 >= 10 次触发升级告警。"""
-        if not missing_required:
-            return
-        if not self.redis:
-            # Redis 不可用：降级为日志
-            logger.error(
-                "Missing required billing dimensions (model=%s): %s", model, missing_required
-            )
-            return
-
-        # 按小时 bucket 聚合
-        now = datetime.now(timezone.utc)
-        hour_bucket = now.strftime("%Y%m%d%H")
-        for dim in missing_required:
-            key = f"billing:missing_required:{model}:{dim}:{hour_bucket}"
-            try:
-                count = await self.redis.incr(key)
-                # TTL 略大于 1h，避免边界抖动
-                if count == 1:
-                    await self.redis.expire(key, 3700)
-                if count >= 10:
-                    logger.warning(
-                        "Billing required dimension missing frequently (model=%s, dim=%s, count=%s/hour)",
-                        model,
-                        dim,
-                        count,
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to record billing alert counter: %s", sanitize_error_message(str(exc))
-                )
 
     def _is_permanent_error(self, exc: Exception, status_code: int | None = None) -> bool:
         """判断是否为永久性错误（不应重试）"""
@@ -583,7 +300,14 @@ class VideoTaskPollerService:
                 error_message="Failed to decrypt provider key",
             )
 
-        if (task.provider_api_format or "").upper() == "GEMINI":
+        provider_format = (task.provider_api_format or "").strip().lower()
+        if not provider_format:
+            provider_format = make_signature_key(
+                str(getattr(endpoint, "api_family", "")).strip().lower(),
+                str(getattr(endpoint, "endpoint_kind", "")).strip().lower(),
+            )
+
+        if provider_format.startswith("gemini:"):
             auth_info = await get_provider_auth(endpoint, key)
             return await self._poll_gemini(task, endpoint, upstream_key, auth_info)
         return await self._poll_openai(task, endpoint, upstream_key)
@@ -601,7 +325,11 @@ class VideoTaskPollerService:
                 error_message="Task missing external_task_id",
             )
         url = self._build_openai_url(endpoint.base_url, task.external_task_id)
-        headers = self._build_headers(APIFormat.OPENAI, upstream_key, endpoint)
+        endpoint_sig = (task.provider_api_format or "").strip().lower() or make_signature_key(
+            str(getattr(endpoint, "api_family", "")).strip().lower(),
+            str(getattr(endpoint, "endpoint_kind", "")).strip().lower(),
+        )
+        headers = self._build_headers(endpoint_sig, upstream_key, endpoint)
 
         client = await HTTPClientPool.get_default_client_async()
         response = await client.get(url, headers=headers)
@@ -629,7 +357,11 @@ class VideoTaskPollerService:
             )
         operation_name = normalize_gemini_operation_id(task.external_task_id)
         url = self._build_gemini_url(endpoint.base_url, operation_name)
-        headers = self._build_headers(APIFormat.GEMINI, upstream_key, endpoint, auth_info)
+        endpoint_sig = (task.provider_api_format or "").strip().lower() or make_signature_key(
+            str(getattr(endpoint, "api_family", "")).strip().lower(),
+            str(getattr(endpoint, "endpoint_kind", "")).strip().lower(),
+        )
+        headers = self._build_headers(endpoint_sig, upstream_key, endpoint, auth_info)
 
         client = await HTTPClientPool.get_default_client_async()
         response = await client.get(url, headers=headers)
@@ -656,15 +388,15 @@ class VideoTaskPollerService:
 
     def _build_headers(
         self,
-        api_format: APIFormat,
+        endpoint_sig: str,
         upstream_key: str,
         endpoint: ProviderEndpoint,
         auth_info: ProviderAuthInfo | None = None,
     ) -> dict[str, str]:
         extra_headers = get_extra_headers_from_endpoint(endpoint)
-        headers = build_upstream_headers(
+        headers = build_upstream_headers_for_endpoint(
             {},
-            api_format,
+            endpoint_sig,
             upstream_key,
             endpoint_headers=extra_headers,
         )

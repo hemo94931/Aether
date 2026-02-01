@@ -4,9 +4,9 @@ Usage 字段映射器
 将不同 API 格式的原始 usage 数据映射为标准化格式。
 
 支持的格式：
-- OPENAI / OPENAI_CLI: OpenAI Chat Completions API
-- CLAUDE / CLAUDE_CLI: Anthropic Messages API
-- GEMINI / GEMINI_CLI: Google Gemini API
+- openai:*: OpenAI compatible (Chat/CLI)
+- claude:*: Anthropic Messages (Chat/CLI)
+- gemini:*: Google Gemini (Chat/CLI)
 """
 
 from typing import Any
@@ -73,16 +73,6 @@ class UsageMapper:
         "usageMetadata.cachedContentTokenCount": "cache_read_tokens",
     }
 
-    # 格式名称到映射的对应关系
-    FORMAT_MAPPINGS: dict[str, dict[str, str]] = {
-        "OPENAI": OPENAI_MAPPING,
-        "OPENAI_CLI": OPENAI_MAPPING,
-        "CLAUDE": CLAUDE_MAPPING,
-        "CLAUDE_CLI": CLAUDE_MAPPING,
-        "GEMINI": GEMINI_MAPPING,
-        "GEMINI_CLI": GEMINI_MAPPING,
-    }
-
     @classmethod
     def map(
         cls,
@@ -142,12 +132,13 @@ class UsageMapper:
         Returns:
             标准化的 usage 对象
         """
-        format_upper = api_format.upper() if api_format else ""
+        format_norm = (api_format or "").strip().lower()
+        api_family = format_norm.split(":", 1)[0] if ":" in format_norm else format_norm
 
         # 提取 usage 部分
         usage_data: dict[str, Any] = {}
 
-        if format_upper.startswith("GEMINI"):
+        if api_family == "gemini":
             # Gemini: usageMetadata
             usage_data = response.get("usageMetadata", {})
             if not usage_data:
@@ -164,21 +155,14 @@ class UsageMapper:
     @classmethod
     def _get_mapping(cls, api_format: str) -> dict[str, str]:
         """获取对应格式的字段映射"""
-        if not api_format:
-            return cls.CLAUDE_MAPPING
+        format_norm = (api_format or "").strip().lower()
+        api_family = format_norm.split(":", 1)[0] if ":" in format_norm else format_norm
 
-        format_upper = api_format.upper()
-
-        # 精确匹配
-        if format_upper in cls.FORMAT_MAPPINGS:
-            return cls.FORMAT_MAPPINGS[format_upper]
-
-        # 前缀匹配
-        for key, mapping in cls.FORMAT_MAPPINGS.items():
-            if format_upper.startswith(key.split("_")[0]):
-                return mapping
-
-        # 默认使用 Claude 映射
+        if api_family == "openai":
+            return cls.OPENAI_MAPPING
+        if api_family == "gemini":
+            return cls.GEMINI_MAPPING
+        # 默认 Claude（也覆盖未知/空值）
         return cls.CLAUDE_MAPPING
 
     @classmethod
