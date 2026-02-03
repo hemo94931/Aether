@@ -117,7 +117,11 @@ class SystemConfigService:
         },
         "enable_provider_checkin": {
             "value": True,
-            "description": "是否启用 Provider 自动签到任务，每天凌晨 1:05 执行",
+            "description": "是否启用 Provider 自动签到任务",
+        },
+        "provider_checkin_time": {
+            "value": "01:05",
+            "description": "Provider 自动签到执行时间（HH:MM 格式，24小时制）",
         },
         "provider_priority_mode": {
             "value": "provider",

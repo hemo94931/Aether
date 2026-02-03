@@ -190,6 +190,66 @@ class TaskScheduler:
         except Exception as e:
             logger.warning(f"移除定时任务失败 {job_id}: {e}")
 
+    def reschedule_cron_job(
+        self,
+        job_id: str,
+        hour: int,
+        minute: int = 0,
+    ) -> bool:
+        """
+        重新调度 cron 定时任务的执行时间
+
+        Args:
+            job_id: 任务ID
+            hour: 新的执行时间（小时），使用业务时区
+            minute: 新的执行时间（分钟）
+
+        Returns:
+            是否成功重新调度
+        """
+        try:
+            job = self.scheduler.get_job(job_id)
+            if not job:
+                logger.warning(f"任务不存在: {job_id}")
+                return False
+
+            trigger = CronTrigger(hour=hour, minute=minute, timezone=APP_TIMEZONE)
+            self.scheduler.reschedule_job(job_id, trigger=trigger)
+
+            logger.info(
+                f"已重新调度定时任务: {job.name}, "
+                f"新执行时间: {hour:02d}:{minute:02d} ({APP_TIMEZONE})"
+            )
+            return True
+        except Exception as e:
+            logger.exception(f"重新调度任务失败 {job_id}: {e}")
+            return False
+
+    def get_job_info(self, job_id: str) -> dict | None:
+        """
+        获取任务信息
+
+        Args:
+            job_id: 任务ID
+
+        Returns:
+            任务信息字典，包含 name, next_run_time 等
+        """
+        try:
+            job = self.scheduler.get_job(job_id)
+            if not job:
+                return None
+
+            next_run = job.next_run_time
+            return {
+                "id": job.id,
+                "name": job.name,
+                "next_run_time": next_run.isoformat() if next_run else None,
+            }
+        except Exception as e:
+            logger.warning(f"获取任务信息失败 {job_id}: {e}")
+            return None
+
     @property
     def is_running(self) -> bool:
         """调度器是否在运行"""

@@ -36,10 +36,81 @@ from src.utils.compression import compress_json
 class MaintenanceScheduler:
     """系统维护任务调度器"""
 
+    # 签到任务的 job_id
+    CHECKIN_JOB_ID = "provider_checkin"
+
     def __init__(self) -> None:
         self.running = False
         self._interval_tasks = []
         self._stats_aggregation_lock = asyncio.Lock()
+
+    def _get_checkin_time(self) -> tuple[int, int]:
+        """获取签到任务的执行时间
+
+        Returns:
+            (hour, minute) 元组
+        """
+        db = create_session()
+        try:
+            time_str = SystemConfigService.get_config(db, "provider_checkin_time", "01:05")
+            return self._parse_time_string(time_str)
+        finally:
+            db.close()
+
+    @staticmethod
+    def _parse_time_string(time_str: str) -> tuple[int, int]:
+        """解析时间字符串为 (hour, minute) 元组
+
+        Args:
+            time_str: HH:MM 格式的时间字符串
+
+        Returns:
+            (hour, minute) 元组，解析失败返回默认值 (1, 5)
+        """
+        try:
+            if not time_str or ":" not in time_str:
+                return (1, 5)
+            parts = time_str.split(":")
+            hour = int(parts[0])
+            minute = int(parts[1])
+            # 验证范围
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return (hour, minute)
+            return (1, 5)
+        except (ValueError, IndexError):
+            return (1, 5)
+
+    def update_checkin_time(self, time_str: str) -> bool:
+        """更新签到任务的执行时间
+
+        Args:
+            time_str: HH:MM 格式的时间字符串
+
+        Returns:
+            是否成功更新
+        """
+        hour, minute = self._parse_time_string(time_str)
+
+        scheduler = get_scheduler()
+        success = scheduler.reschedule_cron_job(
+            self.CHECKIN_JOB_ID,
+            hour=hour,
+            minute=minute,
+        )
+
+        if success:
+            logger.info(f"Provider 签到任务时间已更新为: {hour:02d}:{minute:02d}")
+
+        return success
+
+    def get_checkin_job_info(self) -> dict | None:
+        """获取签到任务的信息
+
+        Returns:
+            任务信息字典
+        """
+        scheduler = get_scheduler()
+        return scheduler.get_job_info(self.CHECKIN_JOB_ID)
 
     async def start(self) -> Any:
         """启动调度器"""
@@ -112,12 +183,13 @@ class MaintenanceScheduler:
             name="Gemini文件映射清理",
         )
 
-        # Provider 签到任务 - 凌晨 1:05 执行
+        # Provider 签到任务 - 根据配置时间执行
+        checkin_hour, checkin_minute = self._get_checkin_time()
         scheduler.add_cron_job(
             self._scheduled_provider_checkin,
-            hour=1,
-            minute=5,  # 在统计聚合任务（1:00）之后执行
-            job_id="provider_checkin",
+            hour=checkin_hour,
+            minute=checkin_minute,
+            job_id=self.CHECKIN_JOB_ID,
             name="Provider签到",
         )
 

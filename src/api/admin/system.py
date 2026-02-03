@@ -614,6 +614,16 @@ class AdminSetSystemConfigAdapter(AdminApiAdapter):
             payload.get("description"),
         )
 
+        # 如果更新的是签到任务时间，动态更新调度器
+        if self.key == "provider_checkin_time" and value:
+            try:
+                from src.services.system.maintenance_scheduler import get_maintenance_scheduler
+
+                scheduler = get_maintenance_scheduler()
+                scheduler.update_checkin_time(value)
+            except Exception as e:
+                logger.warning(f"更新签到任务时间失败: {e}")
+
         # 返回时不暴露加密后的值
         display_value = "********" if self.key in self.ENCRYPTED_KEYS else config.value
 

@@ -487,8 +487,17 @@
         title="定时任务"
         description="配置系统后台定时任务"
       >
-        <div class="flex items-center gap-6">
-          <div class="flex items-center gap-2">
+        <template #actions>
+          <Button
+            size="sm"
+            :disabled="checkinTimeLoading || !hasCheckinTimeChanged"
+            @click="handleCheckinTimeSave"
+          >
+            {{ checkinTimeLoading ? '保存中...' : '保存' }}
+          </Button>
+        </template>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div class="flex items-center space-x-2">
             <Switch
               id="enable-provider-checkin"
               :model-value="systemConfig.enable_provider_checkin"
@@ -497,14 +506,62 @@
             <div>
               <Label
                 for="enable-provider-checkin"
-                class="text-sm cursor-pointer"
+                class="cursor-pointer"
               >
                 启用 Provider 自动签到
               </Label>
               <p class="text-xs text-muted-foreground">
-                每天凌晨 1:05 执行
+                自动执行已配置 Provider 的签到任务
               </p>
             </div>
+          </div>
+
+          <div v-if="systemConfig.enable_provider_checkin">
+            <Label class="block text-sm font-medium">
+              执行时间
+            </Label>
+            <div class="mt-1 flex items-center gap-2">
+              <Select
+                v-model:open="checkinHourSelectOpen"
+                :model-value="checkinHour"
+                @update:model-value="(val: string) => updateCheckinTime(val, checkinMinute)"
+              >
+                <SelectTrigger class="w-20">
+                  <SelectValue placeholder="时" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem
+                    v-for="h in 24"
+                    :key="h - 1"
+                    :value="String(h - 1).padStart(2, '0')"
+                  >
+                    {{ String(h - 1).padStart(2, '0') }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <span class="text-muted-foreground">:</span>
+              <Select
+                v-model:open="checkinMinuteSelectOpen"
+                :model-value="checkinMinute"
+                @update:model-value="(val: string) => updateCheckinTime(checkinHour, val)"
+              >
+                <SelectTrigger class="w-20">
+                  <SelectValue placeholder="分" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem
+                    v-for="m in 60"
+                    :key="m - 1"
+                    :value="String(m - 1).padStart(2, '0')"
+                  >
+                    {{ String(m - 1).padStart(2, '0') }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <p class="mt-1 text-xs text-muted-foreground">
+              每天定时执行（24小时制）
+            </p>
           </div>
         </div>
       </CardSection>
@@ -924,6 +981,7 @@ interface SystemConfig {
   audit_log_retention_days: number
   // 定时任务
   enable_provider_checkin: boolean
+  provider_checkin_time: string
 }
 
 const basicConfigLoading = ref(false)
@@ -980,6 +1038,7 @@ const systemConfig = ref<SystemConfig>({
   audit_log_retention_days: 30,
   // 定时任务
   enable_provider_checkin: true,
+  provider_checkin_time: '01:05',
 })
 
 // 原始配置值（用于检测变动）
@@ -1087,6 +1146,7 @@ async function loadSystemConfig() {
       'audit_log_retention_days',
       // 定时任务
       'enable_provider_checkin',
+      'provider_checkin_time',
     ]
 
     for (const key of configs) {
@@ -1101,6 +1161,8 @@ async function loadSystemConfig() {
     }
     // 保存原始值用于变动检测
     originalConfig.value = JSON.parse(JSON.stringify(systemConfig.value))
+    // 初始化签到时间的原始值（用于回滚）
+    previousCheckinTime.value = systemConfig.value.provider_checkin_time
   } catch (err) {
     error('加载系统配置失败')
     log.error('加载系统配置失败:', err)
@@ -1240,6 +1302,61 @@ async function handleProviderCheckinToggle(enabled: boolean) {
     log.error('保存自动签到配置失败:', err)
     // 回滚状态
     systemConfig.value.enable_provider_checkin = previousValue
+  }
+}
+
+// 签到时间相关
+const previousCheckinTime = ref('')
+const checkinTimeLoading = ref(false)
+const checkinHourSelectOpen = ref(false)
+const checkinMinuteSelectOpen = ref(false)
+
+// 解析签到时间的小时和分钟
+const checkinHour = computed(() => {
+  const time = systemConfig.value.provider_checkin_time
+  if (!time || !time.includes(':')) return '01'
+  return time.split(':')[0]
+})
+
+const checkinMinute = computed(() => {
+  const time = systemConfig.value.provider_checkin_time
+  if (!time || !time.includes(':')) return '05'
+  return time.split(':')[1]
+})
+
+// 更新签到时间
+function updateCheckinTime(hour: string, minute: string) {
+  systemConfig.value.provider_checkin_time = `${hour}:${minute}`
+}
+
+// 检测签到时间是否有变化
+const hasCheckinTimeChanged = computed(() => {
+  return systemConfig.value.provider_checkin_time !== previousCheckinTime.value
+})
+
+async function handleCheckinTimeSave() {
+  const newTime = systemConfig.value.provider_checkin_time
+
+  // 验证时间格式
+  if (!newTime || !/^\d{2}:\d{2}$/.test(newTime)) {
+    error('请输入有效的时间格式 (HH:MM)')
+    return
+  }
+
+  checkinTimeLoading.value = true
+  try {
+    await adminApi.updateSystemConfig(
+      'provider_checkin_time',
+      newTime,
+      'Provider 自动签到执行时间（HH:MM 格式）'
+    )
+    previousCheckinTime.value = newTime
+    success(`签到时间已设置为 ${newTime}`)
+  } catch (err) {
+    error('保存签到时间失败')
+    log.error('保存签到时间失败:', err)
+  } finally {
+    checkinTimeLoading.value = false
   }
 }
 
