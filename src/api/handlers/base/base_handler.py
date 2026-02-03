@@ -456,6 +456,45 @@ class BaseMessageHandler:
             payload["model"] = mapped_model
         return payload
 
+    def _create_pending_usage(
+        self,
+        model: str,
+        is_stream: bool,
+        request_type: str = "chat",
+        api_format: str | None = None,
+        request_headers: dict[str, Any] | None = None,
+        request_body: dict[str, Any] | None = None,
+    ) -> None:
+        """在请求开始时创建 pending 状态的 Usage 记录
+
+        让前端可以立即看到"处理中"的请求，提升用户体验。
+        如果创建失败不影响主流程，仅记录警告日志。
+
+        Args:
+            model: 模型名称
+            is_stream: 是否为流式请求
+            request_type: 请求类型（chat, video 等）
+            api_format: API 格式
+            request_headers: 原始请求头
+            request_body: 原始请求体
+        """
+        try:
+            UsageService.create_pending_usage(
+                db=self.db,
+                request_id=self.request_id,
+                user=self.user,
+                api_key=self.api_key,
+                model=model,
+                is_stream=is_stream,
+                request_type=request_type,
+                api_format=api_format,
+                request_headers=request_headers,
+                request_body=request_body,
+            )
+        except Exception as exc:
+            # 创建失败不影响主流程
+            logger.warning(f"[{self.request_id}] Failed to create pending usage: {exc}")
+
     def _update_usage_to_streaming(self, request_id: str | None = None) -> None:
         """更新 Usage 状态为 streaming（流式传输开始时调用）
 

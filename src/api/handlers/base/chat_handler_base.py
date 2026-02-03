@@ -530,6 +530,16 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         # 转换请求格式
         converted_request = await self._convert_request(request)
         model = getattr(converted_request, "model", original_request_body.get("model", "unknown"))
+
+        # 提前创建 pending 记录，让前端可以立即看到"处理中"
+        self._create_pending_usage(
+            model=model,
+            is_stream=True,
+            request_type="chat",
+            api_format=self.FORMAT_ID,
+            request_headers=original_headers,
+            request_body=original_request_body,
+        )
         api_format = self.allowed_api_formats[0]
 
         # 可变请求体容器：允许 TaskService 在遇到 Thinking 签名错误时整流请求体后重试
@@ -994,6 +1004,16 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         converted_request = await self._convert_request(request)
         model = getattr(converted_request, "model", original_request_body.get("model", "unknown"))
         api_format = self.allowed_api_formats[0]
+
+        # 提前创建 pending 记录，让前端可以立即看到"处理中"
+        self._create_pending_usage(
+            model=model,
+            is_stream=False,
+            request_type="chat",
+            api_format=self.FORMAT_ID,
+            request_headers=original_headers,
+            request_body=original_request_body,
+        )
 
         # 可变请求体容器：允许 TaskService 在遇到 Thinking 签名错误时整流请求体后重试
         # 结构: {"body": 实际请求体, "_rectified": 是否已整流, "_rectified_this_turn": 本轮是否整流}

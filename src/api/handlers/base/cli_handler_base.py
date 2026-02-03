@@ -537,6 +537,16 @@ class CliMessageHandlerBase(BaseMessageHandler):
         # 注意：使用 original_request_body，因为整流只修改 messages，不影响 model 字段
         model = self.extract_model_from_request(original_request_body, path_params)
 
+        # 提前创建 pending 记录，让前端可以立即看到"处理中"
+        self._create_pending_usage(
+            model=model,
+            is_stream=True,
+            request_type="chat",
+            api_format=self.FORMAT_ID,
+            request_headers=original_headers,
+            request_body=original_request_body,
+        )
+
         # 创建流上下文
         ctx = StreamContext(
             model=model,
@@ -2208,6 +2218,16 @@ class CliMessageHandlerBase(BaseMessageHandler):
         model = self.extract_model_from_request(original_request_body, path_params)
         api_format = self.allowed_api_formats[0]
         sync_start_time = time.time()
+
+        # 提前创建 pending 记录，让前端可以立即看到"处理中"
+        self._create_pending_usage(
+            model=model,
+            is_stream=False,
+            request_type="chat",
+            api_format=self.FORMAT_ID,
+            request_headers=original_headers,
+            request_body=original_request_body,
+        )
 
         provider_name = None
         response_json = None
