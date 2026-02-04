@@ -487,177 +487,141 @@
         title="定时任务"
         description="配置系统后台定时任务"
       >
-        <template #actions>
-          <Button
-            size="sm"
-            :disabled="schedulerConfigLoading || !hasSchedulerConfigChanges"
-            @click="handleSchedulerConfigSave"
+        <div class="space-y-3">
+          <template
+            v-for="task in scheduledTasks"
+            :key="task.id"
           >
-            {{ schedulerConfigLoading ? '保存中...' : '保存' }}
-          </Button>
-        </template>
+            <div
+              class="group relative rounded-xl border transition-all duration-300"
+              :class="task.enabled
+                ? 'border-primary/30 bg-primary/[0.02] shadow-sm shadow-primary/5'
+                : 'border-border bg-card hover:border-border/80'"
+            >
+              <!-- 主行 -->
+              <div class="flex items-center gap-4 p-4">
+                <!-- 左侧：开关 -->
+                <div class="shrink-0">
+                  <Switch
+                    :id="`enable-${task.id}`"
+                    :model-value="task.enabled"
+                    @update:model-value="task.onToggle"
+                  />
+                </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div class="flex items-center space-x-2">
-            <Switch
-              id="enable-provider-checkin"
-              :model-value="systemConfig.enable_provider_checkin"
-              @update:model-value="handleProviderCheckinToggle"
-            />
-            <div>
-              <Label
-                for="enable-provider-checkin"
-                class="cursor-pointer"
-              >
-                启用 Provider 自动签到
-              </Label>
-              <p class="text-xs text-muted-foreground">
-                自动执行已配置 Provider 的签到任务
-              </p>
-            </div>
-          </div>
-
-          <div v-if="systemConfig.enable_provider_checkin">
-            <Label class="block text-sm font-medium">
-              执行时间
-            </Label>
-            <div class="mt-1 flex items-center gap-2">
-              <Select
-                v-model:open="checkinHourSelectOpen"
-                :model-value="checkinHour"
-                @update:model-value="(val: string) => updateCheckinTime(val, checkinMinute)"
-              >
-                <SelectTrigger class="w-20">
-                  <SelectValue placeholder="时" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem
-                    v-for="h in 24"
-                    :key="h - 1"
-                    :value="String(h - 1).padStart(2, '0')"
+                <!-- 中间：图标、标题、描述 -->
+                <div class="flex items-center gap-3 flex-1 min-w-0">
+                  <div
+                    class="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors duration-300"
+                    :class="task.enabled
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-muted-foreground'"
                   >
-                    {{ String(h - 1).padStart(2, '0') }}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <span class="text-muted-foreground">:</span>
-              <Select
-                v-model:open="checkinMinuteSelectOpen"
-                :model-value="checkinMinute"
-                @update:model-value="(val: string) => updateCheckinTime(checkinHour, val)"
-              >
-                <SelectTrigger class="w-20">
-                  <SelectValue placeholder="分" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem
-                    v-for="m in 60"
-                    :key="m - 1"
-                    :value="String(m - 1).padStart(2, '0')"
+                    <component
+                      :is="task.icon"
+                      class="w-4.5 h-4.5"
+                    />
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <h4 class="font-medium text-sm">
+                      {{ task.title }}
+                    </h4>
+                    <p class="text-xs text-muted-foreground mt-0.5 truncate">
+                      {{ task.description }}
+                    </p>
+                  </div>
+                </div>
+
+                <!-- 右侧：时间选择器 + 保存按钮 -->
+                <div
+                  v-if="task.enabled"
+                  class="flex items-center gap-2 shrink-0"
+                >
+                  <Clock class="w-4 h-4 text-muted-foreground" />
+                  <Select
+                    v-model:open="task.hourSelectOpen.value"
+                    :model-value="task.hour"
+                    @update:model-value="(val: string) => task.updateTime(val, task.minute)"
                   >
-                    {{ String(m - 1).padStart(2, '0') }}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <p class="mt-1 text-xs text-muted-foreground">
-              每天定时执行（24小时制）
-            </p>
-          </div>
-        </div>
+                    <SelectTrigger class="w-14 h-8 text-xs">
+                      <SelectValue placeholder="时" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="h in 24"
+                        :key="h - 1"
+                        :value="String(h - 1).padStart(2, '0')"
+                      >
+                        {{ String(h - 1).padStart(2, '0') }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <span class="text-sm text-muted-foreground">:</span>
+                  <Select
+                    v-model:open="task.minuteSelectOpen.value"
+                    :model-value="task.minute"
+                    @update:model-value="(val: string) => task.updateTime(task.hour, val)"
+                  >
+                    <SelectTrigger class="w-14 h-8 text-xs">
+                      <SelectValue placeholder="分" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="m in 60"
+                        :key="m - 1"
+                        :value="String(m - 1).padStart(2, '0')"
+                      >
+                        {{ String(m - 1).padStart(2, '0') }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    v-if="task.hasChanges"
+                    variant="default"
+                    size="sm"
+                    class="h-8 px-2.5 text-xs"
+                    :disabled="task.loading"
+                    @click="task.onSave"
+                  >
+                    <Check
+                      v-if="!task.loading"
+                      class="w-3.5 h-3.5"
+                    />
+                    <Loader2
+                      v-else
+                      class="w-3.5 h-3.5 animate-spin"
+                    />
+                  </Button>
+                </div>
+              </div>
 
-        <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div class="flex items-center space-x-2">
-            <Switch
-              id="enable-user-quota-reset"
-              :model-value="systemConfig.enable_user_quota_reset"
-              @update:model-value="handleUserQuotaResetToggle"
-            />
-            <div>
-              <Label
-                for="enable-user-quota-reset"
-                class="cursor-pointer"
+              <!-- 额外配置区域（仅用户配额重置任务有） -->
+              <div
+                v-if="task.id === 'user-quota-reset' && task.enabled"
+                class="px-4 pb-4 pt-0"
               >
-                启用用户配额自动重置
-              </Label>
-              <p class="text-xs text-muted-foreground">
-                每天定时触发，按周期执行
-              </p>
-            </div>
-          </div>
-
-          <div
-            v-if="systemConfig.enable_user_quota_reset"
-            class="grid grid-cols-1 md:grid-cols-2 gap-6"
-          >
-            <div>
-              <Label class="block text-sm font-medium">
-                执行时间
-              </Label>
-              <div class="mt-1 flex items-center gap-2">
-                <Select
-                  v-model:open="userQuotaResetHourSelectOpen"
-                  :model-value="userQuotaResetHour"
-                  @update:model-value="(val: string) => updateUserQuotaResetTime(val, userQuotaResetMinute)"
-                >
-                  <SelectTrigger class="w-20">
-                    <SelectValue placeholder="时" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem
-                      v-for="h in 24"
-                      :key="h - 1"
-                      :value="String(h - 1).padStart(2, '0')"
-                    >
-                      {{ String(h - 1).padStart(2, '0') }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <span class="text-muted-foreground">:</span>
-                <Select
-                  v-model:open="userQuotaResetMinuteSelectOpen"
-                  :model-value="userQuotaResetMinute"
-                  @update:model-value="(val: string) => updateUserQuotaResetTime(userQuotaResetHour, val)"
-                >
-                  <SelectTrigger class="w-20">
-                    <SelectValue placeholder="分" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem
-                      v-for="m in 60"
-                      :key="m - 1"
-                      :value="String(m - 1).padStart(2, '0')"
-                    >
-                      {{ String(m - 1).padStart(2, '0') }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                <div class="flex items-center gap-3 p-3 rounded-lg bg-muted/30 border border-border/50">
+                  <div class="flex items-center gap-2 text-sm">
+                    <span class="text-muted-foreground">重置周期</span>
+                    <div class="flex items-center gap-1.5">
+                      <span class="text-muted-foreground">每</span>
+                      <Input
+                        v-model.number="systemConfig.user_quota_reset_interval_days"
+                        type="number"
+                        min="1"
+                        step="1"
+                        class="w-14 h-7 text-xs text-center px-2"
+                      />
+                      <span class="text-muted-foreground">天</span>
+                    </div>
+                  </div>
+                </div>
+                <p class="text-[11px] text-muted-foreground mt-2 ml-1">
+                  滚动计算：距离上次成功执行满 N 天后再次执行
+                </p>
               </div>
-              <p class="mt-1 text-xs text-muted-foreground">
-                每天定时执行（24小时制）
-              </p>
             </div>
-
-            <div>
-              <Label class="block text-sm font-medium">
-                重置周期
-              </Label>
-              <div class="mt-1 flex items-center gap-2 flex-wrap">
-                <span class="text-xs text-muted-foreground">每</span>
-                <Input
-                  v-model.number="systemConfig.user_quota_reset_interval_days"
-                  type="number"
-                  min="1"
-                  step="1"
-                  class="w-24"
-                />
-                <span class="text-xs text-muted-foreground">天</span>
-              </div>
-              <p class="mt-1 text-xs text-muted-foreground">
-                滚动计算：距离上次成功执行满 N 天后才会再次执行
-              </p>
-            </div>
-          </div>
+          </template>
         </div>
       </CardSection>
 
@@ -1031,7 +995,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Download, Upload } from 'lucide-vue-next'
+import { Download, Upload, CalendarCheck, RotateCcw, Clock, Check, Loader2 } from 'lucide-vue-next'
 import Button from '@/components/ui/button.vue'
 import Input from '@/components/ui/input.vue'
 import Label from '@/components/ui/label.vue'
@@ -1413,7 +1377,8 @@ async function handleProviderCheckinToggle(enabled: boolean) {
 }
 
 const previousCheckinTime = ref('')
-const schedulerConfigLoading = ref(false)
+const checkinConfigLoading = ref(false)
+const quotaResetConfigLoading = ref(false)
 const checkinHourSelectOpen = ref(false)
 const checkinMinuteSelectOpen = ref(false)
 
@@ -1488,32 +1453,74 @@ const hasUserQuotaResetIntervalChanged = computed(() => {
   return systemConfig.value.user_quota_reset_interval_days !== previousUserQuotaResetIntervalDays.value
 })
 
-const hasSchedulerConfigChanges = computed(() => {
-  return (
-    hasCheckinTimeChanged.value ||
-    hasUserQuotaResetTimeChanged.value ||
-    hasUserQuotaResetIntervalChanged.value
-  )
+const hasQuotaResetConfigChanged = computed(() => {
+  return hasUserQuotaResetTimeChanged.value || hasUserQuotaResetIntervalChanged.value
 })
 
-async function handleSchedulerConfigSave() {
-  const configItems: Array<{ key: string, value: any, description: string, onSuccess: () => void }> = []
+// 定时任务配置列表
+const scheduledTasks = computed(() => [
+  {
+    id: 'provider-checkin',
+    icon: CalendarCheck,
+    title: 'Provider 自动签到',
+    description: '自动执行已配置 Provider 的签到任务',
+    enabled: systemConfig.value.enable_provider_checkin,
+    hour: checkinHour.value,
+    minute: checkinMinute.value,
+    hourSelectOpen: checkinHourSelectOpen,
+    minuteSelectOpen: checkinMinuteSelectOpen,
+    updateTime: updateCheckinTime,
+    hasChanges: hasCheckinTimeChanged.value,
+    loading: checkinConfigLoading.value,
+    onToggle: handleProviderCheckinToggle,
+    onSave: handleCheckinTimeSave,
+  },
+  {
+    id: 'user-quota-reset',
+    icon: RotateCcw,
+    title: '用户配额自动重置',
+    description: '定时将用户已使用配额重置为零',
+    enabled: systemConfig.value.enable_user_quota_reset,
+    hour: userQuotaResetHour.value,
+    minute: userQuotaResetMinute.value,
+    hourSelectOpen: userQuotaResetHourSelectOpen,
+    minuteSelectOpen: userQuotaResetMinuteSelectOpen,
+    updateTime: updateUserQuotaResetTime,
+    hasChanges: hasQuotaResetConfigChanged.value,
+    loading: quotaResetConfigLoading.value,
+    onToggle: handleUserQuotaResetToggle,
+    onSave: handleQuotaResetConfigSave,
+  },
+])
 
-  if (hasCheckinTimeChanged.value) {
-    const newTime = systemConfig.value.provider_checkin_time
-    if (!newTime || !/^\d{2}:\d{2}$/.test(newTime)) {
-      error('请输入有效的时间格式 (HH:MM)')
-      return
-    }
-    configItems.push({
-      key: 'provider_checkin_time',
-      value: newTime,
-      description: 'Provider 自动签到执行时间（HH:MM 格式）',
-      onSuccess: () => {
-        previousCheckinTime.value = newTime
-      }
-    })
+// Provider 签到时间保存
+async function handleCheckinTimeSave() {
+  const newTime = systemConfig.value.provider_checkin_time
+  if (!newTime || !/^\d{2}:\d{2}$/.test(newTime)) {
+    error('请输入有效的时间格式 (HH:MM)')
+    return
   }
+
+  checkinConfigLoading.value = true
+  try {
+    await adminApi.updateSystemConfig(
+      'provider_checkin_time',
+      newTime,
+      'Provider 自动签到执行时间（HH:MM 格式）'
+    )
+    previousCheckinTime.value = newTime
+    success(`签到时间已设置为 ${newTime}`)
+  } catch (err) {
+    error('保存签到时间失败')
+    log.error('保存签到时间失败:', err)
+  } finally {
+    checkinConfigLoading.value = false
+  }
+}
+
+// 用户配额重置配置保存
+async function handleQuotaResetConfigSave() {
+  const configItems: Array<{ key: string, value: any, description: string, onSuccess: () => void }> = []
 
   if (hasUserQuotaResetTimeChanged.value) {
     const newTime = systemConfig.value.user_quota_reset_time
@@ -1550,7 +1557,7 @@ async function handleSchedulerConfigSave() {
 
   if (configItems.length === 0) return
 
-  schedulerConfigLoading.value = true
+  quotaResetConfigLoading.value = true
   const failedKeys: string[] = []
 
   try {
@@ -1560,7 +1567,7 @@ async function handleSchedulerConfigSave() {
         item.onSuccess()
       } catch (err) {
         failedKeys.push(item.key)
-        log.error(`保存定时任务配置失败: ${item.key}`, err)
+        log.error(`保存配额重置配置失败: ${item.key}`, err)
       }
     }
 
@@ -1569,9 +1576,9 @@ async function handleSchedulerConfigSave() {
       return
     }
 
-    success('定时任务配置已保存')
+    success('配额重置配置已保存')
   } finally {
-    schedulerConfigLoading.value = false
+    quotaResetConfigLoading.value = false
   }
 }
 
