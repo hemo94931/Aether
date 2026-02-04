@@ -396,6 +396,11 @@ class MaintenanceScheduler:
                 # 检查配置开关
                 if not SystemConfigService.get_config(db, "enable_oauth_token_refresh", True):
                     logger.info("OAuth Token 自动刷新已禁用，不调度任务")
+                    # 移除已调度的 job（如果存在）
+                    try:
+                        scheduler.remove_job(job_id)
+                    except Exception:
+                        pass
                     return
                 # 查找所有活跃的 OAuth 类型 Key
                 oauth_keys = (
@@ -966,9 +971,7 @@ class MaintenanceScheduler:
                     days_since_reset = (now_local.date() - last_local_date).days
 
                     if days_since_reset < 0:
-                        logger.warning(
-                            "user_quota_last_reset_at 在未来，跳过本次用户配额自动重置"
-                        )
+                        logger.warning("user_quota_last_reset_at 在未来，跳过本次用户配额自动重置")
                         should_run = False
                     elif days_since_reset < interval_days:
                         logger.info(
@@ -1006,7 +1009,9 @@ class MaintenanceScheduler:
                 "用户配额自动重置的上次执行时间（UTC，内部使用）",
             )
 
-            logger.info(f"用户配额自动重置完成: interval_days={interval_days}, 重置用户数={reset_count}")
+            logger.info(
+                f"用户配额自动重置完成: interval_days={interval_days}, 重置用户数={reset_count}"
+            )
 
         except Exception as e:
             logger.exception(f"用户配额自动重置任务执行失败: {e}")

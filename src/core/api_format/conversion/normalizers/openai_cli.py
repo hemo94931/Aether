@@ -12,6 +12,7 @@ OpenAI CLI / Responses Normalizer (OPENAI_CLI)
 
 import json
 import time
+from collections.abc import Callable
 from typing import Any
 
 from src.core.api_format.conversion.field_mappings import (
@@ -318,142 +319,169 @@ class OpenAICliNormalizer(FormatNormalizer):
                 ss.setdefault("text_block_stopped", False)
                 events.append(MessageStartEvent(message_id=msg_id, model=model))
 
-        # response.created：响应创建事件，message_start 已在上面处理
-        if etype == "response.created":
+        handler = self._CHUNK_HANDLERS.get(etype)
+        if handler is not None:
+            events.extend(handler(self, chunk, state, ss))
             return events
 
-        # 文本增量：response.output_text.delta
-        if etype in ("response.output_text.delta", "response.outtext.delta"):
-            delta = chunk.get("delta")
-            delta_text = ""
-            if isinstance(delta, str):
-                delta_text = delta
-            elif isinstance(delta, dict) and isinstance(delta.get("text"), str):
-                delta_text = str(delta.get("text") or "")
-
-            if delta_text:
-                if not ss.get("text_block_started"):
-                    ss["text_block_started"] = True
-                    events.append(
-                        ContentBlockStartEvent(block_index=0, block_type=ContentType.TEXT)
-                    )
-                events.append(ContentDeltaEvent(block_index=0, text_delta=delta_text))
-            return events
-
-        # 文本完成：response.output_text.done（可选）
-        if etype == "response.output_text.done":
-            if ss.get("text_block_started") and not ss.get("text_block_stopped"):
-                ss["text_block_stopped"] = True
-                events.append(ContentBlockStopEvent(block_index=0))
-            return events
-
-        # 完成：response.completed（包含 usage）
-        if etype == "response.completed":
-            resp_obj = chunk.get("response")
-            resp_obj = resp_obj if isinstance(resp_obj, dict) else {}
-            usage = self._usage_to_internal(resp_obj.get("usage") or chunk.get("usage"))
-
-            if ss.get("text_block_started") and not ss.get("text_block_stopped"):
-                ss["text_block_stopped"] = True
-                events.append(ContentBlockStopEvent(block_index=0))
-
-            events.append(MessageStopEvent(stop_reason=StopReason.END_TURN, usage=usage))
-            return events
-
-        # 失败：response.failed（最佳努力）
-        if etype == "response.failed":
-            try:
-                events.append(ErrorEvent(error=self.error_to_internal(chunk)))
-            except Exception:
-                pass
-            return events
-
-        # response.in_progress：状态更新，不产生内容事件
-        if etype == "response.in_progress":
-            # 更新 state 中的元数据（如果有）
-            # 注意：model 保持初始值（客户端请求的模型），不被上游覆盖
-            resp_obj = chunk.get("response")
-            if isinstance(resp_obj, dict):
-                if resp_obj.get("id"):
-                    state.message_id = str(resp_obj.get("id"))
-                # 仅在 model 为空时才用上游值
-                if not state.model and resp_obj.get("model"):
-                    state.model = str(resp_obj.get("model"))
-            return []
-
-        # response.output_item.added：新输出项添加（如 message、function_call 等）
-        if etype == "response.output_item.added":
-            item = chunk.get("item")
-            if isinstance(item, dict):
-                item_type = item.get("type")
-                # function_call 输出项
-                if item_type == "function_call":
-                    if not ss.get("tool_block_started"):
-                        ss["tool_block_started"] = True
-                        ss["current_tool_id"] = item.get("call_id") or item.get("id") or ""
-                        ss["current_tool_name"] = item.get("name") or ""
-                        events.append(
-                            ContentBlockStartEvent(
-                                block_index=ss.get("block_index", 0),
-                                block_type=ContentType.TOOL_USE,
-                                extra={
-                                    "tool_id": ss["current_tool_id"],
-                                    "tool_name": ss["current_tool_name"],
-                                },
-                            )
-                        )
-                        ss["block_index"] = ss.get("block_index", 0) + 1
-                # message 输出项
-                elif item_type == "message":
-                    # 通常在 response.created 时已处理，这里可以忽略或更新状态
-                    pass
-            return events
-
-        # response.output_item.done：输出项完成
-        if etype == "response.output_item.done":
-            item = chunk.get("item")
-            if isinstance(item, dict):
-                item_type = item.get("type")
-                if item_type == "function_call" and ss.get("tool_block_started"):
-                    ss["tool_block_started"] = False
-                    events.append(ContentBlockStopEvent(block_index=ss.get("block_index", 1) - 1))
-            return events
-
-        # response.function_call_arguments.delta：工具调用参数增量
-        if etype == "response.function_call_arguments.delta":
-            delta = chunk.get("delta") or ""
-            if delta:
-                events.append(
-                    ToolCallDeltaEvent(
-                        block_index=ss.get("block_index", 1) - 1,
-                        tool_id=ss.get("current_tool_id", ""),
-                        input_delta=delta,
-                    )
-                )
-            return events
-
-        # response.function_call_arguments.done：工具调用参数完成
-        if etype == "response.function_call_arguments.done":
-            # 参数已完整，不产生额外事件
-            return []
-
-        # response.content_part.added / response.content_part.done：内容部分事件
-        if etype in ("response.content_part.added", "response.content_part.done"):
-            # 通常伴随 output_text 事件，这里可以忽略
-            return []
-
-        # response.reasoning_summary_text.delta：推理摘要增量
-        if etype == "response.reasoning_summary_text.delta":
-            # 保留为 UnknownStreamEvent，让下游决定是否使用
-            return [UnknownStreamEvent(raw_type=etype, payload=chunk)]
-
-        # response.reasoning_summary_text.done：推理摘要完成
-        if etype == "response.reasoning_summary_text.done":
-            return [UnknownStreamEvent(raw_type=etype, payload=chunk)]
-
+        # 未匹配的事件类型
         if etype:
-            return [UnknownStreamEvent(raw_type=etype, payload=chunk)]
-        return [UnknownStreamEvent(raw_type="unknown", payload=chunk)]
+            return events + [UnknownStreamEvent(raw_type=etype, payload=chunk)]
+        return events + [UnknownStreamEvent(raw_type="unknown", payload=chunk)]
+
+    def _handle_response_created(
+        self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
+    ) -> list[InternalStreamEvent]:
+        # message_start 已在主方法中处理
+        return []
+
+    def _handle_output_text_delta(
+        self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
+    ) -> list[InternalStreamEvent]:
+        events: list[InternalStreamEvent] = []
+        delta = chunk.get("delta")
+        delta_text = ""
+        if isinstance(delta, str):
+            delta_text = delta
+        elif isinstance(delta, dict) and isinstance(delta.get("text"), str):
+            delta_text = str(delta.get("text") or "")
+
+        if delta_text:
+            if not ss.get("text_block_started"):
+                ss["text_block_started"] = True
+                events.append(ContentBlockStartEvent(block_index=0, block_type=ContentType.TEXT))
+            events.append(ContentDeltaEvent(block_index=0, text_delta=delta_text))
+        return events
+
+    def _handle_output_text_done(
+        self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
+    ) -> list[InternalStreamEvent]:
+        events: list[InternalStreamEvent] = []
+        if ss.get("text_block_started") and not ss.get("text_block_stopped"):
+            ss["text_block_stopped"] = True
+            events.append(ContentBlockStopEvent(block_index=0))
+        return events
+
+    def _handle_response_completed(
+        self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
+    ) -> list[InternalStreamEvent]:
+        events: list[InternalStreamEvent] = []
+        resp_obj = chunk.get("response")
+        resp_obj = resp_obj if isinstance(resp_obj, dict) else {}
+        usage = self._usage_to_internal(resp_obj.get("usage") or chunk.get("usage"))
+
+        if ss.get("text_block_started") and not ss.get("text_block_stopped"):
+            ss["text_block_stopped"] = True
+            events.append(ContentBlockStopEvent(block_index=0))
+
+        events.append(MessageStopEvent(stop_reason=StopReason.END_TURN, usage=usage))
+        return events
+
+    def _handle_response_failed(
+        self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
+    ) -> list[InternalStreamEvent]:
+        events: list[InternalStreamEvent] = []
+        try:
+            events.append(ErrorEvent(error=self.error_to_internal(chunk)))
+        except Exception:
+            pass
+        return events
+
+    def _handle_response_in_progress(
+        self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
+    ) -> list[InternalStreamEvent]:
+        # 更新 state 中的元数据（如果有）
+        # 注意：model 保持初始值（客户端请求的模型），不被上游覆盖
+        resp_obj = chunk.get("response")
+        if isinstance(resp_obj, dict):
+            if resp_obj.get("id"):
+                state.message_id = str(resp_obj.get("id"))
+            # 仅在 model 为空时才用上游值
+            if not state.model and resp_obj.get("model"):
+                state.model = str(resp_obj.get("model"))
+        return []
+
+    def _handle_output_item_added(
+        self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
+    ) -> list[InternalStreamEvent]:
+        events: list[InternalStreamEvent] = []
+        item = chunk.get("item")
+        if isinstance(item, dict):
+            item_type = item.get("type")
+            if item_type == "function_call":
+                if not ss.get("tool_block_started"):
+                    ss["tool_block_started"] = True
+                    ss["current_tool_id"] = item.get("call_id") or item.get("id") or ""
+                    ss["current_tool_name"] = item.get("name") or ""
+                    events.append(
+                        ContentBlockStartEvent(
+                            block_index=ss.get("block_index", 0),
+                            block_type=ContentType.TOOL_USE,
+                            extra={
+                                "tool_id": ss["current_tool_id"],
+                                "tool_name": ss["current_tool_name"],
+                            },
+                        )
+                    )
+                    ss["block_index"] = ss.get("block_index", 0) + 1
+        return events
+
+    def _handle_output_item_done(
+        self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
+    ) -> list[InternalStreamEvent]:
+        events: list[InternalStreamEvent] = []
+        item = chunk.get("item")
+        if isinstance(item, dict):
+            item_type = item.get("type")
+            if item_type == "function_call" and ss.get("tool_block_started"):
+                ss["tool_block_started"] = False
+                events.append(ContentBlockStopEvent(block_index=ss.get("block_index", 1) - 1))
+        return events
+
+    def _handle_function_call_delta(
+        self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
+    ) -> list[InternalStreamEvent]:
+        events: list[InternalStreamEvent] = []
+        delta = chunk.get("delta") or ""
+        if delta:
+            events.append(
+                ToolCallDeltaEvent(
+                    block_index=ss.get("block_index", 1) - 1,
+                    tool_id=ss.get("current_tool_id", ""),
+                    input_delta=delta,
+                )
+            )
+        return events
+
+    def _handle_noop(
+        self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
+    ) -> list[InternalStreamEvent]:
+        return []
+
+    def _handle_as_unknown(
+        self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
+    ) -> list[InternalStreamEvent]:
+        etype = str(chunk.get("type") or "unknown")
+        return [UnknownStreamEvent(raw_type=etype, payload=chunk)]
+
+    # 事件类型 -> 处理器映射表
+    _CHUNK_HANDLERS: dict[str, Callable[..., list[InternalStreamEvent]]] = {
+        "response.created": _handle_response_created,
+        "response.output_text.delta": _handle_output_text_delta,
+        "response.outtext.delta": _handle_output_text_delta,
+        "response.output_text.done": _handle_output_text_done,
+        "response.completed": _handle_response_completed,
+        "response.failed": _handle_response_failed,
+        "response.in_progress": _handle_response_in_progress,
+        "response.output_item.added": _handle_output_item_added,
+        "response.output_item.done": _handle_output_item_done,
+        "response.function_call_arguments.delta": _handle_function_call_delta,
+        "response.function_call_arguments.done": _handle_noop,
+        "response.content_part.added": _handle_noop,
+        "response.content_part.done": _handle_noop,
+        "response.reasoning_summary_text.delta": _handle_as_unknown,
+        "response.reasoning_summary_text.done": _handle_as_unknown,
+    }
 
     def stream_event_from_internal(
         self,
@@ -461,264 +489,256 @@ class OpenAICliNormalizer(FormatNormalizer):
         state: StreamState,
     ) -> list[dict[str, Any]]:
         ss = state.substate(self.FORMAT_ID)
-        out: list[dict[str, Any]] = []
-
-        def event_block(payload: dict[str, Any]) -> dict[str, Any]:
-            # OpenAI Responses SSE 的 payload 通常自带 type 字段；这里强制保证
-            return payload
 
         if isinstance(event, MessageStartEvent):
-            state.message_id = event.message_id or state.message_id or "resp_stream"
-            # 保留初始化时设置的 model（客户端请求的模型），仅在空时用事件值
-            if not state.model:
-                state.model = event.model or ""
-            ss.setdefault("collected_text", "")
-            ss.setdefault("tool_calls", {})
-            ss.setdefault("tool_blocks", {})
-            ss.setdefault("tool_output_index", {})
-            ss.setdefault("output_order", [])
-            ss.setdefault("message_output_index", None)
-            ss.setdefault("message_output_started", False)
-            ss.setdefault("text_started", False)
-            ss.setdefault("next_output_index", 0)
-            ss.setdefault("sent_in_progress", False)
-            response_obj = {
-                "id": state.message_id,
-                "object": "response",
-                "created": int(time.time()),
-                "model": state.model,
-                "status": "in_progress",
-                "output": [],
-            }
-            out.append(
-                event_block(
-                    {
-                        "type": "response.created",
-                        "response": response_obj,
-                    }
-                )
-            )
-            # OpenAI Responses API 常见的 in_progress 事件（可选，最佳努力）
-            if not ss.get("sent_in_progress"):
-                ss["sent_in_progress"] = True
-                out.append(event_block({"type": "response.in_progress", "response": response_obj}))
-            return out
-
+            return self._emit_message_start(event, state, ss)
         if isinstance(event, ContentBlockStartEvent):
-            # 工具调用块：输出 function_call 添加事件
-            if event.block_type == ContentType.TOOL_USE:
-                tool_id = event.tool_id or ""
-                tool_name = event.tool_name or ""
-                output_index = int(ss.get("next_output_index") or 0)
-                ss["next_output_index"] = output_index + 1
-                if tool_id:
-                    tool_calls = ss.setdefault("tool_calls", {})
-                    tool_calls.setdefault(tool_id, {"name": tool_name, "args": ""})
-                    output_order = ss.setdefault("output_order", [])
-                    output_order.append(
-                        {"kind": "tool", "id": tool_id, "output_index": output_index}
-                    )
-                    ss.setdefault("tool_blocks", {})[event.block_index] = tool_id
-                    ss.setdefault("tool_output_index", {})[tool_id] = output_index
-                out.append(
-                    event_block(
-                        {
-                            "type": "response.output_item.added",
-                            "output_index": output_index,
-                            "item": {
-                                "type": "function_call",
-                                "call_id": tool_id,
-                                "id": tool_id or f"call_{output_index}",
-                                "name": tool_name,
-                                "status": "in_progress",
-                                "arguments": "",
-                            },
-                        }
-                    )
-                )
-                return out
-
+            return self._emit_content_block_start(event, state, ss)
         if isinstance(event, ToolCallDeltaEvent):
-            tool_id = event.tool_id or ss.get("tool_blocks", {}).get(event.block_index, "")
+            return self._emit_tool_call_delta(event, state, ss)
+        if isinstance(event, ContentBlockStopEvent):
+            return self._emit_content_block_stop(event, state, ss)
+        if isinstance(event, ContentDeltaEvent):
+            return self._emit_content_delta(event, state, ss)
+        if isinstance(event, MessageStopEvent):
+            return self._emit_message_stop(event, state, ss)
+        if isinstance(event, ErrorEvent):
+            return self._emit_error(event, state, ss)
+        # 其他事件：Responses SSE 无直接对应，跳过
+        return []
+
+    def _emit_message_start(
+        self, event: MessageStartEvent, state: StreamState, ss: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        state.message_id = event.message_id or state.message_id or "resp_stream"
+        # 保留初始化时设置的 model（客户端请求的模型），仅在空时用事件值
+        if not state.model:
+            state.model = event.model or ""
+        ss.setdefault("collected_text", "")
+        ss.setdefault("tool_calls", {})
+        ss.setdefault("tool_blocks", {})
+        ss.setdefault("tool_output_index", {})
+        ss.setdefault("output_order", [])
+        ss.setdefault("message_output_index", None)
+        ss.setdefault("message_output_started", False)
+        ss.setdefault("text_started", False)
+        ss.setdefault("next_output_index", 0)
+        ss.setdefault("sent_in_progress", False)
+        response_obj = {
+            "id": state.message_id,
+            "object": "response",
+            "created": int(time.time()),
+            "model": state.model,
+            "status": "in_progress",
+            "output": [],
+        }
+        out.append({"type": "response.created", "response": response_obj})
+        # OpenAI Responses API 常见的 in_progress 事件（可选，最佳努力）
+        if not ss.get("sent_in_progress"):
+            ss["sent_in_progress"] = True
+            out.append({"type": "response.in_progress", "response": response_obj})
+        return out
+
+    def _emit_content_block_start(
+        self, event: ContentBlockStartEvent, state: StreamState, ss: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        # 工具调用块：输出 function_call 添加事件
+        if event.block_type == ContentType.TOOL_USE:
+            tool_id = event.tool_id or ""
+            tool_name = event.tool_name or ""
+            output_index = int(ss.get("next_output_index") or 0)
+            ss["next_output_index"] = output_index + 1
             if tool_id:
                 tool_calls = ss.setdefault("tool_calls", {})
-                entry = tool_calls.setdefault(tool_id, {"name": "", "args": ""})
-                entry["args"] = str(entry.get("args") or "") + (event.input_delta or "")
-                output_index = ss.get("tool_output_index", {}).get(tool_id, event.block_index)
-                out.append(
-                    event_block(
-                        {
-                            "type": "response.function_call_arguments.delta",
-                            "delta": event.input_delta,
-                            "item_id": tool_id,
-                            "output_index": output_index,
-                        }
-                    )
-                )
-            return out
-
-        if isinstance(event, ContentBlockStopEvent):
-            tool_blocks = ss.get("tool_blocks", {})
-            tool_id = (
-                tool_blocks.pop(event.block_index, None) if isinstance(tool_blocks, dict) else None
+                tool_calls.setdefault(tool_id, {"name": tool_name, "args": ""})
+                output_order = ss.setdefault("output_order", [])
+                output_order.append({"kind": "tool", "id": tool_id, "output_index": output_index})
+                ss.setdefault("tool_blocks", {})[event.block_index] = tool_id
+                ss.setdefault("tool_output_index", {})[tool_id] = output_index
+            out.append(
+                {
+                    "type": "response.output_item.added",
+                    "output_index": output_index,
+                    "item": {
+                        "type": "function_call",
+                        "call_id": tool_id,
+                        "id": tool_id or f"call_{output_index}",
+                        "name": tool_name,
+                        "status": "in_progress",
+                        "arguments": "",
+                    },
+                }
             )
-            if tool_id:
-                tool_calls = ss.get("tool_calls", {})
-                entry = tool_calls.get(tool_id, {})
-                output_index = ss.get("tool_output_index", {}).get(tool_id, event.block_index)
-                out.append(
-                    event_block(
-                        {
-                            "type": "response.output_item.done",
-                            "output_index": output_index,
-                            "item": {
-                                "type": "function_call",
-                                "call_id": tool_id,
-                                "id": tool_id,
-                                "name": entry.get("name") or "",
-                                "arguments": entry.get("args") or "",
-                                "status": "completed",
-                            },
-                        }
-                    )
-                )
-            return out
-
-        if isinstance(event, ContentDeltaEvent):
-            if event.text_delta:
-                if not ss.get("message_output_started"):
-                    output_index = int(ss.get("next_output_index") or 0)
-                    ss["next_output_index"] = output_index + 1
-                    ss["message_output_index"] = output_index
-                    ss["message_output_started"] = True
-                    message_id = f"msg_{state.message_id or 'stream'}"
-                    ss.setdefault("output_order", []).append(
-                        {"kind": "message", "id": message_id, "output_index": output_index}
-                    )
-                    out.append(
-                        event_block(
-                            {
-                                "type": "response.output_item.added",
-                                "output_index": output_index,
-                                "item": {
-                                    "type": "message",
-                                    "id": message_id,
-                                    "role": "assistant",
-                                    "status": "in_progress",
-                                    "content": [],
-                                },
-                            }
-                        )
-                    )
-                ss["text_started"] = True
-                ss["collected_text"] = str(ss.get("collected_text") or "") + event.text_delta
-                out.append(
-                    event_block(
-                        {
-                            "type": "response.output_text.delta",
-                            "delta": event.text_delta,
-                        }
-                    )
-                )
-            return out
-
-        if isinstance(event, MessageStopEvent):
-            final_text = str(ss.get("collected_text") or "")
-            message_id = f"msg_{state.message_id or 'stream'}"
-            message_item = {
-                "type": "message",
-                "id": message_id,
-                "role": "assistant",
-                "status": "completed",
-                "content": ([{"type": "output_text", "text": final_text}] if final_text else []),
-            }
-            if ss.get("text_started"):
-                out.append(
-                    event_block(
-                        {
-                            "type": "response.output_text.done",
-                            "text": final_text,
-                        }
-                    )
-                )
-            if ss.get("message_output_started"):
-                output_index = ss.get("message_output_index") or 0
-                out.append(
-                    event_block(
-                        {
-                            "type": "response.output_item.done",
-                            "output_index": output_index,
-                            "item": message_item,
-                        }
-                    )
-                )
-            response_obj = self.response_from_internal(
-                InternalResponse(
-                    id=state.message_id or "resp",
-                    model=state.model or "",
-                    content=[TextBlock(text=final_text)] if final_text else [],
-                    stop_reason=event.stop_reason or StopReason.END_TURN,
-                    usage=event.usage or UsageInfo(),
-                )
-            )
-            # 将工具调用添加到 output（最佳努力）
-            tool_calls = ss.get("tool_calls", {})
-            output_order = ss.get("output_order", [])
-            output_items: list[dict[str, Any]] = []
-            used_tool_ids: set[str] = set()
-            if isinstance(output_order, list) and output_order:
-                for entry in output_order:
-                    if not isinstance(entry, dict):
-                        continue
-                    if entry.get("kind") == "message":
-                        if message_item.get("content"):
-                            output_items.append(message_item)
-                    elif entry.get("kind") == "tool":
-                        tool_id = entry.get("id")
-                        if not isinstance(tool_id, str) or not tool_id:
-                            continue
-                        used_tool_ids.add(tool_id)
-                        tool_entry = (
-                            tool_calls.get(tool_id) if isinstance(tool_calls, dict) else None
-                        )
-                        if isinstance(tool_entry, dict):
-                            output_items.append(
-                                {
-                                    "type": "function_call",
-                                    "call_id": tool_id,
-                                    "id": tool_id,
-                                    "name": tool_entry.get("name") or "",
-                                    "arguments": tool_entry.get("args") or "",
-                                    "status": "completed",
-                                }
-                            )
-            if isinstance(tool_calls, dict):
-                for tool_id, tool_entry in tool_calls.items():
-                    if tool_id in used_tool_ids or not isinstance(tool_entry, dict):
-                        continue
-                    output_items.append(
-                        {
-                            "type": "function_call",
-                            "call_id": tool_id,
-                            "id": tool_id,
-                            "name": tool_entry.get("name") or "",
-                            "arguments": tool_entry.get("args") or "",
-                            "status": "completed",
-                        }
-                    )
-            if output_items:
-                response_obj["output"] = output_items
-            out.append(event_block({"type": "response.completed", "response": response_obj}))
-            return out
-
-        if isinstance(event, ErrorEvent):
-            err_payload = self.error_from_internal(event.error)
-            err_payload["type"] = "response.failed"
-            out.append(event_block(err_payload))
-            return out
-
-        # 其他事件：Responses SSE 无直接对应，跳过
         return out
+
+    def _emit_tool_call_delta(
+        self, event: ToolCallDeltaEvent, state: StreamState, ss: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        tool_id = event.tool_id or ss.get("tool_blocks", {}).get(event.block_index, "")
+        if tool_id:
+            tool_calls = ss.setdefault("tool_calls", {})
+            entry = tool_calls.setdefault(tool_id, {"name": "", "args": ""})
+            entry["args"] = str(entry.get("args") or "") + (event.input_delta or "")
+            output_index = ss.get("tool_output_index", {}).get(tool_id, event.block_index)
+            out.append(
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "delta": event.input_delta,
+                    "item_id": tool_id,
+                    "output_index": output_index,
+                }
+            )
+        return out
+
+    def _emit_content_block_stop(
+        self, event: ContentBlockStopEvent, state: StreamState, ss: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        tool_blocks = ss.get("tool_blocks", {})
+        tool_id = (
+            tool_blocks.pop(event.block_index, None) if isinstance(tool_blocks, dict) else None
+        )
+        if tool_id:
+            tool_calls = ss.get("tool_calls", {})
+            entry = tool_calls.get(tool_id, {})
+            output_index = ss.get("tool_output_index", {}).get(tool_id, event.block_index)
+            out.append(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": output_index,
+                    "item": {
+                        "type": "function_call",
+                        "call_id": tool_id,
+                        "id": tool_id,
+                        "name": entry.get("name") or "",
+                        "arguments": entry.get("args") or "",
+                        "status": "completed",
+                    },
+                }
+            )
+        return out
+
+    def _emit_content_delta(
+        self, event: ContentDeltaEvent, state: StreamState, ss: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        if event.text_delta:
+            if not ss.get("message_output_started"):
+                output_index = int(ss.get("next_output_index") or 0)
+                ss["next_output_index"] = output_index + 1
+                ss["message_output_index"] = output_index
+                ss["message_output_started"] = True
+                message_id = f"msg_{state.message_id or 'stream'}"
+                ss.setdefault("output_order", []).append(
+                    {"kind": "message", "id": message_id, "output_index": output_index}
+                )
+                out.append(
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": output_index,
+                        "item": {
+                            "type": "message",
+                            "id": message_id,
+                            "role": "assistant",
+                            "status": "in_progress",
+                            "content": [],
+                        },
+                    }
+                )
+            ss["text_started"] = True
+            ss["collected_text"] = str(ss.get("collected_text") or "") + event.text_delta
+            out.append({"type": "response.output_text.delta", "delta": event.text_delta})
+        return out
+
+    def _emit_message_stop(
+        self, event: MessageStopEvent, state: StreamState, ss: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        final_text = str(ss.get("collected_text") or "")
+        message_id = f"msg_{state.message_id or 'stream'}"
+        message_item = {
+            "type": "message",
+            "id": message_id,
+            "role": "assistant",
+            "status": "completed",
+            "content": ([{"type": "output_text", "text": final_text}] if final_text else []),
+        }
+        if ss.get("text_started"):
+            out.append({"type": "response.output_text.done", "text": final_text})
+        if ss.get("message_output_started"):
+            output_index = ss.get("message_output_index") or 0
+            out.append(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": output_index,
+                    "item": message_item,
+                }
+            )
+        response_obj = self.response_from_internal(
+            InternalResponse(
+                id=state.message_id or "resp",
+                model=state.model or "",
+                content=[TextBlock(text=final_text)] if final_text else [],
+                stop_reason=event.stop_reason or StopReason.END_TURN,
+                usage=event.usage or UsageInfo(),
+            )
+        )
+        # 将工具调用添加到 output（最佳努力）
+        output_items = self._build_final_output_items(message_item, ss)
+        if output_items:
+            response_obj["output"] = output_items
+        out.append({"type": "response.completed", "response": response_obj})
+        return out
+
+    def _build_final_output_items(
+        self, message_item: dict[str, Any], ss: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        tool_calls = ss.get("tool_calls", {})
+        output_order = ss.get("output_order", [])
+        output_items: list[dict[str, Any]] = []
+        used_tool_ids: set[str] = set()
+        if isinstance(output_order, list) and output_order:
+            for entry in output_order:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("kind") == "message":
+                    if message_item.get("content"):
+                        output_items.append(message_item)
+                elif entry.get("kind") == "tool":
+                    tool_id = entry.get("id")
+                    if not isinstance(tool_id, str) or not tool_id:
+                        continue
+                    used_tool_ids.add(tool_id)
+                    tool_entry = tool_calls.get(tool_id) if isinstance(tool_calls, dict) else None
+                    if isinstance(tool_entry, dict):
+                        output_items.append(self._tool_call_item(tool_id, tool_entry))
+        if isinstance(tool_calls, dict):
+            for tool_id, tool_entry in tool_calls.items():
+                if tool_id in used_tool_ids or not isinstance(tool_entry, dict):
+                    continue
+                output_items.append(self._tool_call_item(tool_id, tool_entry))
+        return output_items
+
+    @staticmethod
+    def _tool_call_item(tool_id: str, entry: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "function_call",
+            "call_id": tool_id,
+            "id": tool_id,
+            "name": entry.get("name") or "",
+            "arguments": entry.get("args") or "",
+            "status": "completed",
+        }
+
+    def _emit_error(
+        self, event: ErrorEvent, state: StreamState, ss: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        err_payload = self.error_from_internal(event.error)
+        err_payload["type"] = "response.failed"
+        return [err_payload]
 
     # =========================
     # Error conversion
@@ -851,110 +871,104 @@ class OpenAICliNormalizer(FormatNormalizer):
         for item in input_data:
             if not isinstance(item, dict):
                 continue
+            msg = self._parse_input_item(item)
+            if msg is not None:
+                messages.append(msg)
+        return messages
 
-            item_type = str(item.get("type") or "")
+    def _parse_input_item(self, item: dict[str, Any]) -> InternalMessage | None:
+        item_type = str(item.get("type") or "")
 
-            # 标准 message（有 role 字段）
-            if item_type == "message" or item.get("role"):
-                role = self._role_from_value(item.get("role"))
-                blocks = self._responses_content_to_blocks(item.get("content"))
-                messages.append(
-                    InternalMessage(
-                        role=role,
-                        content=blocks,
-                        extra=self._extract_extra(item, {"type", "role", "content"}),
-                    )
+        # 标准 message（有 role 字段）
+        if item_type == "message" or item.get("role"):
+            return self._parse_message_item(item)
+        if item_type == "function_call":
+            return self._parse_function_call_item(item)
+        if item_type == "function_call_output":
+            return self._parse_function_call_output_item(item)
+        if item_type == "reasoning":
+            return self._parse_reasoning_item(item)
+
+        # 其他未知类型 -> 保留为 UnknownBlock
+        return InternalMessage(
+            role=Role.UNKNOWN,
+            content=[UnknownBlock(raw_type=item_type or "unknown", payload=item)],
+        )
+
+    def _parse_message_item(self, item: dict[str, Any]) -> InternalMessage:
+        role = self._role_from_value(item.get("role"))
+        blocks = self._responses_content_to_blocks(item.get("content"))
+        return InternalMessage(
+            role=role,
+            content=blocks,
+            extra=self._extract_extra(item, {"type", "role", "content"}),
+        )
+
+    def _parse_function_call_item(self, item: dict[str, Any]) -> InternalMessage:
+        tool_id = str(item.get("call_id") or item.get("id") or "")
+        tool_name = str(item.get("name") or "")
+        args_raw = item.get("arguments") or "{}"
+        try:
+            tool_input = (
+                json.loads(args_raw)
+                if isinstance(args_raw, str)
+                else (args_raw if isinstance(args_raw, dict) else {})
+            )
+        except (json.JSONDecodeError, TypeError):
+            tool_input = {"_raw": args_raw}
+        tool_block = ToolUseBlock(
+            tool_id=tool_id,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            extra={
+                "openai_cli": self._extract_extra(
+                    item, {"type", "call_id", "id", "name", "arguments"}
                 )
-                continue
+            },
+        )
+        return InternalMessage(role=Role.ASSISTANT, content=[tool_block])
 
-            # function_call -> assistant 消息 + ToolUseBlock
-            if item_type == "function_call":
-                tool_id = str(item.get("call_id") or item.get("id") or "")
-                tool_name = str(item.get("name") or "")
-                args_raw = item.get("arguments") or "{}"
-                try:
-                    tool_input = (
-                        json.loads(args_raw)
-                        if isinstance(args_raw, str)
-                        else (args_raw if isinstance(args_raw, dict) else {})
-                    )
-                except (json.JSONDecodeError, TypeError):
-                    tool_input = {"_raw": args_raw}
-                tool_block = ToolUseBlock(
-                    tool_id=tool_id,
-                    tool_name=tool_name,
-                    tool_input=tool_input,
-                    extra={
-                        "openai_cli": self._extract_extra(
-                            item, {"type", "call_id", "id", "name", "arguments"}
-                        )
-                    },
-                )
-                messages.append(InternalMessage(role=Role.ASSISTANT, content=[tool_block]))
-                continue
+    def _parse_function_call_output_item(self, item: dict[str, Any]) -> InternalMessage:
+        tool_use_id = str(item.get("call_id") or item.get("id") or "")
+        output = item.get("output")
+        content_text = output if isinstance(output, str) else None
+        result_block = ToolResultBlock(
+            tool_use_id=tool_use_id,
+            output=output,
+            content_text=content_text,
+            extra={"openai_cli": self._extract_extra(item, {"type", "call_id", "id", "output"})},
+        )
+        return InternalMessage(role=Role.TOOL, content=[result_block])
 
-            # function_call_output -> tool 消息 + ToolResultBlock
-            if item_type == "function_call_output":
-                tool_use_id = str(item.get("call_id") or item.get("id") or "")
-                output = item.get("output")
-                # output 可能是字符串或结构化数据
-                content_text = output if isinstance(output, str) else None
-                result_block = ToolResultBlock(
-                    tool_use_id=tool_use_id,
-                    output=output,
-                    content_text=content_text,
-                    extra={
-                        "openai_cli": self._extract_extra(item, {"type", "call_id", "id", "output"})
-                    },
-                )
-                messages.append(InternalMessage(role=Role.TOOL, content=[result_block]))
-                continue
+    def _parse_reasoning_item(self, item: dict[str, Any]) -> InternalMessage:
+        summary_parts: list[str] = []
+        summary = item.get("summary")
+        if isinstance(summary, list):
+            for s in summary:
+                if isinstance(s, dict) and s.get("type") == "summary_text":
+                    text = s.get("text")
+                    if isinstance(text, str) and text:
+                        summary_parts.append(text)
+                elif isinstance(s, str) and s:
+                    summary_parts.append(s)
+        elif isinstance(summary, str) and summary:
+            summary_parts.append(summary)
 
-            # reasoning -> assistant 消息，提取 summary 作为文本
-            if item_type == "reasoning":
-                summary_parts: list[str] = []
-                summary = item.get("summary")
-                if isinstance(summary, list):
-                    for s in summary:
-                        if isinstance(s, dict) and s.get("type") == "summary_text":
-                            text = s.get("text")
-                            if isinstance(text, str) and text:
-                                summary_parts.append(text)
-                        elif isinstance(s, str) and s:
-                            summary_parts.append(s)
-                elif isinstance(summary, str) and summary:
-                    summary_parts.append(summary)
-
-                # 如果有 summary 文本，创建一个 UnknownBlock 保留原始结构
-                reasoning_blocks: list[ContentBlock] = []
-                if summary_parts:
-                    # 保留 reasoning 的 summary 作为 UnknownBlock，便于输出时决策
-                    reasoning_blocks.append(
-                        UnknownBlock(
-                            raw_type="reasoning",
-                            payload={"summary_text": "\n".join(summary_parts), "original": item},
-                        )
-                    )
-                else:
-                    reasoning_blocks.append(UnknownBlock(raw_type="reasoning", payload=item))
-                messages.append(
-                    InternalMessage(
-                        role=Role.ASSISTANT,
-                        content=reasoning_blocks,
-                        extra={"openai_cli": {"type": "reasoning"}},
-                    )
-                )
-                continue
-
-            # 其他未知类型 -> 保留为 UnknownBlock
-            messages.append(
-                InternalMessage(
-                    role=Role.UNKNOWN,
-                    content=[UnknownBlock(raw_type=item_type or "unknown", payload=item)],
+        reasoning_blocks: list[ContentBlock] = []
+        if summary_parts:
+            reasoning_blocks.append(
+                UnknownBlock(
+                    raw_type="reasoning",
+                    payload={"summary_text": "\n".join(summary_parts), "original": item},
                 )
             )
-
-        return messages
+        else:
+            reasoning_blocks.append(UnknownBlock(raw_type="reasoning", payload=item))
+        return InternalMessage(
+            role=Role.ASSISTANT,
+            content=reasoning_blocks,
+            extra={"openai_cli": {"type": "reasoning"}},
+        )
 
     def _responses_content_to_blocks(self, content: Any) -> list[ContentBlock]:
         if content is None:

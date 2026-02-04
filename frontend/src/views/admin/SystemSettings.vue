@@ -534,7 +534,7 @@
 
                 <!-- 右侧：时间选择器 + 保存按钮 -->
                 <div
-                  v-if="task.enabled"
+                  v-if="task.enabled && task.hasTimeConfig"
                   class="flex items-center gap-2 shrink-0"
                 >
                   <Clock class="w-4 h-4 text-muted-foreground" />
@@ -995,7 +995,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Download, Upload, CalendarCheck, RotateCcw, Clock, Check, Loader2 } from 'lucide-vue-next'
+import { Download, Upload, CalendarCheck, RotateCcw, RefreshCw, Clock, Check, Loader2 } from 'lucide-vue-next'
 import Button from '@/components/ui/button.vue'
 import Input from '@/components/ui/input.vue'
 import Label from '@/components/ui/label.vue'
@@ -1044,6 +1044,7 @@ interface SystemConfig {
   enable_user_quota_reset: boolean
   user_quota_reset_time: string
   user_quota_reset_interval_days: number
+  enable_oauth_token_refresh: boolean
 }
 
 const basicConfigLoading = ref(false)
@@ -1104,6 +1105,7 @@ const systemConfig = ref<SystemConfig>({
   enable_user_quota_reset: false,
   user_quota_reset_time: '05:00',
   user_quota_reset_interval_days: 1,
+  enable_oauth_token_refresh: true,
 })
 
 // 原始配置值（用于检测变动）
@@ -1215,6 +1217,7 @@ async function loadSystemConfig() {
       'enable_user_quota_reset',
       'user_quota_reset_time',
       'user_quota_reset_interval_days',
+      'enable_oauth_token_refresh',
     ]
 
     for (const key of configs) {
@@ -1423,6 +1426,28 @@ async function handleUserQuotaResetToggle(enabled: boolean) {
   }
 }
 
+async function handleOAuthTokenRefreshToggle(enabled: boolean) {
+  const previousValue = systemConfig.value.enable_oauth_token_refresh
+  systemConfig.value.enable_oauth_token_refresh = enabled
+  try {
+    await adminApi.updateSystemConfig(
+      'enable_oauth_token_refresh',
+      enabled,
+      '是否启用 OAuth Token 自动刷新任务'
+    )
+    success(enabled ? '已启用 OAuth Token 自动刷新' : '已禁用 OAuth Token 自动刷新')
+  } catch (err) {
+    error('保存配置失败')
+    log.error('保存 OAuth Token 自动刷新配置失败:', err)
+    // 回滚状态
+    systemConfig.value.enable_oauth_token_refresh = previousValue
+  }
+}
+
+// OAuth Token 刷新（无时间配置，占位 ref）
+const oauthRefreshHourSelectOpen = ref(false)
+const oauthRefreshMinuteSelectOpen = ref(false)
+
 // 用户配额重置时间相关
 const previousUserQuotaResetTime = ref('')
 const userQuotaResetHourSelectOpen = ref(false)
@@ -1465,6 +1490,7 @@ const scheduledTasks = computed(() => [
     title: 'Provider 自动签到',
     description: '自动执行已配置 Provider 的签到任务',
     enabled: systemConfig.value.enable_provider_checkin,
+    hasTimeConfig: true,
     hour: checkinHour.value,
     minute: checkinMinute.value,
     hourSelectOpen: checkinHourSelectOpen,
@@ -1481,6 +1507,7 @@ const scheduledTasks = computed(() => [
     title: '用户配额自动重置',
     description: '定时将用户已使用配额重置为零',
     enabled: systemConfig.value.enable_user_quota_reset,
+    hasTimeConfig: true,
     hour: userQuotaResetHour.value,
     minute: userQuotaResetMinute.value,
     hourSelectOpen: userQuotaResetHourSelectOpen,
@@ -1490,6 +1517,23 @@ const scheduledTasks = computed(() => [
     loading: quotaResetConfigLoading.value,
     onToggle: handleUserQuotaResetToggle,
     onSave: handleQuotaResetConfigSave,
+  },
+  {
+    id: 'oauth-token-refresh',
+    icon: RefreshCw,
+    title: 'OAuth Token 自动刷新',
+    description: '主动刷新即将过期的 OAuth Token（动态调度）',
+    enabled: systemConfig.value.enable_oauth_token_refresh,
+    hasTimeConfig: false,
+    hour: '',
+    minute: '',
+    hourSelectOpen: oauthRefreshHourSelectOpen,
+    minuteSelectOpen: oauthRefreshMinuteSelectOpen,
+    updateTime: () => {},
+    hasChanges: false,
+    loading: false,
+    onToggle: handleOAuthTokenRefreshToggle,
+    onSave: () => {},
   },
 ])
 

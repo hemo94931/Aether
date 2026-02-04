@@ -6,7 +6,7 @@
     size="md"
     @update:model-value="handleDialogUpdate"
   >
-    <div class="space-y-6">
+    <div class="space-y-5">
       <!-- 加载中 -->
       <div
         v-if="oauth.starting && !oauth.authorization_url"
@@ -21,22 +21,14 @@
       <!-- 授权流程 -->
       <template v-else-if="oauth.authorization_url">
         <!-- 步骤 1: 打开授权链接 -->
-        <div class="space-y-3">
-          <div class="flex items-center gap-2">
-            <div class="w-5 h-5 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-medium shrink-0">
-              1
-            </div>
-            <span class="text-sm font-medium">打开授权链接</span>
-          </div>
-          <p class="text-xs text-muted-foreground pl-7">
+        <div class="space-y-2">
+          <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            第一步 · 前往授权
+          </p>
+          <p class="text-xs text-muted-foreground">
             点击下方按钮在浏览器中完成登录授权
           </p>
-          <div class="ml-7 p-2.5 rounded-md bg-muted/50 border border-border/50">
-            <p class="text-xs font-mono text-muted-foreground break-all line-clamp-3 leading-relaxed">
-              {{ oauth.authorization_url }}
-            </p>
-          </div>
-          <div class="flex gap-2 pl-7">
+          <div class="flex gap-2 pt-1">
             <Button
               size="sm"
               :disabled="oauthBusy"
@@ -57,28 +49,26 @@
           </div>
         </div>
 
+        <Separator />
+
         <!-- 步骤 2: 粘贴回调地址 -->
-        <div class="space-y-3">
-          <div class="flex items-center gap-2">
-            <div class="w-5 h-5 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-xs font-medium shrink-0">
-              2
-            </div>
-            <span class="text-sm font-medium">粘贴回调地址</span>
-          </div>
-          <p class="text-xs text-muted-foreground pl-7">
+        <div class="space-y-2">
+          <p class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            第二步 · 粘贴回调
+          </p>
+          <p class="text-xs text-muted-foreground">
             授权完成后，复制浏览器地址栏的完整 URL 并粘贴到下方
           </p>
-          <div class="pl-7">
+          <div class="pt-1">
             <Textarea
               v-model="oauth.callback_url"
               :disabled="oauthBusy"
               placeholder="http://localhost:xxx/callback?code=..."
-              class="min-h-[80px] text-xs font-mono resize-none"
+              class="min-h-[80px] text-xs font-mono break-all !rounded-xl"
               spellcheck="false"
             />
           </div>
         </div>
-
       </template>
     </div>
 
@@ -93,7 +83,7 @@
         :disabled="!canCompleteOAuth"
         @click="handleCompleteOAuth"
       >
-        {{ oauth.completing ? '验证中...' : '完成授权' }}
+        {{ oauth.completing ? '验证中...' : '验证' }}
       </Button>
     </template>
   </Dialog>
@@ -101,7 +91,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Dialog, Button, Textarea } from '@/components/ui'
+import { Dialog, Button, Textarea, Separator } from '@/components/ui'
 import { UserPlus, Copy, ExternalLink } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'

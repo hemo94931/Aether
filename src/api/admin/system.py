@@ -634,6 +634,15 @@ class AdminSetSystemConfigAdapter(AdminApiAdapter):
             except Exception as e:
                 logger.warning(f"更新用户配额重置任务时间失败: {e}")
 
+        # 如果更新的是 OAuth Token 自动刷新开关，触发调度器重新计算
+        if self.key == "enable_oauth_token_refresh":
+            try:
+                from src.services.system.maintenance_scheduler import get_maintenance_scheduler
+
+                get_maintenance_scheduler().trigger_oauth_refresh_check()
+            except Exception as e:
+                logger.warning("触发 OAuth Token 刷新调度失败: {}", e)
+
         # 返回时不暴露加密后的值
         display_value = "********" if self.key in self.ENCRYPTED_KEYS else config.value
 

@@ -17,6 +17,7 @@ from src.core.api_format.conversion.normalizers.gemini_cli import GeminiCliNorma
 from src.core.api_format.conversion.normalizers.openai import OpenAINormalizer
 from src.core.api_format.conversion.normalizers.openai_cli import OpenAICliNormalizer
 from src.core.api_format.conversion.registry import FormatConversionRegistry
+from src.core.api_format.conversion.stream_events import UnknownStreamEvent
 from src.core.api_format.conversion.stream_state import StreamState
 
 
@@ -307,6 +308,36 @@ def test_stream_openai_cli_in_progress_event() -> None:
     events2 = reg.convert_stream_chunk(in_progress_chunk, "openai:cli", "claude:chat", state=state)
     # response.in_progress 不应产生任何事件
     assert events2 == []
+
+
+def test_stream_openai_cli_noop_and_unknown_events() -> None:
+    """覆盖 OpenAI CLI noop/unknown 事件处理器"""
+    normalizer = OpenAICliNormalizer()
+    state = StreamState()
+
+    # 先触发 message_start 初始化
+    normalizer.stream_chunk_to_internal(
+        {"type": "response.created", "response": {"id": "resp_789", "model": "gpt-5"}}, state
+    )
+
+    # noop 事件不应产生内部事件
+    assert (
+        normalizer.stream_chunk_to_internal({"type": "response.function_call_arguments.done"}, state)
+        == []
+    )
+    assert (
+        normalizer.stream_chunk_to_internal({"type": "response.content_part.added"}, state) == []
+    )
+    assert (
+        normalizer.stream_chunk_to_internal({"type": "response.content_part.done"}, state) == []
+    )
+
+    # unknown 事件应返回 UnknownStreamEvent
+    events = normalizer.stream_chunk_to_internal(
+        {"type": "response.reasoning_summary_text.delta"}, state
+    )
+    assert len(events) == 1
+    assert isinstance(events[0], UnknownStreamEvent)
 
 
 def test_stream_openai_cli_function_call_events() -> None:
