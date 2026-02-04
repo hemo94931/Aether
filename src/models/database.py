@@ -482,12 +482,12 @@ class LDAPConfig(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     server_url = Column(String(255), nullable=False)  # ldap://host:389 或 ldaps://host:636
-    bind_dn = Column(String(255), nullable=False)  # 绑定账号 DN
+    bind_dn = Column(Text, nullable=False)  # 绑定账号 DN（可能很长）
     bind_password_encrypted = Column(Text, nullable=True)  # 加密的绑定密码（允许 NULL 表示已清除）
-    base_dn = Column(String(255), nullable=False)  # 用户搜索基础 DN
+    base_dn = Column(Text, nullable=False)  # 用户搜索基础 DN（可能很长）
     user_search_filter = Column(
-        String(500), default="(uid={username})", nullable=False
-    )  # 用户搜索过滤器
+        Text, default="(uid={username})", nullable=False
+    )  # 用户搜索过滤器（可能很复杂）
     username_attr = Column(
         String(50), default="uid", nullable=False
     )  # 用户名属性 (uid/sAMAccountName)
@@ -548,7 +548,7 @@ class OAuthProvider(Base):
     provider_type = Column(String(50), primary_key=True)
     display_name = Column(String(100), nullable=False)
 
-    client_id = Column(String(255), nullable=False)
+    client_id = Column(Text, nullable=False)  # 某些 OAuth 提供商可能使用很长的 client_id
     client_secret_encrypted = Column(Text, nullable=True)  # 允许 NULL 表示尚未配置/已清除
 
     # 可选覆盖端点（需在业务层做白名单校验）
