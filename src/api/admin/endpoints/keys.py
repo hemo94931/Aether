@@ -241,11 +241,11 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
         # auth_type 切换校验 + 字段归一化
         if "auth_type" in update_data:
             if target_auth_type == "api_key":
-                if current_auth_type == "vertex_ai" and not update_data.get("api_key"):
+                if current_auth_type in {"vertex_ai", "oauth"} and not update_data.get("api_key"):
                     raise InvalidRequestException(
-                        "从 Vertex AI 切换到 API Key 认证模式时，必须提供新的 API Key"
+                        "切换到 API Key 认证模式时，必须提供新的 API Key"
                     )
-                # 切换回 API Key：清理 Service Account 配置
+                # 切换回 API Key：清理非本模式配置
                 update_data["auth_config"] = None
             elif target_auth_type == "vertex_ai":
                 if current_auth_type != "vertex_ai" and not update_data.get("auth_config"):
@@ -253,6 +253,12 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
                         "从 API Key 切换到 Vertex AI 认证模式时，必须提供 Service Account JSON"
                     )
                 # Vertex AI 不使用 api_key：写入占位符（若未提供 api_key）
+                if "api_key" not in update_data:
+                    update_data["api_key"] = "__placeholder__"
+            elif target_auth_type == "oauth":
+                # OAuth 的 token 不允许在 key 更新接口里手工写入
+                if update_data.get("api_key"):
+                    raise InvalidRequestException("OAuth 认证模式下不允许直接填写 api_key")
                 if "api_key" not in update_data:
                     update_data["api_key"] = "__placeholder__"
 
@@ -604,6 +610,8 @@ def _build_key_response(
     if auth_type == "vertex_ai":
         # Vertex AI 使用 Service Account，不显示占位符
         masked_key = "[Service Account]"
+    elif auth_type == "oauth":
+        masked_key = "[OAuth Token]"
     else:
         try:
             decrypted_key = crypto_service.decrypt(key.api_key)
@@ -726,6 +734,10 @@ class AdminCreateProviderKeyAdapter(AdminApiAdapter):
         elif auth_type == "vertex_ai":
             if not self.key_data.auth_config:
                 raise InvalidRequestException("Service Account 认证模式下 auth_config 为必填字段")
+        elif auth_type == "oauth":
+            # OAuth key 的 token 通过 provider-oauth 授权流程写入（此处不允许手填）
+            if self.key_data.api_key:
+                raise InvalidRequestException("OAuth 认证模式下不允许直接填写 api_key")
 
         # 允许同一个 API Key 在同一 Provider 下添加多次
         # 用户可以为不同的 API 格式创建独立的配置记录，便于分开管理
@@ -736,6 +748,9 @@ class AdminCreateProviderKeyAdapter(AdminApiAdapter):
             if self.key_data.api_key
             else crypto_service.encrypt("__placeholder__")  # 占位符，保持 NOT NULL 约束
         )
+        # OAuth 类型 key 初始写入占位符（token 由 provider-oauth 流程写入）
+        if auth_type == "oauth":
+            encrypted_key = crypto_service.encrypt("__placeholder__")
         now = datetime.now(timezone.utc)
 
         # 加密 auth_config（包含敏感的 Service Account 凭证）
@@ -787,9 +802,10 @@ class AdminCreateProviderKeyAdapter(AdminApiAdapter):
         db.commit()
         db.refresh(new_key)
 
+        key_tail = (self.key_data.api_key or "")[-4:]
         logger.info(
             f"[OK] 添加 Key: Provider={self.provider_id}, "
-            f"Formats={self.key_data.api_formats}, Key=***{self.key_data.api_key[-4:]}, ID={new_key.id}"
+            f"Formats={self.key_data.api_formats}, Key=***{key_tail}, ID={new_key.id}"
         )
 
         # 如果开启了 auto_fetch_models，同步执行模型获取

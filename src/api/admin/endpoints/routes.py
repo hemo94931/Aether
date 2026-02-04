@@ -281,6 +281,11 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
         if not provider:
             raise NotFoundException(f"Provider {self.provider_id} 不存在")
 
+        # 固定类型 Provider：禁止通过该接口新增 Endpoints（端点由模板自动创建并锁定）
+        provider_type = (getattr(provider, "provider_type", "custom") or "custom").strip()
+        if provider_type != "custom":
+            raise InvalidRequestException("固定类型 Provider 不允许手动新增 Endpoint")
+
         if self.endpoint_data.provider_id != self.provider_id:
             raise InvalidRequestException("provider_id 不匹配")
 
@@ -413,6 +418,16 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
             raise NotFoundException(f"Endpoint {self.endpoint_id} 不存在")
 
         update_data = self.endpoint_data.model_dump(exclude_unset=True)
+
+        # 固定类型 Provider 的 endpoint：锁定 base_url/custom_path（前端禁用仅是 UX，后端必须强校验）
+        provider = db.query(Provider).filter(Provider.id == endpoint.provider_id).first()
+        if provider:
+            provider_type = (getattr(provider, "provider_type", "custom") or "custom").strip()
+            if provider_type != "custom":
+                if "base_url" in update_data or "custom_path" in update_data:
+                    raise InvalidRequestException(
+                        "固定类型 Provider 的 Endpoint 不允许修改 base_url/custom_path"
+                    )
 
         # 把 proxy 转换为 dict 存储，支持显式设置为 None 清除代理
         if "proxy" in update_data:

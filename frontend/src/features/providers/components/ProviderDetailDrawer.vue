@@ -452,9 +452,11 @@
     :endpoint="currentEndpoint"
     :editing-key="editingKey"
     :provider-id="provider ? provider.id : null"
+    :provider-type="provider?.provider_type || null"
     :available-api-formats="provider?.api_formats || []"
     @close="keyFormDialogOpen = false"
     @saved="handleKeyChanged"
+    @edit-created-key="handleEditCreatedKey"
   />
 
   <!-- 模型权限对话框 -->
@@ -768,6 +770,10 @@ function handleEditKey(endpoint: ProviderEndpoint | undefined, key: EndpointAPIK
   currentEndpoint.value = endpoint || null
   editingKey.value = key
   keyFormDialogOpen.value = true
+}
+
+function handleEditCreatedKey(key: EndpointAPIKey) {
+  editingKey.value = key
 }
 
 function handleKeyPermissions(key: EndpointAPIKey) {

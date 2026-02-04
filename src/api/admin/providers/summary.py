@@ -305,6 +305,7 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
     return ProviderWithEndpointsSummary(
         id=provider.id,
         name=provider.name,
+        provider_type=getattr(provider, "provider_type", None),
         description=provider.description,
         website=provider.website,
         provider_priority=provider.provider_priority,

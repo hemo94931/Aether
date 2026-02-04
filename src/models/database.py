@@ -638,6 +638,11 @@ class Provider(Base):
     description = Column(Text, nullable=True)  # 提供商描述
     website = Column(String(500), nullable=True)  # 主站网站
 
+    # Provider 类型（用于模板化固定 Provider / 自定义 Provider）
+    # - custom: 自定义
+    # - claude_code / codex / gemini_cli / antigravity: 固定类型
+    provider_type = Column(String(20), default="custom", nullable=False)
+
     # 计费类型配置
     billing_type = Column(
         Enum(
@@ -1298,7 +1303,7 @@ class ProviderAPIKey(Base):
     # API密钥（加密存储）
     # - auth_type="api_key" 时：存储 API Key 字符串
     # - auth_type="vertex_ai" 等：可为空，敏感凭证存在 auth_config 中
-    api_key = Column(String(500), nullable=False)  # 保持 NOT NULL 兼容历史数据
+    api_key = Column(Text, nullable=False)  # 使用 Text 支持加密后的 OAuth token
 
     # 认证配置（加密存储）
     # - auth_type="api_key" 时：可为空

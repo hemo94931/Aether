@@ -55,6 +55,9 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "httpx>=0.25.0",
 ]
+tls = [
+    "tls-client>=1.0.1",  # 可选：用于 Claude OAuth token 请求的 TLS 指纹伪装
+]
 
 [project.urls]
 Homepage = "https://github.com/fawney19/Aether"

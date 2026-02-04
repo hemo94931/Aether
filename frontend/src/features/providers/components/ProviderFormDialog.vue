@@ -27,13 +27,29 @@
             />
           </div>
           <div class="space-y-1.5">
-            <Label for="website">主站链接</Label>
-            <Input
-              id="website"
-              v-model="form.website"
-              placeholder="https://..."
-              type="url"
-            />
+            <Label>提供商类型</Label>
+            <Select
+              v-model="form.provider_type"
+              v-model:open="providerTypeSelectOpen"
+              :disabled="isEditMode"
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="请选择" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="custom">自定义</SelectItem>
+                <SelectItem value="claude_code">ClaudeCode</SelectItem>
+                <SelectItem value="codex">Codex</SelectItem>
+                <SelectItem value="gemini_cli">GeminiCli</SelectItem>
+                <SelectItem value="antigravity">Antigravity</SelectItem>
+              </SelectContent>
+            </Select>
+            <p
+              v-if="!isEditMode && form.provider_type !== 'custom'"
+              class="text-xs text-muted-foreground"
+            >
+              固定类型 Provider 将自动创建并锁定端点（base_url/custom_path 不可修改）。
+            </p>
           </div>
         </div>
 
@@ -43,6 +59,15 @@
             id="description"
             v-model="form.description"
             placeholder="提供商描述（可选）"
+          />
+        </div>
+
+        <div class="space-y-1.5">
+          <Label for="website">主站链接</Label>
+          <Input
+            id="website"
+            v-model="form.website"
+            placeholder="https://example.com（可选）"
           />
         </div>
       </div>
@@ -297,6 +322,7 @@ const emit = defineEmits<{
 
 const { success, error: showError } = useToast()
 const loading = ref(false)
+const providerTypeSelectOpen = ref(false)
 const billingTypeSelectOpen = ref(false)
 
 // 内部状态
@@ -305,6 +331,7 @@ const internalOpen = computed(() => props.modelValue)
 // 表单数据
 const form = ref({
   name: '',
+  provider_type: 'custom' as 'custom' | 'claude_code' | 'codex' | 'gemini_cli' | 'antigravity',
   description: '',
   website: '',
   // 计费配置
@@ -335,6 +362,7 @@ const form = ref({
 function resetForm() {
   form.value = {
     name: '',
+    provider_type: 'custom',
     description: '',
     website: '',
     billing_type: 'pay_as_you_go',
@@ -367,6 +395,7 @@ function loadProviderData() {
   const proxy = props.provider.proxy
   form.value = {
     name: props.provider.name,
+    provider_type: props.provider.provider_type || 'custom',
     description: props.provider.description || '',
     website: props.provider.website || '',
     billing_type: (props.provider.billing_type as 'monthly_quota' | 'pay_as_you_go' | 'free_tier') || 'pay_as_you_go',
@@ -430,6 +459,7 @@ const handleSubmit = async () => {
 
     const payload = {
       name: form.value.name,
+      provider_type: form.value.provider_type,
       description: form.value.description || undefined,
       website: form.value.website || undefined,
       billing_type: form.value.billing_type,

@@ -13,6 +13,7 @@ from .monitoring import router as monitoring_router
 from .provider_ops import router as provider_ops_router
 from .provider_query import router as provider_query_router
 from .provider_strategy import router as provider_strategy_router
+from .provider_oauth import router as provider_oauth_router
 from .providers import router as providers_router
 from .security import router as security_router
 from .stats import router as stats_router
@@ -31,6 +32,7 @@ router.include_router(usage_router)
 router.include_router(monitoring_router)
 router.include_router(endpoints_router)
 router.include_router(provider_strategy_router)
+router.include_router(provider_oauth_router)
 router.include_router(adaptive_router)
 router.include_router(models_router)
 router.include_router(security_router)

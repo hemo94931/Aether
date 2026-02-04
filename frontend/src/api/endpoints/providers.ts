@@ -24,6 +24,7 @@ export async function updateProvider(
   providerId: string,
   data: Partial<{
     name: string
+    provider_type: 'custom' | 'claude_code' | 'codex' | 'gemini_cli' | 'antigravity'
     description: string
     website: string
     provider_priority: number
@@ -38,6 +39,7 @@ export async function updateProvider(
     proxy: ProxyConfig | null
     cache_ttl_minutes: number  // 0表示不支持缓存，>0表示支持缓存并设置TTL(分钟)
     max_probe_interval_minutes: number
+    enable_format_conversion: boolean  // 是否允许格式转换（提供商级别开关）
     is_active: boolean
   }>
 ): Promise<ProviderWithEndpointsSummary> {
@@ -48,7 +50,26 @@ export async function updateProvider(
 /**
  * 创建 Provider
  */
-export async function createProvider(data: any): Promise<any> {
+export async function createProvider(
+  data: {
+    name: string
+    provider_type?: 'custom' | 'claude_code' | 'codex' | 'gemini_cli' | 'antigravity'
+    description?: string
+    website?: string
+    billing_type?: 'monthly_quota' | 'pay_as_you_go' | 'free_tier'
+    monthly_quota_usd?: number
+    quota_reset_day?: number
+    quota_last_reset_at?: string
+    quota_expires_at?: string
+    provider_priority?: number
+    keep_priority_on_conversion?: boolean
+    is_active?: boolean
+    max_retries?: number
+    stream_first_byte_timeout?: number | null
+    request_timeout?: number | null
+    proxy?: ProxyConfig | null
+  }
+): Promise<{ id: string; name: string; message?: string }> {
   const response = await client.post('/api/admin/providers/', data)
   return response.data
 }

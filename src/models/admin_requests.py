@@ -55,6 +55,11 @@ class CreateProviderRequest(BaseModel):
     """创建 Provider 请求"""
 
     name: str = Field(..., min_length=1, max_length=100, description="提供商名称（唯一）")
+    provider_type: str | None = Field(
+        default="custom",
+        max_length=20,
+        description="Provider 类型：custom/claude_code/codex/gemini_cli/antigravity",
+    )
     description: str | None = Field(None, max_length=1000, description="描述")
     website: str | None = Field(None, max_length=500, description="官网地址")
 
@@ -116,6 +121,17 @@ class CreateProviderRequest(BaseModel):
     )
     config: dict[str, Any] | None = Field(None, description="其他配置")
 
+    @field_validator("provider_type")
+    @classmethod
+    def validate_provider_type(cls, v: str | None) -> str | None:
+        if v is None:
+            return "custom"
+        v = v.strip()
+        allowed = {"custom", "claude_code", "codex", "gemini_cli", "antigravity"}
+        if v not in allowed:
+            raise ValueError(f"无效的 provider_type，有效值为: {', '.join(sorted(allowed))}")
+        return v
+
     @field_validator("name", "description")
     @classmethod
     def sanitize_text(cls, v: str | None) -> str | None:
@@ -171,6 +187,11 @@ class UpdateProviderRequest(BaseModel):
     """更新 Provider 请求"""
 
     name: str | None = Field(None, min_length=1, max_length=100)
+    provider_type: str | None = Field(
+        None,
+        max_length=20,
+        description="Provider 类型：custom/claude_code/codex/gemini_cli/antigravity",
+    )
     description: str | None = Field(None, max_length=1000)
     website: str | None = Field(None, max_length=500)
     billing_type: str | None = None
@@ -200,6 +221,9 @@ class UpdateProviderRequest(BaseModel):
     _validate_website = field_validator("website")(CreateProviderRequest.validate_website.__func__)
     _validate_billing_type = field_validator("billing_type")(
         CreateProviderRequest.validate_billing_type.__func__
+    )
+    _validate_provider_type = field_validator("provider_type")(
+        CreateProviderRequest.validate_provider_type.__func__
     )
 
 

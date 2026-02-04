@@ -14,6 +14,9 @@
 from __future__ import annotations
 
 import json
+import time
+
+import httpx
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -25,6 +28,11 @@ from src.core.api_format import (
     make_signature_key,
 )
 from src.core.crypto import crypto_service
+from src.core.logger import logger
+from src.core.provider_oauth_utils import enrich_auth_config, post_oauth_token
+from sqlalchemy.orm import object_session
+
+from src.clients.redis_client import get_redis_client
 
 if TYPE_CHECKING:
     from src.models.database import ProviderAPIKey, ProviderEndpoint
@@ -431,6 +439,154 @@ async def get_provider_auth(
     from src.core.exceptions import InvalidRequestException
 
     auth_type = getattr(key, "auth_type", "api_key")
+
+    if auth_type == "oauth":
+        # OAuth token 保存在 key.api_key（加密），refresh_token/expires_at 等在 auth_config（加密 JSON）中。
+        # 在请求前做一次懒刷新：接近过期时刷新 access_token，并用 Redis lock 避免并发风暴。
+        encrypted_auth_config = getattr(key, "auth_config", None)
+        if encrypted_auth_config:
+            try:
+                decrypted_config = crypto_service.decrypt(encrypted_auth_config)
+                token_meta = json.loads(decrypted_config)
+            except Exception:
+                token_meta = {}
+        else:
+            token_meta = {}
+
+        expires_at = token_meta.get("expires_at")
+        refresh_token = token_meta.get("refresh_token")
+        provider_type = str(token_meta.get("provider_type") or "")
+
+        # 120s skew
+        should_refresh = False
+        try:
+            if expires_at is not None:
+                should_refresh = int(time.time()) >= int(expires_at) - 120
+        except Exception:
+            should_refresh = False
+
+        if should_refresh and refresh_token and provider_type:
+            try:
+                from src.core.provider_templates.fixed_providers import FIXED_PROVIDERS
+                from src.core.provider_templates.types import ProviderType
+
+                try:
+                    template = FIXED_PROVIDERS.get(ProviderType(provider_type))
+                except Exception:
+                    template = None
+                if template:
+                    redis = await get_redis_client(require_redis=False)
+                    lock_key = f"provider_oauth_refresh_lock:{key.id}"
+                    got_lock = False
+                    if redis is not None:
+                        try:
+                            got_lock = bool(await redis.set(lock_key, "1", ex=30, nx=True))
+                        except Exception:
+                            got_lock = False
+
+                    if got_lock or redis is None:
+                        try:
+                            token_url = template.oauth.token_url
+                            is_json = "anthropic.com" in token_url
+
+                            if is_json:
+                                body: dict[str, Any] = {
+                                    "grant_type": "refresh_token",
+                                    "client_id": template.oauth.client_id,
+                                    "refresh_token": str(refresh_token),
+                                }
+                                headers = {
+                                    "Content-Type": "application/json",
+                                    "Accept": "application/json",
+                                }
+                                data = None
+                                json_body = body
+                            else:
+                                form: dict[str, str] = {
+                                    "grant_type": "refresh_token",
+                                    "client_id": template.oauth.client_id,
+                                    "refresh_token": str(refresh_token),
+                                }
+                                if template.oauth.client_secret:
+                                    form["client_secret"] = template.oauth.client_secret
+                                headers = {
+                                    "Content-Type": "application/x-www-form-urlencoded",
+                                    "Accept": "application/json",
+                                }
+                                data = form
+                                json_body = None
+
+                            proxy_config = None
+                            try:
+                                provider = getattr(key, "provider", None)
+                                proxy_config = getattr(provider, "proxy", None)
+                            except Exception:
+                                proxy_config = None
+
+                            resp = await post_oauth_token(
+                                provider_type=provider_type,
+                                token_url=token_url,
+                                headers=headers,
+                                data=data,
+                                json_body=json_body,
+                                proxy_config=proxy_config,
+                                timeout_seconds=30.0,
+                            )
+
+                            if 200 <= resp.status_code < 300:
+                                token = resp.json()
+                                access_token = str(token.get("access_token") or "")
+                                new_refresh_token = str(token.get("refresh_token") or "")
+                                expires_in = token.get("expires_in")
+                                new_expires_at: int | None = None
+                                try:
+                                    if expires_in is not None:
+                                        new_expires_at = int(time.time()) + int(expires_in)
+                                except Exception:
+                                    new_expires_at = None
+
+                                if access_token:
+                                    token_meta["token_type"] = token.get("token_type")
+                                    if new_refresh_token:
+                                        token_meta["refresh_token"] = new_refresh_token
+                                    token_meta["expires_at"] = new_expires_at
+                                    token_meta["scope"] = token.get("scope")
+                                    token_meta["updated_at"] = int(time.time())
+
+                                    token_meta = await enrich_auth_config(
+                                        provider_type=provider_type,
+                                        auth_config=token_meta,
+                                        token_response=token,
+                                        access_token=access_token,
+                                        proxy_config=proxy_config,
+                                    )
+
+                                    key.api_key = crypto_service.encrypt(access_token)
+                                    key.auth_config = crypto_service.encrypt(json.dumps(token_meta))
+
+                                    # 持久化：key 实体来自 DB session 时，尝试直接提交更新。
+                                    sess = object_session(key)
+                                    if sess is not None:
+                                        sess.add(key)
+                                        sess.commit()
+                                    else:
+                                        logger.warning(
+                                            "[OAUTH_REFRESH] key {} 刷新成功但无法持久化（无绑定 session），"
+                                            "下次请求将重新刷新",
+                                            key.id,
+                                        )
+                        finally:
+                            if got_lock and redis is not None:
+                                try:
+                                    await redis.delete(lock_key)
+                                except Exception:
+                                    pass
+            except Exception:
+                # 刷新失败不阻断请求；后续由上游返回 401 再触发管理端处理
+                pass
+
+        decrypted_key = crypto_service.decrypt(key.api_key)
+        return ProviderAuthInfo(auth_header="Authorization", auth_value=f"Bearer {decrypted_key}")
 
     if auth_type == "vertex_ai":
         from src.core.vertex_auth import VertexAuthError, VertexAuthService

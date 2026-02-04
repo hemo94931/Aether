@@ -86,6 +86,7 @@
                     <Input
                       :model-value="getEndpointEditState(endpoint.id)?.url ?? endpoint.base_url"
                       :placeholder="provider?.website || 'https://api.example.com'"
+                      :disabled="isFixedProvider"
                       @update:model-value="(v) => updateEndpointField(endpoint.id, 'url', v)"
                     />
                   </div>
@@ -94,13 +95,14 @@
                     <Input
                       :model-value="getEndpointEditState(endpoint.id)?.path ?? (endpoint.custom_path || '')"
                       :placeholder="getDefaultPath(endpoint.api_format) || '留空使用默认'"
+                      :disabled="isFixedProvider"
                       @update:model-value="(v) => updateEndpointField(endpoint.id, 'path', v)"
                     />
                   </div>
                 </div>
                 <!-- 保存/撤销按钮（URL/路径有修改时显示） -->
                 <div
-                  v-if="hasUrlChanges(endpoint)"
+                  v-if="!isFixedProvider && hasUrlChanges(endpoint)"
                   class="flex items-center gap-1 shrink-0"
                 >
                   <Button
@@ -371,8 +373,8 @@
 
       <!-- 添加新端点 -->
       <div
-        v-if="availableFormats.length > 0"
-        class="rounded-lg border border-dashed"
+        v-if="!isFixedProvider && availableFormats.length > 0"
+        class="rounded-lg border border-dashed p-3"
       >
         <!-- 卡片头部：API 格式选择 + 添加按钮 -->
         <div class="flex items-center justify-between px-4 py-2.5 bg-muted/30 border-b border-dashed">
@@ -436,6 +438,13 @@
         class="text-center py-8 text-muted-foreground"
       >
         <p>所有 API 格式都已配置</p>
+      </div>
+
+      <div
+        v-else-if="isFixedProvider"
+        class="text-center py-6 text-xs text-muted-foreground"
+      >
+        固定类型 Provider 的端点已锁定并由系统自动维护。
       </div>
     </div>
 
@@ -637,6 +646,11 @@ const RESERVED_BODY_FIELDS = new Set([
 
 // 内部状态
 const internalOpen = computed(() => props.modelValue)
+
+const isFixedProvider = computed(() => {
+  const t = props.provider?.provider_type
+  return !!t && t !== 'custom'
+})
 
 // 新端点表单
 const newEndpoint = ref({

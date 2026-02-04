@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,9 +21,12 @@ from src.core.logger import logger
 from src.core.model_permissions import match_model_with_pattern, parse_allowed_models_to_list
 from src.database import get_db
 from src.models.admin_requests import CreateProviderRequest, UpdateProviderRequest
-from src.models.database import GlobalModel, Provider, ProviderAPIKey
+from src.models.database import GlobalModel, Provider, ProviderAPIKey, ProviderEndpoint
 from src.services.cache.model_cache import ModelCacheService
 from src.services.cache.provider_cache import ProviderCacheService
+
+from src.core.provider_templates.fixed_providers import FIXED_PROVIDERS
+from src.core.provider_templates.types import ProviderType
 
 router = APIRouter(tags=["Provider CRUD"])
 pipeline = ApiRequestPipeline()
@@ -290,6 +294,7 @@ class AdminCreateProviderAdapter(AdminApiAdapter):
             # 创建 Provider 对象
             provider = Provider(
                 name=validated_data.name,
+                provider_type=validated_data.provider_type or "custom",
                 description=validated_data.description,
                 website=validated_data.website,
                 billing_type=billing_type,
@@ -309,6 +314,37 @@ class AdminCreateProviderAdapter(AdminApiAdapter):
             )
 
             db.add(provider)
+            db.flush()  # flush 获取 ID，但不提交，保持在同一事务中
+
+            # 固定类型 Provider：自动创建并锁定预置 Endpoints（同一事务）
+            provider_type = (provider.provider_type or "custom").strip()
+            if provider_type != "custom":
+                try:
+                    template = FIXED_PROVIDERS.get(ProviderType(provider_type))
+                except Exception:
+                    template = None
+                if template:
+                    now = datetime.now(timezone.utc)
+                    for sig in template.endpoint_signatures:
+                        endpoint = ProviderEndpoint(
+                            id=str(uuid.uuid4()),
+                            provider_id=provider.id,
+                            api_format=sig,
+                            api_family=sig.split(":", 1)[0],
+                            endpoint_kind=sig.split(":", 1)[1],
+                            base_url=template.api_base_url,
+                            custom_path=None,
+                            header_rules=None,
+                            max_retries=provider.max_retries or 2,
+                            is_active=True,
+                            config=None,
+                            proxy=None,
+                            format_acceptance_config=None,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                        db.add(endpoint)
+
             db.commit()
             db.refresh(provider)
 
@@ -369,6 +405,8 @@ class AdminUpdateProviderAdapter(AdminApiAdapter):
                 if field == "billing_type" and value is not None:
                     # billing_type 需要转换为枚举
                     setattr(provider, field, ProviderBillingType(value))
+                elif field == "provider_type" and value is not None:
+                    setattr(provider, field, value)
                 elif field == "proxy" and value is not None:
                     # proxy 需要转换为 dict（如果是 Pydantic 模型）
                     setattr(

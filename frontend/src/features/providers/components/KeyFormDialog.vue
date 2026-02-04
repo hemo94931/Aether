@@ -37,6 +37,7 @@
           <Select
             v-model="form.auth_type"
             v-model:open="authTypeSelectOpen"
+            :disabled="authTypeDisabled"
           >
             <SelectTrigger :id="authTypeSelectId">
               <SelectValue placeholder="选择认证类型" />
@@ -48,6 +49,12 @@
               <SelectItem value="vertex_ai">
                 Vertex AI
               </SelectItem>
+              <SelectItem
+                v-if="!isCustomProvider"
+                value="oauth"
+              >
+                OAuth
+              </SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -56,8 +63,8 @@
       <!-- API 密钥 / Service Account JSON -->
       <div>
         <Label :for="apiKeyInputId">
-          {{ form.auth_type === 'vertex_ai' ? 'Service Account JSON' : 'API 密钥' }}
-          {{ editingKey ? '' : '*' }}
+          {{ form.auth_type === 'vertex_ai' ? 'Service Account JSON' : (form.auth_type === 'oauth' ? 'OAuth Token' : 'API 密钥') }}
+          {{ editingKey ? '' : (form.auth_type === 'oauth' ? '' : '*') }}
         </Label>
         <template v-if="form.auth_type === 'vertex_ai'">
           <Textarea
@@ -75,12 +82,20 @@
         </template>
         <template v-else>
           <Input
+            v-if="form.auth_type !== 'oauth'"
             :id="apiKeyInputId"
             v-model="form.api_key"
             :name="apiKeyFieldName"
             masked
             :required="!editingKey"
             :placeholder="editingKey ? editingKey.api_key_masked : 'sk-...'"
+          />
+          <Input
+            v-else
+            :id="apiKeyInputId"
+            :model-value="editingKey?.api_key_masked || '[OAuth Token]'"
+            disabled
+            placeholder="[OAuth Token]"
           />
         </template>
         <p
@@ -95,6 +110,170 @@
         >
           留空表示不修改
         </p>
+        <p
+          v-else-if="form.auth_type === 'oauth'"
+          class="text-xs text-muted-foreground mt-1"
+        >
+          OAuth Token 需在创建后通过“开始授权/完成授权”写入。
+        </p>
+
+        <!-- OAuth 授权流程 -->
+        <div
+          v-if="form.auth_type === 'oauth'"
+          class="space-y-3 py-2 px-3 rounded-md border border-border/60 bg-muted/30 mt-2"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="space-y-0.5">
+              <Label class="text-sm font-medium">OAuth 授权</Label>
+              <p class="text-xs text-muted-foreground">
+                打开授权链接完成授权后，将浏览器回调地址栏的完整 URL 粘贴回来。
+              </p>
+            </div>
+            <Badge
+              :variant="oauthStatusVariant"
+              class="text-xs shrink-0"
+            >
+              {{ oauthStatusText }}
+            </Badge>
+          </div>
+
+          <p
+            v-if="oauthHelpText"
+            class="text-xs text-amber-600 dark:text-amber-400"
+          >
+            {{ oauthHelpText }}
+          </p>
+
+          <div class="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              type="button"
+              :disabled="!canStartOAuth"
+              @click="handleStartOAuth"
+            >
+              {{ oauth.starting ? '开始中...' : '开始授权' }}
+            </Button>
+
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              :disabled="!canRefreshOAuth"
+              @click="handleRefreshOAuth"
+            >
+              <RefreshCw class="w-3.5 h-3.5 mr-1.5" />
+              {{ oauth.refreshing ? '刷新中...' : '强制刷新' }}
+            </Button>
+          </div>
+
+          <div
+            v-if="oauth.authorization_url"
+            class="space-y-2 pt-2 border-t border-border/40"
+          >
+            <div>
+              <Label class="text-xs">Authorization URL</Label>
+              <div class="flex gap-2">
+                <Input
+                  :model-value="oauth.authorization_url"
+                  disabled
+                  class="h-8 text-xs font-mono"
+                />
+                <Button
+                  size="icon"
+                  variant="outline"
+                  type="button"
+                  class="h-8 w-8"
+                  :disabled="oauthBusy"
+                  title="复制授权链接"
+                  @click="copyToClipboard(oauth.authorization_url)"
+                >
+                  <Copy class="w-3.5 h-3.5" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  type="button"
+                  class="h-8 w-8"
+                  :disabled="oauthBusy"
+                  title="打开授权链接"
+                  @click="openAuthorizationUrl"
+                >
+                  <ExternalLink class="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+
+            <div>
+              <Label class="text-xs">Redirect URI</Label>
+              <div class="flex gap-2">
+                <Input
+                  :model-value="oauth.redirect_uri"
+                  disabled
+                  class="h-8 text-xs font-mono"
+                />
+                <Button
+                  size="icon"
+                  variant="outline"
+                  type="button"
+                  class="h-8 w-8"
+                  :disabled="oauthBusy || !oauth.redirect_uri"
+                  title="复制 Redirect URI"
+                  @click="copyToClipboard(oauth.redirect_uri)"
+                >
+                  <Copy class="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+
+            <div v-if="oauth.instructions">
+              <Label class="text-xs">说明</Label>
+              <Textarea
+                :model-value="oauth.instructions"
+                disabled
+                class="min-h-[80px] text-xs whitespace-pre-wrap"
+              />
+            </div>
+          </div>
+
+          <div class="space-y-2 pt-2 border-t border-border/40">
+            <Label
+              class="text-xs"
+              :for="oauthCallbackId"
+            >回调 URL</Label>
+            <Textarea
+              :id="oauthCallbackId"
+              v-model="oauth.callback_url"
+              :disabled="!canOAuthOperate"
+              placeholder="粘贴浏览器地址栏中的完整回调 URL（包含 code/state 等参数）"
+              class="min-h-[80px] text-xs font-mono"
+              spellcheck="false"
+            />
+            <div class="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                type="button"
+                :disabled="!canCompleteOAuth"
+                @click="handleCompleteOAuth"
+              >
+                {{ oauth.completing ? '完成中...' : '完成授权' }}
+              </Button>
+            </div>
+          </div>
+
+          <div
+            v-if="oauth.step === 'completed'"
+            class="pt-2 border-t border-border/40 text-xs text-muted-foreground space-y-1"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span>expires_at</span>
+              <span class="font-mono">{{ formattedExpiresAt }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+              <span>refresh token</span>
+              <span>{{ oauth.has_refresh_token ? '有' : '无' }}</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- 备注 -->
@@ -314,11 +493,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { Dialog, Button, Input, Label, Switch, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Textarea } from '@/components/ui'
-import { Key, SquarePen } from 'lucide-vue-next'
+import Badge from '@/components/ui/badge.vue'
+import { Key, SquarePen, Copy, ExternalLink, RefreshCw } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useFormDialog } from '@/composables/useFormDialog'
+import { useClipboard } from '@/composables/useClipboard'
 import { parseApiError } from '@/utils/errorParser'
 import { parseNumberInput, parseNullableNumberInput } from '@/utils/form'
 import { log } from '@/utils/logger'
@@ -328,10 +509,14 @@ import {
   getAllCapabilities,
   API_FORMAT_LABELS,
   sortApiFormats,
+  startProviderOAuth,
+  completeProviderOAuth,
+  refreshProviderOAuth,
   type EndpointAPIKey,
   type EndpointAPIKeyUpdate,
   type ProviderEndpoint,
-  type CapabilityDefinition
+  type CapabilityDefinition,
+  type ProviderType
 } from '@/api/endpoints'
 
 const props = defineProps<{
@@ -339,18 +524,78 @@ const props = defineProps<{
   endpoint: ProviderEndpoint | null
   editingKey: EndpointAPIKey | null
   providerId: string | null
+  providerType: ProviderType | null
   availableApiFormats: string[]  // Provider 支持的所有 API 格式
 }>()
 
 const emit = defineEmits<{
   close: []
   saved: []
+  editCreatedKey: [key: EndpointAPIKey]
 }>()
 
 const { success, error: showError } = useToast()
+const { copyToClipboard } = useClipboard()
+
+type OAuthStep = 'idle' | 'started' | 'completed'
+interface OAuthState {
+  step: OAuthStep
+  authorization_url: string
+  redirect_uri: string
+  instructions: string
+  provider_type: string
+  callback_url: string
+  expires_at: number | null
+  has_refresh_token: boolean | null
+  starting: boolean
+  completing: boolean
+  refreshing: boolean
+}
+
+function createInitialOAuthState(): OAuthState {
+  return {
+    step: 'idle',
+    authorization_url: '',
+    redirect_uri: '',
+    instructions: '',
+    provider_type: '',
+    callback_url: '',
+    expires_at: null,
+    has_refresh_token: null,
+    starting: false,
+    completing: false,
+    refreshing: false,
+  }
+}
+
+const oauth = ref<OAuthState>(createInitialOAuthState())
+
+function resetOAuthState() {
+  oauth.value = createInitialOAuthState()
+}
 
 // 排序后的可用 API 格式列表
 const sortedApiFormats = computed(() => sortApiFormats(props.availableApiFormats))
+
+// OAuth 专用提供商类型（认证类型固定为 OAuth）
+const OAUTH_ONLY_PROVIDER_TYPES: ProviderType[] = ['claude_code', 'codex', 'gemini_cli', 'antigravity']
+
+// 是否为 OAuth 专用提供商
+const isOAuthOnlyProvider = computed(() =>
+  props.providerType !== null && OAUTH_ONLY_PROVIDER_TYPES.includes(props.providerType)
+)
+
+// 是否为自定义提供商（不支持 OAuth）
+const isCustomProvider = computed(() => props.providerType === 'custom')
+
+// 认证类型选择是否禁用（OAuth 专用提供商不可修改）
+const authTypeDisabled = computed(() => isOAuthOnlyProvider.value)
+
+// 根据提供商类型获取默认认证类型
+const defaultAuthType = computed<'api_key' | 'vertex_ai' | 'oauth'>(() => {
+  if (isOAuthOnlyProvider.value) return 'oauth'
+  return 'api_key'
+})
 
 // 显示自动获取模型警告：编辑模式下，原本未启用但现在启用，且已有 allowed_models
 const showAutoFetchWarning = computed(() => {
@@ -387,6 +632,7 @@ const canSave = computed(() => {
   if (!props.editingKey) {
     if (form.value.auth_type === 'api_key' && !form.value.api_key.trim()) return false
     if (form.value.auth_type === 'vertex_ai' && !form.value.auth_config_text.trim()) return false
+    // OAuth：token 由 provider-oauth 授权流程写入，这里不要求填写
   } else {
     // 编辑模式下切换认证类型时，必须填写对应字段
     if (switchingToApiKey.value && !form.value.api_key.trim()) return false
@@ -408,6 +654,87 @@ const apiKeyInputId = computed(() => `api-key-${formNonce.value}`)
 const authTypeSelectId = computed(() => `auth-type-${formNonce.value}`)
 const keyNameFieldName = computed(() => `key-name-field-${formNonce.value}`)
 const apiKeyFieldName = computed(() => `api-key-field-${formNonce.value}`)
+const oauthCallbackId = computed(() => `oauth-callback-${formNonce.value}`)
+
+const oauthBusy = computed(() =>
+  saving.value || oauth.value.starting || oauth.value.completing || oauth.value.refreshing
+)
+
+const canOAuthOperate = computed(() => {
+  if (form.value.auth_type !== 'oauth') return false
+  if (!props.editingKey?.id) return false
+  if (props.editingKey.auth_type !== 'oauth') return false
+  return true
+})
+
+const oauthHelpText = computed(() => {
+  if (form.value.auth_type !== 'oauth') return ''
+  if (!props.editingKey?.id) {
+    return '请先点击右下角"添加"保存密钥，保存后将自动进入授权流程。'
+  }
+  if (props.editingKey.auth_type !== 'oauth') {
+    return '已切换为 OAuth，但尚未保存。请先点击右下角"保存"，再开始授权。'
+  }
+  return ''
+})
+
+type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'dark'
+
+function normalizeEpochMs(epoch: number): number {
+  return epoch > 1e12 ? epoch : epoch * 1000
+}
+
+function isExpiredEpoch(expiresAt: number | null): boolean {
+  if (!expiresAt) return false
+  const ms = normalizeEpochMs(expiresAt)
+  return Date.now() >= ms
+}
+
+const formattedExpiresAt = computed(() => {
+  if (!oauth.value.expires_at) return '—'
+  const ms = normalizeEpochMs(oauth.value.expires_at)
+  return new Date(ms).toLocaleString()
+})
+
+const oauthStatusText = computed(() => {
+  if (form.value.auth_type !== 'oauth') return '—'
+  if (!props.editingKey?.id) return '未保存'
+  if (props.editingKey.auth_type !== 'oauth') return '待保存'
+
+  if (oauth.value.step === 'started') return '等待回调'
+  if (oauth.value.step === 'completed') {
+    if (isExpiredEpoch(oauth.value.expires_at)) return '已过期'
+    return '已授权'
+  }
+  return '未开始'
+})
+
+const oauthStatusVariant = computed<BadgeVariant>(() => {
+  if (form.value.auth_type !== 'oauth') return 'secondary'
+  if (!props.editingKey?.id) return 'secondary'
+  if (props.editingKey.auth_type !== 'oauth') return 'warning'
+
+  if (oauth.value.step === 'started') return 'warning'
+  if (oauth.value.step === 'completed') {
+    if (isExpiredEpoch(oauth.value.expires_at)) return 'destructive'
+    return 'success'
+  }
+  return 'secondary'
+})
+
+const canStartOAuth = computed(() => canOAuthOperate.value && !oauthBusy.value)
+
+const canRefreshOAuth = computed(() => {
+  if (!canOAuthOperate.value) return false
+  return !oauthBusy.value
+})
+
+const canCompleteOAuth = computed(() => {
+  if (!canOAuthOperate.value) return false
+  if (!oauth.value.authorization_url) return false
+  if (!oauth.value.callback_url.trim()) return false
+  return !oauthBusy.value
+})
 
 // 可用的能力列表
 const availableCapabilities = ref<CapabilityDefinition[]>([])
@@ -415,7 +742,7 @@ const availableCapabilities = ref<CapabilityDefinition[]>([])
 const form = ref({
   name: '',
   api_key: '',  // 标准 API Key
-  auth_type: 'api_key' as 'api_key' | 'vertex_ai',  // 认证类型
+  auth_type: 'api_key' as 'api_key' | 'vertex_ai' | 'oauth',  // 认证类型
   auth_config_text: '',  // Service Account JSON 文本（用于表单输入）
   api_formats: [] as string[],  // 支持的 API 格式列表
   rate_multipliers: {} as Record<string, number>,  // 按 API 格式的成本倍率
@@ -499,11 +826,12 @@ const apiKeyError = computed(() => {
 
 // 重置表单
 function resetForm() {
+  resetOAuthState()
   formNonce.value = createFieldNonce()
   form.value = {
     name: '',
     api_key: '',
-    auth_type: 'api_key',
+    auth_type: defaultAuthType.value,
     auth_config_text: '',
     api_formats: [],  // 默认不选中任何格式
     rate_multipliers: {},
@@ -531,6 +859,7 @@ function clearForNextAdd() {
 // 加载密钥数据（编辑模式）
 function loadKeyData() {
   if (!props.editingKey) return
+  resetOAuthState()
   formNonce.value = createFieldNonce()
   form.value = {
     name: props.editingKey.name,
@@ -565,6 +894,12 @@ const { isEditMode, handleDialogUpdate, handleCancel } = useFormDialog({
   resetForm,
 })
 
+watch(() => form.value.auth_type, (newType, oldType) => {
+  if (oldType === 'oauth' && newType !== 'oauth') {
+    resetOAuthState()
+  }
+})
+
 function createFieldNonce(): string {
   return Math.random().toString(36).slice(2, 10)
 }
@@ -589,6 +924,67 @@ function parseAuthConfig(): Record<string, any> | null {
     return JSON.parse(text)
   } catch {
     return null
+  }
+}
+
+function openAuthorizationUrl() {
+  const url = oauth.value.authorization_url
+  if (!url) return
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+async function handleStartOAuth() {
+  if (!canStartOAuth.value) return
+  oauth.value.starting = true
+  try {
+    const resp = await startProviderOAuth(props.editingKey!.id)
+    oauth.value.authorization_url = resp.authorization_url
+    oauth.value.redirect_uri = resp.redirect_uri
+    oauth.value.instructions = resp.instructions
+    oauth.value.provider_type = resp.provider_type
+    oauth.value.step = 'started'
+    success('已生成授权链接')
+  } catch (err: any) {
+    const errorMessage = parseApiError(err, '开始授权失败')
+    showError(errorMessage, '错误')
+  } finally {
+    oauth.value.starting = false
+  }
+}
+
+async function handleCompleteOAuth() {
+  if (!canCompleteOAuth.value) return
+  oauth.value.completing = true
+  try {
+    const resp = await completeProviderOAuth(props.editingKey!.id, { callback_url: oauth.value.callback_url.trim() })
+    oauth.value.expires_at = resp.expires_at ?? null
+    oauth.value.has_refresh_token = resp.has_refresh_token
+    oauth.value.step = 'completed'
+    success('授权完成')
+    emit('saved')
+  } catch (err: any) {
+    const errorMessage = parseApiError(err, '完成授权失败')
+    showError(errorMessage, '错误')
+  } finally {
+    oauth.value.completing = false
+  }
+}
+
+async function handleRefreshOAuth() {
+  if (!canRefreshOAuth.value) return
+  oauth.value.refreshing = true
+  try {
+    const resp = await refreshProviderOAuth(props.editingKey!.id)
+    oauth.value.expires_at = resp.expires_at ?? null
+    oauth.value.has_refresh_token = resp.has_refresh_token
+    oauth.value.step = 'completed'
+    success('Token 已刷新')
+    emit('saved')
+  } catch (err: any) {
+    const errorMessage = parseApiError(err, '刷新 Token 失败')
+    showError(errorMessage, '错误')
+  } finally {
+    oauth.value.refreshing = false
   }
 }
 
@@ -631,6 +1027,8 @@ async function handleSave() {
         return
       }
     }
+  } else if (form.value.auth_type === 'oauth') {
+    // OAuth：不在此处输入 token，由 provider-oauth 授权流程写入
   }
 
   // 验证至少选择一个 API 格式
@@ -697,7 +1095,7 @@ async function handleSave() {
       success('密钥已更新', '成功')
     } else {
       // 新增模式
-      await addProviderKey(props.providerId, {
+      const createdKey = await addProviderKey(props.providerId, {
         api_formats: form.value.api_formats,
         api_key: form.value.auth_type === 'api_key' ? form.value.api_key : '',
         auth_type: form.value.auth_type,
@@ -714,6 +1112,15 @@ async function handleSave() {
         model_include_patterns: parsePatternText(form.value.model_include_patterns_text),
         model_exclude_patterns: parsePatternText(form.value.model_exclude_patterns_text)
       })
+
+      // OAuth 密钥：自动切换到编辑模式以便立即开始授权
+      if (form.value.auth_type === 'oauth') {
+        success('密钥已添加，现在可以开始 OAuth 授权', '成功')
+        emit('saved')
+        emit('editCreatedKey', createdKey)
+        return
+      }
+
       success('密钥已添加', '成功')
       // 添加模式：不关闭对话框，只清除名称和密钥以便继续添加
       emit('saved')

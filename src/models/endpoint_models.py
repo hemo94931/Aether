@@ -200,12 +200,16 @@ class EndpointAPIKeyCreate(BaseModel):
     api_key: str = Field(
         default="", max_length=500, description="API Key（标准认证时必填，将自动加密）"
     )
-    auth_type: Literal["api_key", "vertex_ai"] = Field(
+    auth_type: Literal["api_key", "vertex_ai", "oauth"] = Field(
         default="api_key",
-        description="认证类型：api_key（标准 API Key）或 vertex_ai（Vertex AI Service Account）",
+        description="认证类型：api_key（标准 API Key）/ vertex_ai（Vertex AI Service Account）/ oauth（OAuth access_token）",
     )
     auth_config: dict[str, Any] | None = Field(
-        default=None, description="认证配置（JSON）：vertex_ai 时存储完整 Service Account JSON"
+        default=None,
+        description=(
+            "认证配置（JSON）：vertex_ai 时存储完整 Service Account JSON；"
+            "oauth 时存储 token/refresh/expires_at 等（后端加密存储，不在响应中返回）"
+        ),
     )
     name: str = Field(..., min_length=1, max_length=100, description="密钥名称（必填，用于识别）")
 
@@ -360,12 +364,16 @@ class EndpointAPIKeyUpdate(BaseModel):
         max_length=500,
         description="API Key（标准认证时使用，将自动加密）",
     )
-    auth_type: Literal["api_key", "vertex_ai"] | None = Field(
+    auth_type: Literal["api_key", "vertex_ai", "oauth"] | None = Field(
         default=None,
-        description="认证类型：api_key（标准 API Key）或 vertex_ai（Vertex AI Service Account）",
+        description="认证类型：api_key（标准 API Key）/ vertex_ai（Vertex AI Service Account）/ oauth（OAuth access_token）",
     )
     auth_config: dict[str, Any] | None = Field(
-        default=None, description="认证配置（JSON）：vertex_ai 时存储完整 Service Account JSON"
+        default=None,
+        description=(
+            "认证配置（JSON）：vertex_ai 时存储完整 Service Account JSON；"
+            "oauth 时存储 token/refresh/expires_at 等（后端加密存储，不在响应中返回）"
+        ),
     )
     name: str | None = Field(default=None, min_length=1, max_length=100, description="密钥名称")
     rate_multipliers: dict[str, float] | None = Field(
@@ -690,6 +698,7 @@ class ProviderWithEndpointsSummary(BaseModel):
     # Provider 基本信息
     id: str
     name: str
+    provider_type: str | None = Field(default=None, description="Provider 类型（custom/claude_code/codex/gemini_cli/antigravity）")
     description: str | None = None
     website: str | None = None
     provider_priority: int = Field(default=100, description="提供商优先级(数字越小越优先)")
