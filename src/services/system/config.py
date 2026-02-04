@@ -189,6 +189,11 @@ class SystemConfigService:
             "value": "Aether",
             "description": "发件人名称",
         },
+        # OAuth Token 刷新配置
+        "enable_oauth_token_refresh": {
+            "value": True,
+            "description": "是否启用 OAuth Token 自动刷新任务，主动刷新即将过期的 OAuth token",
+        },
     }
 
     @classmethod

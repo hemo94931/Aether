@@ -247,7 +247,10 @@
             class="mb-6 text-3xl sm:text-5xl md:text-7xl font-bold text-[#191919] dark:text-white leading-tight transition-all duration-700"
             :style="getTitleStyle(SECTIONS.HOME)"
           >
-            欢迎使用 <span class="text-primary typewriter">{{ aetherText }}<span class="cursor" :class="{ 'cursor-hidden': !showCursor }">_</span></span>
+            欢迎使用 <span class="text-primary typewriter">{{ aetherText }}<span
+              class="cursor"
+              :class="{ 'cursor-hidden': !showCursor }"
+            >_</span></span>
           </h1>
           <p
             class="mb-8 text-base sm:text-lg md:text-xl text-[#666663] dark:text-[#c9c3b4] max-w-2xl mx-auto transition-all duration-700"
@@ -568,7 +571,7 @@ const aetherText = ref('')
 const showCursor = ref(true)
 const typewriterFullText = 'Aether'
 let typewriterTimer: ReturnType<typeof setTimeout> | null = null
-let hasTypewriterStarted = ref(false)
+const hasTypewriterStarted = ref(false)
 
 const startTypewriter = () => {
   if (hasTypewriterStarted.value) return

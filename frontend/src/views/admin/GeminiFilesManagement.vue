@@ -2,56 +2,89 @@
   <div class="space-y-6 pb-8">
     <!-- 统计卡片 -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <Card variant="default" class="p-4">
+      <Card
+        variant="default"
+        class="p-4"
+      >
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
             <FileUp class="w-5 h-5 text-primary" />
           </div>
           <div>
-            <p class="text-2xl font-bold">{{ stats?.total_mappings ?? '-' }}</p>
-            <p class="text-xs text-muted-foreground">总文件数</p>
+            <p class="text-2xl font-bold">
+              {{ stats?.total_mappings ?? '-' }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              总文件数
+            </p>
           </div>
         </div>
       </Card>
-      <Card variant="default" class="p-4">
+      <Card
+        variant="default"
+        class="p-4"
+      >
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 rounded-lg bg-green-500/10 flex items-center justify-center">
             <CheckCircle class="w-5 h-5 text-green-500" />
           </div>
           <div>
-            <p class="text-2xl font-bold">{{ stats?.active_mappings ?? '-' }}</p>
-            <p class="text-xs text-muted-foreground">有效文件</p>
+            <p class="text-2xl font-bold">
+              {{ stats?.active_mappings ?? '-' }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              有效文件
+            </p>
           </div>
         </div>
       </Card>
-      <Card variant="default" class="p-4">
+      <Card
+        variant="default"
+        class="p-4"
+      >
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center">
             <Clock class="w-5 h-5 text-amber-500" />
           </div>
           <div>
-            <p class="text-2xl font-bold">{{ stats?.expired_mappings ?? '-' }}</p>
-            <p class="text-xs text-muted-foreground">已过期</p>
+            <p class="text-2xl font-bold">
+              {{ stats?.expired_mappings ?? '-' }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              已过期
+            </p>
           </div>
         </div>
       </Card>
-      <Card variant="default" class="p-4">
+      <Card
+        variant="default"
+        class="p-4"
+      >
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
             <Key class="w-5 h-5 text-blue-500" />
           </div>
           <div>
-            <p class="text-2xl font-bold">{{ stats?.capable_keys_count ?? '-' }}</p>
-            <p class="text-xs text-muted-foreground">支持的 Key</p>
+            <p class="text-2xl font-bold">
+              {{ stats?.capable_keys_count ?? '-' }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              支持的 Key
+            </p>
           </div>
         </div>
       </Card>
     </div>
 
     <!-- 上传区域 -->
-    <Card variant="default" class="p-4">
+    <Card
+      variant="default"
+      class="p-4"
+    >
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-sm font-medium">上传文件</h3>
+        <h3 class="text-sm font-medium">
+          上传文件
+        </h3>
         <Button
           v-if="capableKeys.length > 0"
           variant="ghost"
@@ -64,8 +97,13 @@
       </div>
 
       <!-- Key 选择器 -->
-      <div v-if="capableKeys.length > 0" class="mb-4">
-        <p class="text-xs text-muted-foreground mb-2">选择要上传到的 Key（可多选）：</p>
+      <div
+        v-if="capableKeys.length > 0"
+        class="mb-4"
+      >
+        <p class="text-xs text-muted-foreground mb-2">
+          选择要上传到的 Key（可多选）：
+        </p>
         <div class="flex flex-wrap gap-2">
           <button
             v-for="key in capableKeys"
@@ -77,11 +115,17 @@
             @click="toggleKeySelection(key.id)"
           >
             <span class="font-medium">{{ key.name }}</span>
-            <span v-if="key.provider_name" class="text-muted-foreground ml-1">({{ key.provider_name }})</span>
+            <span
+              v-if="key.provider_name"
+              class="text-muted-foreground ml-1"
+            >({{ key.provider_name }})</span>
           </button>
         </div>
       </div>
-      <div v-else class="mb-4 text-sm text-amber-600 bg-amber-50 dark:bg-amber-950/30 rounded-lg p-3">
+      <div
+        v-else
+        class="mb-4 text-sm text-amber-600 bg-amber-50 dark:bg-amber-950/30 rounded-lg p-3"
+      >
         暂无可用的 Key，请先配置具有「Gemini 文件 API」能力的 Key
       </div>
 
@@ -102,12 +146,20 @@
           type="file"
           class="hidden"
           @change="handleFileSelect"
-        />
-        <div v-if="uploading" class="flex flex-col items-center gap-2">
+        >
+        <div
+          v-if="uploading"
+          class="flex flex-col items-center gap-2"
+        >
           <Loader2 class="w-8 h-8 animate-spin text-primary" />
-          <p class="text-sm text-muted-foreground">正在上传到 {{ selectedKeyIds.length }} 个 Key...</p>
+          <p class="text-sm text-muted-foreground">
+            正在上传到 {{ selectedKeyIds.length }} 个 Key...
+          </p>
         </div>
-        <div v-else class="flex flex-col items-center gap-2">
+        <div
+          v-else
+          class="flex flex-col items-center gap-2"
+        >
           <Upload class="w-8 h-8 text-muted-foreground" />
           <p class="text-sm text-muted-foreground">
             <template v-if="selectedKeyIds.length > 0">
@@ -131,8 +183,14 @@
     </Card>
 
     <!-- MIME 类型分布 -->
-    <Card v-if="stats?.by_mime_type && Object.keys(stats.by_mime_type).length > 0" variant="default" class="p-4">
-      <h3 class="text-sm font-medium mb-3">文件类型分布</h3>
+    <Card
+      v-if="stats?.by_mime_type && Object.keys(stats.by_mime_type).length > 0"
+      variant="default"
+      class="p-4"
+    >
+      <h3 class="text-sm font-medium mb-3">
+        文件类型分布
+      </h3>
       <div class="flex flex-wrap gap-2">
         <Badge
           v-for="(count, mimeType) in stats.by_mime_type"
@@ -146,11 +204,16 @@
     </Card>
 
     <!-- 文件映射表格 -->
-    <Card variant="default" class="overflow-hidden">
+    <Card
+      variant="default"
+      class="overflow-hidden"
+    >
       <!-- 标题和筛选器 -->
       <div class="px-4 sm:px-6 py-3.5 border-b border-border/60">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h3 class="text-base font-semibold">文件映射</h3>
+          <h3 class="text-base font-semibold">
+            文件映射
+          </h3>
           <div class="flex items-center gap-2">
             <!-- 搜索 -->
             <Input
@@ -165,7 +228,7 @@
                 v-model="includeExpired"
                 type="checkbox"
                 class="rounded border-border"
-              />
+              >
               包含过期
             </label>
             <!-- 清理过期按钮 -->
@@ -187,29 +250,45 @@
               :disabled="loading"
               @click="fetchData"
             >
-              <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': loading }" />
+              <RefreshCw
+                class="w-3.5 h-3.5"
+                :class="{ 'animate-spin': loading }"
+              />
             </Button>
           </div>
         </div>
       </div>
 
       <!-- 加载状态 -->
-      <div v-if="loading && !mappings.length" class="p-8 text-center">
+      <div
+        v-if="loading && !mappings.length"
+        class="p-8 text-center"
+      >
         <Loader2 class="w-8 h-8 animate-spin mx-auto text-muted-foreground" />
-        <p class="mt-2 text-sm text-muted-foreground">加载中...</p>
+        <p class="mt-2 text-sm text-muted-foreground">
+          加载中...
+        </p>
       </div>
 
       <!-- 空状态 -->
-      <div v-else-if="!mappings.length" class="p-8 text-center">
+      <div
+        v-else-if="!mappings.length"
+        class="p-8 text-center"
+      >
         <FileUp class="w-12 h-12 mx-auto text-muted-foreground/50" />
-        <p class="mt-2 text-sm text-muted-foreground">暂无文件映射</p>
+        <p class="mt-2 text-sm text-muted-foreground">
+          暂无文件映射
+        </p>
         <p class="mt-1 text-xs text-muted-foreground">
           用户通过 Gemini Files API 上传文件后会在此显示
         </p>
       </div>
 
       <!-- 文件列表 -->
-      <div v-else class="divide-y divide-border/60">
+      <div
+        v-else
+        class="divide-y divide-border/60"
+      >
         <div
           v-for="mapping in mappings"
           :key="mapping.id"
@@ -220,30 +299,53 @@
             <div class="flex-1 min-w-0">
               <!-- 文件名和状态 -->
               <div class="flex items-center gap-2 mb-1">
-                <component :is="getFileIcon(mapping.mime_type)" class="w-4 h-4 text-muted-foreground" />
+                <component
+                  :is="getFileIcon(mapping.mime_type)"
+                  class="w-4 h-4 text-muted-foreground"
+                />
                 <span class="font-mono text-sm font-medium">{{ mapping.file_name }}</span>
-                <Badge v-if="mapping.is_expired" variant="secondary" class="text-xs">
+                <Badge
+                  v-if="mapping.is_expired"
+                  variant="secondary"
+                  class="text-xs"
+                >
                   已过期
                 </Badge>
-                <Badge v-else variant="outline" class="text-xs text-green-600">
+                <Badge
+                  v-else
+                  variant="outline"
+                  class="text-xs text-green-600"
+                >
                   有效
                 </Badge>
               </div>
               <!-- 显示名 -->
-              <p v-if="mapping.display_name" class="text-sm text-muted-foreground truncate">
+              <p
+                v-if="mapping.display_name"
+                class="text-sm text-muted-foreground truncate"
+              >
                 {{ mapping.display_name }}
               </p>
               <!-- 元信息 -->
               <div class="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                <span v-if="mapping.mime_type" class="flex items-center gap-1">
+                <span
+                  v-if="mapping.mime_type"
+                  class="flex items-center gap-1"
+                >
                   <File class="w-3 h-3" />
                   {{ mapping.mime_type }}
                 </span>
-                <span v-if="mapping.username" class="flex items-center gap-1">
+                <span
+                  v-if="mapping.username"
+                  class="flex items-center gap-1"
+                >
                   <User class="w-3 h-3" />
                   {{ mapping.username }}
                 </span>
-                <span v-if="mapping.key_name" class="flex items-center gap-1">
+                <span
+                  v-if="mapping.key_name"
+                  class="flex items-center gap-1"
+                >
                   <Key class="w-3 h-3" />
                   {{ mapping.key_name }}
                 </span>
@@ -251,7 +353,10 @@
                   <Clock class="w-3 h-3" />
                   {{ formatDate(mapping.created_at) }}
                 </span>
-                <span class="flex items-center gap-1" :class="{ 'text-red-500': mapping.is_expired }">
+                <span
+                  class="flex items-center gap-1"
+                  :class="{ 'text-red-500': mapping.is_expired }"
+                >
                   <Timer class="w-3 h-3" />
                   过期: {{ formatDate(mapping.expires_at) }}
                 </span>
@@ -274,7 +379,10 @@
       </div>
 
       <!-- 分页 -->
-      <div v-if="totalPages > 1" class="px-4 sm:px-6 py-3 border-t border-border/60 flex items-center justify-between">
+      <div
+        v-if="totalPages > 1"
+        class="px-4 sm:px-6 py-3 border-t border-border/60 flex items-center justify-between"
+      >
         <p class="text-xs text-muted-foreground">
           共 {{ total }} 条记录
         </p>

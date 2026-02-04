@@ -398,7 +398,10 @@
       <h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
         统计周期
       </h3>
-      <TimeRangePicker v-model="dailyTimeRange" :allow-hourly="true" />
+      <TimeRangePicker
+        v-model="dailyTimeRange"
+        :allow-hourly="true"
+      />
     </div>
 
     <!-- 趋势图表区域 -->

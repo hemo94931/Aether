@@ -271,7 +271,7 @@ async def _calculate_and_record_usage(
             cache_read_input_tokens=cache_read_input_tokens,
             request_type="endpoint_test",  # 使用特殊的请求类型标识测试
             api_format=api_format,
-            is_stream=False,
+            is_stream=request_data.get("stream", False) if request_data else False,
             response_time_ms=response_time_ms,
             first_byte_time_ms=response_time_ms,
             status_code=status_code,
@@ -587,57 +587,190 @@ class HttpRequestExecutor:
         self.timeout = timeout
 
     async def execute(self, request: EndpointCheckRequest) -> EndpointCheckResult:
-        """执行HTTP请求"""
+        """执行HTTP请求（支持流式和非流式响应）"""
         start_time = time.time()
         request_id = request.request_id or str(uuid.uuid4())[:8]
 
+        # 检查是否是流式请求
+        is_stream = request.json_body.get("stream", False) if request.json_body else False
+
         try:
-            # 使用httpx进行异步请求
             async with httpx.AsyncClient(timeout=self.timeout, verify=get_ssl_context()) as client:
-                response = await client.post(
-                    url=request.url, json=request.json_body, headers=request.headers
-                )
+                if is_stream:
+                    # 流式请求：读取 SSE 事件直到完成
+                    response_data = await self._execute_stream_request(client, request)
+                    end_time = time.time()
+                    response_time_ms = int((end_time - start_time) * 1000)
 
-            end_time = time.time()
-            response_time_ms = int((end_time - start_time) * 1000)
+                    if response_data.get("error"):
+                        # 流式请求返回错误
+                        return EndpointCheckResult(
+                            status_code=response_data.get("status_code", 500),
+                            headers=response_data.get("headers", {}),
+                            response_time_ms=response_time_ms,
+                            request_id=request_id,
+                            response_data=None,
+                            error_message=response_data.get("error"),
+                        )
 
-            # 处理响应
-            if response.status_code == 200:
-                try:
-                    response_data = response.json()
-                    logger.debug(
-                        f"[{request.api_format}] check_endpoint | response | json={_truncate_repr(response_data)}"
+                    return EndpointCheckResult(
+                        status_code=200,
+                        headers=response_data.get("headers", {}),
+                        response_time_ms=response_time_ms,
+                        request_id=request_id,
+                        response_data=response_data.get("final_response"),
                     )
-                except Exception:
-                    response_data = None
-                    logger.debug(f"[{request.api_format}] check_endpoint | response | invalid json")
+                else:
+                    # 非流式请求：直接读取响应
+                    response = await client.post(
+                        url=request.url, json=request.json_body, headers=request.headers
+                    )
 
-                return EndpointCheckResult(
-                    status_code=response.status_code,
-                    headers=dict(response.headers),
-                    response_time_ms=response_time_ms,
-                    request_id=request_id,
-                    response_data=response_data,
-                )
-            else:
-                # 对于非200状态码，使用错误处理器
-                error_body = response.text[:500] if response.text else "(empty)"
-                logger.debug(
-                    f"[{request.api_format}] check_endpoint | response | error={error_body}"
-                )
+                    end_time = time.time()
+                    response_time_ms = int((end_time - start_time) * 1000)
 
-                # 创建HTTPStatusError让错误处理器处理
-                http_error = httpx.HTTPStatusError(
-                    message=f"HTTP {response.status_code}: {error_body}",
-                    request=None,  # 我们不需要完整的request对象
-                    response=response,
-                )
+                    if response.status_code == 200:
+                        try:
+                            response_data = response.json()
+                            logger.debug(
+                                f"[{request.api_format}] check_endpoint | response | json={_truncate_repr(response_data)}"
+                            )
+                        except Exception:
+                            response_data = None
+                            logger.debug(
+                                f"[{request.api_format}] check_endpoint | response | invalid json"
+                            )
 
-                return await ErrorHandler.handle_error(http_error, request)
+                        return EndpointCheckResult(
+                            status_code=response.status_code,
+                            headers=dict(response.headers),
+                            response_time_ms=response_time_ms,
+                            request_id=request_id,
+                            response_data=response_data,
+                        )
+                    else:
+                        error_body = response.text[:500] if response.text else "(empty)"
+                        logger.debug(
+                            f"[{request.api_format}] check_endpoint | response | error={error_body}"
+                        )
+                        http_error = httpx.HTTPStatusError(
+                            message=f"HTTP {response.status_code}: {error_body}",
+                            request=None,
+                            response=response,
+                        )
+                        return await ErrorHandler.handle_error(http_error, request)
 
         except Exception as e:
-            # 使用统一错误处理器处理异常
             return await ErrorHandler.handle_error(e, request)
+
+    async def _execute_stream_request(
+        self, client: httpx.AsyncClient, request: EndpointCheckRequest
+    ) -> dict[str, Any]:
+        """执行流式请求并收集响应"""
+        try:
+            async with client.stream(
+                "POST", request.url, json=request.json_body, headers=request.headers
+            ) as response:
+                headers = dict(response.headers)
+
+                if response.status_code != 200:
+                    error_body = ""
+                    async for chunk in response.aiter_text():
+                        error_body += chunk
+                        if len(error_body) > 500:
+                            break
+                    logger.debug(
+                        "[{}] check_endpoint | stream error | {}",
+                        request.api_format,
+                        error_body[:500],
+                    )
+                    return {
+                        "error": f"HTTP {response.status_code}: {error_body[:500]}",
+                        "status_code": response.status_code,
+                        "headers": headers,
+                    }
+
+                # 收集 SSE 事件（兼容多种 API 格式）
+                final_response: dict[str, Any] = {}
+                collected_text = ""
+
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+
+                    try:
+                        event = json.loads(data_str)
+                        event_type = event.get("type", "")
+
+                        # OpenAI Responses API 事件
+                        if event_type == "response.output_text.delta":
+                            delta = event.get("delta", "")
+                            if isinstance(delta, str):
+                                collected_text += delta
+                        elif event_type == "response.completed":
+                            final_response = event.get("response", {})
+                            break
+
+                        # OpenAI Chat Completions 格式
+                        elif "choices" in event:
+                            for choice in event.get("choices", []):
+                                delta = choice.get("delta", {})
+                                content = delta.get("content")
+                                if content:
+                                    collected_text += content
+                                if choice.get("finish_reason"):
+                                    final_response = event
+                                    break
+
+                        # Claude Messages API 格式
+                        elif event_type == "content_block_delta":
+                            delta = event.get("delta", {})
+                            text = delta.get("text", "")
+                            if text:
+                                collected_text += text
+                        elif event_type == "message_stop":
+                            break
+
+                        # Gemini SSE 格式
+                        elif "candidates" in event:
+                            for candidate in event.get("candidates", []):
+                                content = candidate.get("content", {})
+                                for part in content.get("parts", []):
+                                    text = part.get("text", "")
+                                    if text:
+                                        collected_text += text
+
+                    except json.JSONDecodeError:
+                        continue
+
+                # 如果没有收到最终响应事件，构建一个基本响应
+                if not final_response:
+                    final_response = {
+                        "status": "completed",
+                        "output": [
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": collected_text}],
+                            }
+                        ],
+                    }
+
+                logger.debug(
+                    "[{}] check_endpoint | stream completed | text_length={}",
+                    request.api_format,
+                    len(collected_text),
+                )
+
+                return {"final_response": final_response, "headers": headers}
+
+        except Exception as e:
+            logger.warning("[{}] check_endpoint | stream error | {}", request.api_format, e)
+            return {"error": str(e), "status_code": 500, "headers": {}}
 
 
 class UsageCalculator:

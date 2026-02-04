@@ -114,38 +114,58 @@ class OpenAICliNormalizer(FormatNormalizer):
 
         return internal
 
-    def request_from_internal(self, internal: InternalRequest) -> dict[str, Any]:
+    # Codex 需要的 include 项
+    _CODEX_REQUIRED_INCLUDE = "reasoning.encrypted_content"
+
+    def request_from_internal(
+        self,
+        internal: InternalRequest,
+        *,
+        target_variant: str | None = None,
+    ) -> dict[str, Any]:
+        is_codex = str(target_variant or "").lower() == "codex"
+
         result: dict[str, Any] = {
             "model": internal.model,
-            "input": self._internal_messages_to_input(internal.messages),
+            "input": self._internal_messages_to_input(
+                internal.messages, system_to_developer=is_codex
+            ),
         }
 
-        instructions_text = self._join_instructions(internal)
-        if instructions_text:
-            result["instructions"] = instructions_text
+        # 合并 instructions，如果没有则使用 system
+        instructions_text = (
+            self._join_instructions(internal.instructions)
+            if internal.instructions
+            else internal.system
+        )
+        # Responses API 兼容 instructions 字段，Codex 强制要求
+        # 统一添加该字段以确保兼容性
+        result["instructions"] = instructions_text or ""
 
-        if internal.max_tokens is not None:
-            # Responses API 使用 max_output_tokens；兼容层仍可能接受 max_tokens
-            result["max_output_tokens"] = internal.max_tokens
-        if internal.temperature is not None:
-            result["temperature"] = internal.temperature
-        if internal.top_p is not None:
-            result["top_p"] = internal.top_p
+        # max_output_tokens/temperature/top_p: Codex 不支持，标准 API 可选
+        if not is_codex:
+            if internal.max_tokens is not None:
+                # Responses API 使用 max_output_tokens
+                result["max_output_tokens"] = internal.max_tokens
+            if internal.temperature is not None:
+                result["temperature"] = internal.temperature
+            if internal.top_p is not None:
+                result["top_p"] = internal.top_p
+
         if internal.stop_sequences:
             result["stop"] = list(internal.stop_sequences)
-        if internal.stream:
-            result["stream"] = True
+        # Codex 强制要求 stream=true；其他情况尊重客户端请求
+        result["stream"] = True if is_codex else bool(internal.stream)
 
         if internal.tools:
+            # Responses API 使用扁平结构: {type, name, description, parameters}
+            # 而非 Chat Completions 的嵌套结构: {type, function: {name, ...}}
             result["tools"] = [
                 {
                     "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters or {},
-                        **(t.extra.get("openai_function") or {}),
-                    },
+                    "name": t.name,
+                    "description": t.description or "",
+                    "parameters": t.parameters or {},
                     **(t.extra.get("openai_tool") or {}),
                 }
                 for t in internal.tools
@@ -153,6 +173,48 @@ class OpenAICliNormalizer(FormatNormalizer):
 
         if internal.tool_choice:
             result["tool_choice"] = self._tool_choice_to_openai(internal.tool_choice)
+
+        # 还原 OpenAI Responses API 的其他字段（黑名单：已单独处理的字段不还原）
+        openai_cli_extra = internal.extra.get("openai_cli", {})
+        handled_keys = {
+            "model",
+            "input",
+            "instructions",
+            "max_output_tokens",
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "stop",
+            "stream",
+            "tools",
+            "tool_choice",
+        }
+        for key, value in openai_cli_extra.items():
+            if key not in handled_keys and key not in result:
+                result[key] = value
+
+        # 统一设置 store=false（Codex 强制要求，标准 API 兼容）
+        if "store" not in result:
+            result["store"] = False
+
+        # Codex 特定设置（覆盖/删除不支持的字段）
+        if is_codex:
+            result["parallel_tool_calls"] = True
+            # 添加 reasoning.encrypted_content 到 include
+            include = result.get("include", [])
+            if not isinstance(include, list):
+                include = []
+            if self._CODEX_REQUIRED_INCLUDE not in include:
+                include.append(self._CODEX_REQUIRED_INCLUDE)
+            result["include"] = include
+            # 删除 Codex 不支持的字段
+            for key in (
+                "previous_response_id",
+                "prompt_cache_key",
+                "service_tier",
+                "max_completion_tokens",
+            ):
+                result.pop(key, None)
 
         return result
 
@@ -922,7 +984,12 @@ class OpenAICliNormalizer(FormatNormalizer):
             blocks.append(UnknownBlock(raw_type=ptype or "unknown", payload=part))
         return blocks
 
-    def _internal_messages_to_input(self, messages: list[InternalMessage]) -> list[dict[str, Any]]:
+    def _internal_messages_to_input(
+        self,
+        messages: list[InternalMessage],
+        *,
+        system_to_developer: bool = False,
+    ) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for msg in messages:
             # ToolUseBlock -> function_call
@@ -979,6 +1046,9 @@ class OpenAICliNormalizer(FormatNormalizer):
 
             # 普通 message（TextBlock）
             role = self._role_to_openai(msg.role)
+            # Codex 不接受 system 角色，需要转换为 developer
+            if system_to_developer and role == "system":
+                role = "developer"
             content_items: list[dict[str, Any]] = []
             has_text = False
 
@@ -990,7 +1060,9 @@ class OpenAICliNormalizer(FormatNormalizer):
                 if isinstance(block, UnknownBlock):
                     continue  # 跳过其他未知块
                 if isinstance(block, TextBlock) and block.text:
-                    content_items.append({"type": "input_text", "text": block.text})
+                    # assistant 角色使用 output_text，其他角色使用 input_text
+                    text_type = "output_text" if role == "assistant" else "input_text"
+                    content_items.append({"type": text_type, "text": block.text})
                     has_text = True
 
             if has_text:
@@ -1083,7 +1155,8 @@ class OpenAICliNormalizer(FormatNormalizer):
         if tool_choice.type == ToolChoiceType.REQUIRED:
             return "required"
         if tool_choice.type == ToolChoiceType.TOOL:
-            return {"type": "function", "function": {"name": tool_choice.tool_name or ""}}
+            # Responses API 使用扁平结构: {type, name}
+            return {"type": "function", "name": tool_choice.tool_name or ""}
         return "auto"
 
     def _role_from_value(self, role: Any) -> Role:
@@ -1148,14 +1221,11 @@ class OpenAICliNormalizer(FormatNormalizer):
             return {}
         return {k: v for k, v in payload.items() if k not in keep_keys}
 
-    def _join_instructions(self, internal: InternalRequest) -> str:
-        if internal.instructions:
-            parts: list[str] = []
-            for seg in internal.instructions:
-                if seg.text:
-                    parts.append(seg.text)
-            return "\n\n".join(parts)
-        return internal.system or ""
+    def _join_instructions(self, instructions: list[InstructionSegment]) -> str | None:
+        """合并 instructions 为单一字符串，与其他 normalizer 保持一致"""
+        parts = [seg.text for seg in instructions if seg.text]
+        joined = "\n\n".join(parts)
+        return joined or None
 
     def _error_type_from_value(self, value: str) -> ErrorType:
         for t in ErrorType:

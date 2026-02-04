@@ -29,11 +29,21 @@
                 <SelectValue placeholder="请选择" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="custom">自定义</SelectItem>
-                <SelectItem value="claude_code">ClaudeCode</SelectItem>
-                <SelectItem value="codex">Codex</SelectItem>
-                <SelectItem value="gemini_cli">GeminiCli</SelectItem>
-                <SelectItem value="antigravity">Antigravity</SelectItem>
+                <SelectItem value="custom">
+                  自定义
+                </SelectItem>
+                <SelectItem value="claude_code">
+                  ClaudeCode
+                </SelectItem>
+                <SelectItem value="codex">
+                  Codex
+                </SelectItem>
+                <SelectItem value="gemini_cli">
+                  GeminiCli
+                </SelectItem>
+                <SelectItem value="antigravity">
+                  Antigravity
+                </SelectItem>
               </SelectContent>
             </Select>
             <p

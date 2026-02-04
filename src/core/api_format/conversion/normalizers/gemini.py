@@ -189,7 +189,12 @@ class GeminiNormalizer(FormatNormalizer):
 
         return internal
 
-    def request_from_internal(self, internal: InternalRequest) -> dict[str, Any]:
+    def request_from_internal(
+        self,
+        internal: InternalRequest,
+        *,
+        target_variant: str | None = None,
+    ) -> dict[str, Any]:
         system_text = internal.system or self._join_instructions(internal.instructions)
 
         # tools/tool_choice

@@ -65,12 +65,17 @@ const roleComparison = [
       </h2>
 
       <div class="grid gap-4 md:grid-cols-2">
-        <div :class="[panelClasses.section, 'p-5']">
+        <div
+          class="p-5"
+          :class="[panelClasses.section]"
+        >
           <div class="flex items-center gap-3 mb-3">
             <div class="p-2 rounded-lg bg-blue-500/10">
               <Users class="h-5 w-5 text-blue-500" />
             </div>
-            <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">普通用户</h3>
+            <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+              普通用户
+            </h3>
           </div>
           <ul class="space-y-2 text-sm text-[#666663] dark:text-[#a3a094]">
             <li class="flex items-start gap-2">
@@ -88,12 +93,17 @@ const roleComparison = [
           </ul>
         </div>
 
-        <div :class="[panelClasses.section, 'p-5']">
+        <div
+          class="p-5"
+          :class="[panelClasses.section]"
+        >
           <div class="flex items-center gap-3 mb-3">
             <div class="p-2 rounded-lg bg-orange-500/10">
               <Shield class="h-5 w-5 text-orange-500" />
             </div>
-            <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">管理员</h3>
+            <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+              管理员
+            </h3>
           </div>
           <ul class="space-y-2 text-sm text-[#666663] dark:text-[#a3a094]">
             <li class="flex items-start gap-2">
@@ -113,14 +123,23 @@ const roleComparison = [
       </div>
 
       <!-- 权限对比表 -->
-      <div :class="[panelClasses.section, 'overflow-hidden']">
+      <div
+        class="overflow-hidden"
+        :class="[panelClasses.section]"
+      >
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)] bg-[#fafaf7]/50 dark:bg-[#1f1d1a]/50">
-                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">功能</th>
-                <th class="px-4 py-3 text-center font-medium text-[#666663] dark:text-[#a3a094]">普通用户</th>
-                <th class="px-4 py-3 text-center font-medium text-[#666663] dark:text-[#a3a094]">管理员</th>
+                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                  功能
+                </th>
+                <th class="px-4 py-3 text-center font-medium text-[#666663] dark:text-[#a3a094]">
+                  普通用户
+                </th>
+                <th class="px-4 py-3 text-center font-medium text-[#666663] dark:text-[#a3a094]">
+                  管理员
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -133,12 +152,24 @@ const roleComparison = [
                   {{ item.feature }}
                 </td>
                 <td class="px-4 py-3 text-center">
-                  <Check v-if="item.user" class="h-5 w-5 text-green-500 mx-auto" />
-                  <span v-else class="text-[#999]">—</span>
+                  <Check
+                    v-if="item.user"
+                    class="h-5 w-5 text-green-500 mx-auto"
+                  />
+                  <span
+                    v-else
+                    class="text-[#999]"
+                  >—</span>
                 </td>
                 <td class="px-4 py-3 text-center">
-                  <Check v-if="item.admin" class="h-5 w-5 text-green-500 mx-auto" />
-                  <span v-else class="text-[#999]">—</span>
+                  <Check
+                    v-if="item.admin"
+                    class="h-5 w-5 text-green-500 mx-auto"
+                  />
+                  <span
+                    v-else
+                    class="text-[#999]"
+                  >—</span>
                 </td>
               </tr>
             </tbody>
@@ -153,12 +184,17 @@ const roleComparison = [
         API Key 管理
       </h2>
 
-      <div :class="[panelClasses.section, 'p-5']">
+      <div
+        class="p-5"
+        :class="[panelClasses.section]"
+      >
         <div class="flex items-center gap-3 mb-4">
           <div class="p-2 rounded-lg bg-orange-500/10">
             <Key class="h-5 w-5 text-orange-500" />
           </div>
-          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">什么是 API Key？</h3>
+          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+            什么是 API Key？
+          </h3>
         </div>
 
         <ul class="space-y-3 text-sm text-[#666663] dark:text-[#a3a094]">
@@ -188,14 +224,23 @@ const roleComparison = [
         Key 配置选项
       </h2>
 
-      <div :class="[panelClasses.section, 'overflow-hidden']">
+      <div
+        class="overflow-hidden"
+        :class="[panelClasses.section]"
+      >
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)] bg-[#fafaf7]/50 dark:bg-[#1f1d1a]/50">
-                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">选项</th>
-                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">说明</th>
-                <th class="px-4 py-3 text-center font-medium text-[#666663] dark:text-[#a3a094]">必填</th>
+                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                  选项
+                </th>
+                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                  说明
+                </th>
+                <th class="px-4 py-3 text-center font-medium text-[#666663] dark:text-[#a3a094]">
+                  必填
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -211,8 +256,14 @@ const roleComparison = [
                   {{ field.description }}
                 </td>
                 <td class="px-4 py-3 text-center">
-                  <span v-if="field.required" :class="panelClasses.badgeGreen">必填</span>
-                  <span v-else class="text-[#999]">可选</span>
+                  <span
+                    v-if="field.required"
+                    :class="panelClasses.badgeGreen"
+                  >必填</span>
+                  <span
+                    v-else
+                    class="text-[#999]"
+                  >可选</span>
                 </td>
               </tr>
             </tbody>
@@ -227,22 +278,31 @@ const roleComparison = [
         配额设置
       </h2>
 
-      <div :class="[panelClasses.section, 'p-5 space-y-4']">
+      <div
+        class="p-5 space-y-4"
+        :class="[panelClasses.section]"
+      >
         <div class="flex items-center gap-3">
           <Clock class="h-5 w-5 text-[#cc785c]" />
-          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">配额类型</h3>
+          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+            配额类型
+          </h3>
         </div>
 
         <div class="grid gap-4 md:grid-cols-2">
           <div class="p-4 rounded-lg bg-[#f5f5f0]/50 dark:bg-[#1f1d1a]/50">
-            <h4 class="font-medium text-[#262624] dark:text-[#f1ead8]">请求次数配额</h4>
+            <h4 class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              请求次数配额
+            </h4>
             <p class="text-sm text-[#666663] dark:text-[#a3a094] mt-1">
               限制每日/每月的 API 调用次数，超过后请求会被拒绝
             </p>
           </div>
 
           <div class="p-4 rounded-lg bg-[#f5f5f0]/50 dark:bg-[#1f1d1a]/50">
-            <h4 class="font-medium text-[#262624] dark:text-[#f1ead8]">Token 用量配额</h4>
+            <h4 class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              Token 用量配额
+            </h4>
             <p class="text-sm text-[#666663] dark:text-[#a3a094] mt-1">
               限制每日/每月的 Token 消耗量，适合控制成本
             </p>
@@ -252,7 +312,9 @@ const roleComparison = [
         <div class="flex items-start gap-3">
           <Info class="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
           <div class="text-sm text-[#666663] dark:text-[#a3a094]">
-            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">配额继承</p>
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              配额继承
+            </p>
             <p class="mt-1">
               可以在用户级别设置默认配额，新创建的 Key 会自动继承该配额。
               也可以在创建 Key 时覆盖默认配额。
@@ -268,7 +330,10 @@ const roleComparison = [
         模型访问控制
       </h2>
 
-      <div :class="[panelClasses.section, 'p-5']">
+      <div
+        class="p-5"
+        :class="[panelClasses.section]"
+      >
         <p class="text-sm text-[#666663] dark:text-[#a3a094] mb-4">
           通过「允许的模型」字段，可以限制 Key 只能访问特定模型：
         </p>
@@ -288,7 +353,9 @@ const roleComparison = [
           <div class="flex items-start gap-2">
             <AlertTriangle class="h-5 w-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
             <div class="text-sm">
-              <p class="font-medium text-yellow-700 dark:text-yellow-300">使用场景</p>
+              <p class="font-medium text-yellow-700 dark:text-yellow-300">
+                使用场景
+              </p>
               <p class="text-yellow-600 dark:text-yellow-400 mt-1">
                 比如限制免费用户只能使用 gpt-3.5，付费用户可以使用 gpt-4。
                 或者为不同项目创建只能访问特定模型的 Key。
@@ -305,11 +372,16 @@ const roleComparison = [
         安全建议
       </h2>
 
-      <div :class="[panelClasses.section, 'p-4 space-y-3']">
+      <div
+        class="p-4 space-y-3"
+        :class="[panelClasses.section]"
+      >
         <div class="flex items-start gap-3">
           <Shield class="h-5 w-5 text-[#cc785c] flex-shrink-0 mt-0.5" />
           <div class="text-sm">
-            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">设置 Key 有效期</p>
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              设置 Key 有效期
+            </p>
             <p class="text-[#666663] dark:text-[#a3a094] mt-1">
               为临时使用的 Key 设置过期时间，避免遗忘造成安全风险。
             </p>
@@ -319,7 +391,9 @@ const roleComparison = [
         <div class="flex items-start gap-3">
           <Shield class="h-5 w-5 text-[#cc785c] flex-shrink-0 mt-0.5" />
           <div class="text-sm">
-            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">按场景分配 Key</p>
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              按场景分配 Key
+            </p>
             <p class="text-[#666663] dark:text-[#a3a094] mt-1">
               为开发、测试、生产环境分别创建 Key，便于追踪和管理。
             </p>
@@ -329,7 +403,9 @@ const roleComparison = [
         <div class="flex items-start gap-3">
           <Shield class="h-5 w-5 text-[#cc785c] flex-shrink-0 mt-0.5" />
           <div class="text-sm">
-            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">启用 IP 白名单</p>
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              启用 IP 白名单
+            </p>
             <p class="text-[#666663] dark:text-[#a3a094] mt-1">
               对于生产环境的 Key，配置 IP 白名单可以防止 Key 泄露后被滥用。
             </p>
@@ -339,7 +415,9 @@ const roleComparison = [
         <div class="flex items-start gap-3">
           <Shield class="h-5 w-5 text-[#cc785c] flex-shrink-0 mt-0.5" />
           <div class="text-sm">
-            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">定期审计</p>
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              定期审计
+            </p>
             <p class="text-[#666663] dark:text-[#a3a094] mt-1">
               定期检查用量统计和审计日志，发现异常及时禁用相关 Key。
             </p>
@@ -352,11 +430,16 @@ const roleComparison = [
     <section class="pt-4">
       <RouterLink
         to="/guide/advanced"
-        :class="[panelClasses.section, panelClasses.cardHover, 'p-4 flex items-center gap-3 group']"
+        class="p-4 flex items-center gap-3 group"
+        :class="[panelClasses.section, panelClasses.cardHover]"
       >
         <div class="flex-1">
-          <div class="font-medium text-[#262624] dark:text-[#f1ead8]">下一步：高级功能</div>
-          <div class="text-sm text-[#666663] dark:text-[#a3a094]">格式转换、请求头规则等高级配置</div>
+          <div class="font-medium text-[#262624] dark:text-[#f1ead8]">
+            下一步：高级功能
+          </div>
+          <div class="text-sm text-[#666663] dark:text-[#a3a094]">
+            格式转换、请求头规则等高级配置
+          </div>
         </div>
         <ArrowRight class="h-5 w-5 text-[#999] group-hover:text-[#cc785c] transition-colors" />
       </RouterLink>

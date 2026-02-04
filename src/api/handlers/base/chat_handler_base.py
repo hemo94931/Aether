@@ -68,7 +68,6 @@ from src.models.database import (
     User,
 )
 from src.services.cache.aware_scheduler import ProviderCandidate
-from src.services.provider.codex import maybe_patch_request_for_codex
 from src.services.provider.transport import (
     build_provider_url,
     get_vertex_ai_effective_format,
@@ -720,6 +719,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             key_id=str(key.id),
             provider_api_format=str(endpoint.api_format) if endpoint.api_format else None,
         )
+        ctx.provider_type = str(getattr(provider, "provider_type", "") or "")
 
         # ctx.api_format 是枚举，需要取 value 作为字符串
         _api_format_str = (
@@ -754,13 +754,18 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         else:
             request_body = dict(original_request_body)
 
+        # 确定目标变体（用于 Codex 等需要特殊处理的上游）
+        provider_type = str(getattr(provider, "provider_type", "") or "").lower()
+        target_variant = provider_type if provider_type == "codex" else None
+
         # 跨格式：先做请求体转换（失败触发 failover）
+        registry = get_format_converter_registry()
         if needs_conversion:
-            registry = get_format_converter_registry()
             request_body = registry.convert_request(
                 request_body,
                 str(client_api_format),
                 str(provider_api_format),
+                target_variant=target_variant,
             )
             # 格式转换后，为需要 model 字段的格式设置模型名
             self._set_model_after_conversion(
@@ -779,13 +784,14 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         else:
             # 同格式：按原逻辑做轻量清理（子类可覆盖以移除不需要的字段）
             request_body = self.prepare_provider_request_body(request_body)
-
-        # Provider-specific compatibility patches (e.g. Codex requires store=false and instructions).
-        request_body = maybe_patch_request_for_codex(
-            provider_type=str(getattr(provider, "provider_type", "") or ""),
-            provider_api_format=str(provider_api_format),
-            request_body=request_body,
-        )
+            # 同格式时也需要应用 target_variant 转换（如 Codex）
+            if target_variant:
+                request_body = registry.convert_request(
+                    request_body,
+                    str(provider_api_format),
+                    str(provider_api_format),
+                    target_variant=target_variant,
+                )
 
         # 构建请求（上游始终使用 header 认证，不跟随客户端的 query 方式）
         provider_payload, provider_headers = self._request_builder.build(
@@ -1087,13 +1093,18 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             else:
                 request_body = dict(request_body_ref["body"])
 
+            # 确定目标变体（用于 Codex 等需要特殊处理的上游）
+            provider_type = str(getattr(provider, "provider_type", "") or "").lower()
+            target_variant = provider_type if provider_type == "codex" else None
+
             # 跨格式：先做请求体转换（失败触发 failover）
+            registry = get_format_converter_registry()
             if needs_conversion:
-                registry = get_format_converter_registry()
                 request_body = registry.convert_request(
                     request_body,
                     client_api_format,
                     provider_api_format,
+                    target_variant=target_variant,
                 )
                 # 格式转换后，为需要 model 字段的格式设置模型名
                 self._set_model_after_conversion(
@@ -1112,13 +1123,14 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             else:
                 # 同格式：按原逻辑做轻量清理（子类可覆盖以移除不需要的字段）
                 request_body = self.prepare_provider_request_body(request_body)
-
-            # Provider-specific compatibility patches (e.g. Codex requires store=false and instructions).
-            request_body = maybe_patch_request_for_codex(
-                provider_type=str(getattr(provider, "provider_type", "") or ""),
-                provider_api_format=str(provider_api_format),
-                request_body=request_body,
-            )
+                # 同格式时也需要应用 target_variant 转换（如 Codex）
+                if target_variant:
+                    request_body = registry.convert_request(
+                        request_body,
+                        provider_api_format,
+                        provider_api_format,
+                        target_variant=target_variant,
+                    )
 
             # 构建请求（上游始终使用 header 认证，不跟随客户端的 query 方式）
             provider_payload, provider_hdrs = self._request_builder.build(

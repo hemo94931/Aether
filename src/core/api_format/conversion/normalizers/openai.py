@@ -200,7 +200,12 @@ class OpenAINormalizer(FormatNormalizer):
 
         return internal
 
-    def request_from_internal(self, internal: InternalRequest) -> dict[str, Any]:
+    def request_from_internal(
+        self,
+        internal: InternalRequest,
+        *,
+        target_variant: str | None = None,
+    ) -> dict[str, Any]:
         out_messages: list[dict[str, Any]] = []
 
         if internal.instructions:

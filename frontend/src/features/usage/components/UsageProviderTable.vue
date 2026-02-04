@@ -7,70 +7,70 @@
     </div>
     <div class="overflow-auto max-h-[320px]">
       <Table class="text-sm">
-      <TableHeader>
-        <TableRow>
-          <TableHead class="h-8 px-2">
-            提供商
-          </TableHead>
-          <TableHead class="h-8 px-2 text-right">
-            请求数
-          </TableHead>
-          <TableHead class="h-8 px-2 text-right">
-            Tokens
-          </TableHead>
-          <TableHead class="h-8 px-2 text-right">
-            费用
-          </TableHead>
-          <TableHead class="h-8 px-2 text-right">
-            成功率
-          </TableHead>
-          <TableHead class="h-8 px-2 text-right">
-            平均响应
-          </TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        <TableRow v-if="data.length === 0">
-          <TableCell
-            :colspan="6"
-            class="text-center py-6 text-muted-foreground px-2"
+        <TableHeader>
+          <TableRow>
+            <TableHead class="h-8 px-2">
+              提供商
+            </TableHead>
+            <TableHead class="h-8 px-2 text-right">
+              请求数
+            </TableHead>
+            <TableHead class="h-8 px-2 text-right">
+              Tokens
+            </TableHead>
+            <TableHead class="h-8 px-2 text-right">
+              费用
+            </TableHead>
+            <TableHead class="h-8 px-2 text-right">
+              成功率
+            </TableHead>
+            <TableHead class="h-8 px-2 text-right">
+              平均响应
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow v-if="data.length === 0">
+            <TableCell
+              :colspan="6"
+              class="text-center py-6 text-muted-foreground px-2"
+            >
+              暂无提供商统计数据
+            </TableCell>
+          </TableRow>
+          <TableRow
+            v-for="provider in data"
+            :key="provider.provider"
           >
-            暂无提供商统计数据
-          </TableCell>
-        </TableRow>
-        <TableRow
-          v-for="provider in data"
-          :key="provider.provider"
-        >
-          <TableCell class="font-medium py-2 px-2">
-            {{ provider.provider }}
-          </TableCell>
-          <TableCell class="text-right py-2 px-2">
-            {{ provider.requests }}
-          </TableCell>
-          <TableCell class="text-right py-2 px-2">
-            <span>{{ formatTokens(provider.totalTokens) }}</span>
-          </TableCell>
-          <TableCell class="text-right py-2 px-2">
-            <div class="flex flex-col items-end text-xs gap-0.5">
-              <span class="text-primary font-medium">{{ formatCurrency(provider.totalCost) }}</span>
-              <span
-                v-if="isAdmin && provider.actualCost !== undefined"
-                class="text-muted-foreground text-[10px]"
-              >
-                {{ formatCurrency(provider.actualCost) }}
-              </span>
-            </div>
-          </TableCell>
-          <TableCell class="text-right py-2 px-2">
-            <span :class="getSuccessRateClass(provider.successRate)">{{ provider.successRate }}%</span>
-          </TableCell>
-          <TableCell class="text-right text-muted-foreground py-2 px-2">
-            {{ provider.avgResponseTime }}
-          </TableCell>
-        </TableRow>
-      </TableBody>
-    </Table>
+            <TableCell class="font-medium py-2 px-2">
+              {{ provider.provider }}
+            </TableCell>
+            <TableCell class="text-right py-2 px-2">
+              {{ provider.requests }}
+            </TableCell>
+            <TableCell class="text-right py-2 px-2">
+              <span>{{ formatTokens(provider.totalTokens) }}</span>
+            </TableCell>
+            <TableCell class="text-right py-2 px-2">
+              <div class="flex flex-col items-end text-xs gap-0.5">
+                <span class="text-primary font-medium">{{ formatCurrency(provider.totalCost) }}</span>
+                <span
+                  v-if="isAdmin && provider.actualCost !== undefined"
+                  class="text-muted-foreground text-[10px]"
+                >
+                  {{ formatCurrency(provider.actualCost) }}
+                </span>
+              </div>
+            </TableCell>
+            <TableCell class="text-right py-2 px-2">
+              <span :class="getSuccessRateClass(provider.successRate)">{{ provider.successRate }}%</span>
+            </TableCell>
+            <TableCell class="text-right text-muted-foreground py-2 px-2">
+              {{ provider.avgResponseTime }}
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
     </div>
   </Card>
 </template>

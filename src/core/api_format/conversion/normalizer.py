@@ -28,8 +28,18 @@ class FormatNormalizer(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def request_from_internal(self, internal: InternalRequest) -> dict[str, Any]:
-        """将内部表示转换为格式特定请求"""
+    def request_from_internal(
+        self,
+        internal: InternalRequest,
+        *,
+        target_variant: str | None = None,
+    ) -> dict[str, Any]:
+        """将内部表示转换为格式特定请求
+
+        Args:
+            internal: 内部请求表示
+            target_variant: 目标变体（如 "codex"），用于同格式但有细微差异的上游
+        """
         raise NotImplementedError
 
     # ============ 响应转换 ============

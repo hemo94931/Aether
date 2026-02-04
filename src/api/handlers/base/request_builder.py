@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import json
 import time
-
-import httpx
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import httpx
+from sqlalchemy.orm import object_session
+
+from src.clients.redis_client import get_redis_client
 from src.core.api_format import (
     UPSTREAM_DROP_HEADERS,
     HeaderBuilder,
@@ -30,9 +32,6 @@ from src.core.api_format import (
 from src.core.crypto import crypto_service
 from src.core.logger import logger
 from src.core.provider_oauth_utils import enrich_auth_config, post_oauth_token
-from sqlalchemy.orm import object_session
-
-from src.clients.redis_client import get_redis_client
 
 if TYPE_CHECKING:
     from src.models.database import ProviderAPIKey, ProviderEndpoint
@@ -108,6 +107,8 @@ def get_test_request_data(request_data: dict[str, Any] | None = None) -> dict[st
 def build_test_request_body(
     format_id: str,
     request_data: dict[str, Any] | None = None,
+    *,
+    target_variant: str | None = None,
 ) -> dict[str, Any]:
     """构建测试请求体，自动处理格式转换
 
@@ -116,6 +117,7 @@ def build_test_request_body(
     Args:
         format_id: 目标 endpoint signature（如 "claude:chat", "gemini:chat", "openai:cli"）
         request_data: 可选的请求数据，会与默认测试请求合并
+        target_variant: 目标变体（如 "codex"），用于同格式但有细微差异的上游
 
     Returns:
         转换为目标 API 格式的请求体
@@ -124,21 +126,19 @@ def build_test_request_body(
         format_conversion_registry,
         register_default_normalizers,
     )
-    from src.core.api_format.utils import get_base_format
 
     register_default_normalizers()
 
     # 获取测试请求数据（OpenAI 格式）
     source_data = get_test_request_data(request_data)
 
-    # CLI 格式使用基础格式进行转换（claude:cli -> claude:chat）
-    target_format = get_base_format(format_id) or format_id
-
-    # 使用注册表进行格式转换 (openai:chat -> 目标基础格式)
+    # 直接使用目标格式进行转换，不再转换为基础格式
+    # 这样 openai:cli 会正确转换为 Responses API 格式
     return format_conversion_registry.convert_request(
         source_data,
         make_signature_key("openai", "chat"),
-        target_format,
+        format_id,
+        target_variant=target_variant,
     )
 
 

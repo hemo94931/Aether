@@ -158,9 +158,9 @@ class GeminiCliAdapter(CliAdapterBase):
         return config.internal_user_agent_gemini_cli
 
     @classmethod
-    def get_cli_extra_headers(cls) -> dict[str, str]:
+    def get_cli_extra_headers(cls, *, base_url: str | None = None) -> dict[str, str]:
         """获取Gemini CLI额外请求头，包含 x-app: cli 标识"""
-        headers = super().get_cli_extra_headers()
+        headers = super().get_cli_extra_headers(base_url=base_url)
         headers["x-app"] = "cli"  # 标识 CLI 模式，让上游使用正确的 adapter
         return headers
 

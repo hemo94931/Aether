@@ -72,7 +72,6 @@ from src.models.database import (
     User,
 )
 from src.services.cache.aware_scheduler import ProviderCandidate
-from src.services.provider.codex import maybe_patch_request_for_codex
 from src.services.provider.transport import build_provider_url
 from src.services.system.config import SystemConfigService
 from src.utils.sse_parser import SSEEventParser
@@ -425,6 +424,8 @@ class CliMessageHandlerBase(BaseMessageHandler):
         mapped_model: str | None,
         fallback_model: str,
         is_stream: bool,
+        *,
+        target_variant: str | None = None,
     ) -> tuple[dict[str, Any], str]:
         """
         跨格式请求转换的公共逻辑
@@ -438,6 +439,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             mapped_model: 映射后的模型名
             fallback_model: 备用模型名（通常是原始请求的 model）
             is_stream: 是否流式请求
+            target_variant: 目标变体（如 "codex"），用于同格式但有细微差异的上游
 
         Returns:
             (转换后的请求体, 用于 URL 的模型名)
@@ -447,6 +449,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             request_body,
             str(client_api_format),
             str(provider_api_format),
+            target_variant=target_variant,
         )
 
         # 先计算 URL 模型（在清理 body 中的 model 字段之前）
@@ -697,6 +700,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         # 记录 Provider 信息
         ctx.provider_name = str(provider.name)
         ctx.provider_id = str(provider.id)
+        ctx.provider_type = str(getattr(provider, "provider_type", "") or "")
         ctx.endpoint_id = str(endpoint.id)
         ctx.key_id = str(key.id)
 
@@ -730,6 +734,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
         )
         ctx.needs_conversion = needs_conversion
 
+        # 确定目标变体（用于 Codex 等需要特殊处理的上游）
+        provider_type = str(getattr(provider, "provider_type", "") or "").lower()
+        target_variant = provider_type if provider_type == "codex" else None
+
         # 跨格式：先做请求体转换（失败触发 failover）
         if needs_conversion and provider_api_format:
             request_body, url_model = self._convert_request_for_cross_format(
@@ -739,6 +747,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 mapped_model,
                 ctx.model,
                 is_stream=True,
+                target_variant=target_variant,
             )
         else:
             # 同格式：按原逻辑做轻量清理（子类可覆盖）
@@ -746,13 +755,15 @@ class CliMessageHandlerBase(BaseMessageHandler):
             url_model = (
                 self.get_model_for_url(request_body, mapped_model) or mapped_model or ctx.model
             )
-
-        # Provider-specific compatibility patches (e.g. Codex requires store=false and instructions).
-        request_body = maybe_patch_request_for_codex(
-            provider_type=str(getattr(provider, "provider_type", "") or ""),
-            provider_api_format=str(provider_api_format),
-            request_body=request_body,
-        )
+            # 同格式时也需要应用 target_variant 转换（如 Codex）
+            if target_variant:
+                registry = get_format_converter_registry()
+                request_body = registry.convert_request(
+                    request_body,
+                    provider_api_format,
+                    provider_api_format,
+                    target_variant=target_variant,
+                )
 
         # 获取认证信息（处理 Service Account 等异步认证场景）
         auth_info = await get_provider_auth(endpoint, key)
@@ -1922,12 +1933,19 @@ class CliMessageHandlerBase(BaseMessageHandler):
             try:
                 from src.models.database import ApiKey as ApiKeyModel
 
+                # 采集上游元数据（仅成功请求）
+                if ctx.is_success():
+                    self._collect_upstream_metadata(bg_db, ctx)
+
                 user = bg_db.query(User).filter(User.id == ctx.user_id).first()
                 api_key = bg_db.query(ApiKeyModel).filter(ApiKeyModel.id == ctx.api_key_id).first()
 
                 if not user or not api_key:
                     logger.warning(
-                        f"[{ctx.request_id}] 无法记录统计: user={user is not None}, api_key={api_key is not None}"
+                        "[{}] 无法记录统计: user={} api_key={}",
+                        ctx.request_id,
+                        user is not None,
+                        api_key is not None,
                     )
                     return
 
@@ -2153,6 +2171,19 @@ class CliMessageHandlerBase(BaseMessageHandler):
         except Exception as e:
             logger.exception("记录流式统计信息时出错")
 
+    @staticmethod
+    def _collect_upstream_metadata(db: Session, ctx: StreamContext) -> None:
+        """采集上游元数据并更新 ProviderAPIKey.upstream_metadata（带节流）"""
+        from src.services.provider.metadata_collectors import collect_and_save_upstream_metadata
+
+        collect_and_save_upstream_metadata(
+            db,
+            provider_type=ctx.provider_type or "",
+            key_id=ctx.key_id or "",
+            response_headers=ctx.response_headers or {},
+            request_id=ctx.request_id or "",
+        )
+
     async def _record_stream_failure(
         self,
         ctx: StreamContext,
@@ -2285,6 +2316,10 @@ class CliMessageHandlerBase(BaseMessageHandler):
             )
             needs_conversion = bool(getattr(candidate, "needs_conversion", False))
 
+            # 确定目标变体（用于 Codex 等需要特殊处理的上游）
+            provider_type = str(getattr(provider, "provider_type", "") or "").lower()
+            target_variant = provider_type if provider_type == "codex" else None
+
             # 跨格式：先做请求体转换（失败触发 failover）
             if needs_conversion and provider_api_format:
                 request_body, url_model = self._convert_request_for_cross_format(
@@ -2294,6 +2329,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
                     mapped_model,
                     model,
                     is_stream=False,
+                    target_variant=target_variant,
                 )
             else:
                 # 同格式：按原逻辑做轻量清理（子类可覆盖）
@@ -2301,13 +2337,15 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 url_model = (
                     self.get_model_for_url(request_body, mapped_model) or mapped_model or model
                 )
-
-            # Provider-specific compatibility patches (e.g. Codex requires store=false and instructions).
-            request_body = maybe_patch_request_for_codex(
-                provider_type=str(getattr(provider, "provider_type", "") or ""),
-                provider_api_format=str(provider_api_format),
-                request_body=request_body,
-            )
+                # 同格式时也需要应用 target_variant 转换（如 Codex）
+                if target_variant:
+                    registry = get_format_converter_registry()
+                    request_body = registry.convert_request(
+                        request_body,
+                        provider_api_format,
+                        provider_api_format,
+                        target_variant=target_variant,
+                    )
 
             # 获取认证信息（处理 Service Account 等异步认证场景）
             auth_info = await get_provider_auth(endpoint, key)

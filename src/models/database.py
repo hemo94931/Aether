@@ -1391,6 +1391,13 @@ class ProviderAPIKey(Base):
     model_include_patterns = Column(JSON, nullable=True)  # 包含规则列表，空表示不过滤（包含所有）
     model_exclude_patterns = Column(JSON, nullable=True)  # 排除规则列表，空表示不排除
 
+    # 上游元数据（由响应头解析器采集，如 Codex 额度信息）
+    upstream_metadata = Column(JSON, nullable=True, default=dict)
+
+    # OAuth 失效状态（账号被封、授权撤销、刷新失败等）
+    oauth_invalid_at = Column(DateTime(timezone=True), nullable=True)  # 失效时间
+    oauth_invalid_reason = Column(String(255), nullable=True)  # 失效原因
+
     # 时间戳
     created_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

@@ -88,12 +88,17 @@ const systemSettings = [
         格式转换
       </h2>
 
-      <div :class="[panelClasses.section, 'p-5']">
+      <div
+        class="p-5"
+        :class="[panelClasses.section]"
+      >
         <div class="flex items-center gap-3 mb-4">
           <div class="p-2 rounded-lg bg-purple-500/10">
             <Shuffle class="h-5 w-5 text-purple-500" />
           </div>
-          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">什么是格式转换？</h3>
+          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+            什么是格式转换？
+          </h3>
         </div>
 
         <p class="text-sm text-[#666663] dark:text-[#a3a094] mb-4">
@@ -112,21 +117,30 @@ const systemSettings = [
               <ArrowRight class="h-4 w-4 text-[#999]" />
               <span :class="panelClasses.badgeGreen">{{ example.to }}</span>
             </div>
-            <p class="text-xs text-[#666663] dark:text-[#a3a094]">{{ example.description }}</p>
+            <p class="text-xs text-[#666663] dark:text-[#a3a094]">
+              {{ example.description }}
+            </p>
           </div>
         </div>
       </div>
 
       <!-- 如何启用 -->
-      <div :class="[panelClasses.section, 'p-5 space-y-4']">
-        <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">如何启用格式转换</h3>
+      <div
+        class="p-5 space-y-4"
+        :class="[panelClasses.section]"
+      >
+        <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+          如何启用格式转换
+        </h3>
 
         <div class="flex items-start gap-4">
           <div class="w-8 h-8 rounded-full bg-[#cc785c] flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
             1
           </div>
           <div>
-            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">开启系统设置</p>
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              开启系统设置
+            </p>
             <p class="text-sm text-[#666663] dark:text-[#a3a094] mt-1">
               在「系统设置」中开启 <code class="text-xs bg-[#f5f5f0] dark:bg-[#1f1d1a] px-1.5 py-0.5 rounded">ENABLE_API_FORMAT_CONVERSION</code>
             </p>
@@ -138,7 +152,9 @@ const systemSettings = [
             2
           </div>
           <div>
-            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">配置端点</p>
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              配置端点
+            </p>
             <p class="text-sm text-[#666663] dark:text-[#a3a094] mt-1">
               在端点配置中，启用「格式接受配置」并选择接受的入站格式
             </p>
@@ -150,7 +166,9 @@ const systemSettings = [
             3
           </div>
           <div>
-            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">使用</p>
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              使用
+            </p>
             <p class="text-sm text-[#666663] dark:text-[#a3a094] mt-1">
               用户现在可以用 OpenAI SDK 调用配置在 Claude 格式端点上的模型
             </p>
@@ -158,11 +176,16 @@ const systemSettings = [
         </div>
       </div>
 
-      <div :class="[panelClasses.section, 'p-4']">
+      <div
+        class="p-4"
+        :class="[panelClasses.section]"
+      >
         <div class="flex items-start gap-3">
           <Info class="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
           <div class="text-sm text-[#666663] dark:text-[#a3a094]">
-            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">注意事项</p>
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              注意事项
+            </p>
             <p class="mt-1">
               格式转换会增加少量延迟（通常 &lt;10ms）。部分特有功能（如 Claude 的 thinking、OpenAI 的 function calling）
               可能无法完美转换，建议在实际场景中测试。
@@ -178,25 +201,37 @@ const systemSettings = [
         请求头规则
       </h2>
 
-      <div :class="[panelClasses.section, 'p-5']">
+      <div
+        class="p-5"
+        :class="[panelClasses.section]"
+      >
         <div class="flex items-center gap-3 mb-4">
           <div class="p-2 rounded-lg bg-green-500/10">
             <FileCode class="h-5 w-5 text-green-500" />
           </div>
-          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">什么是请求头规则？</h3>
+          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+            什么是请求头规则？
+          </h3>
         </div>
 
         <p class="text-sm text-[#666663] dark:text-[#a3a094] mb-4">
           请求头规则允许你在转发请求时修改 HTTP 请求头。可以添加、修改或删除特定的请求头。
         </p>
 
-        <div :class="[panelClasses.section, 'overflow-hidden']">
+        <div
+          class="overflow-hidden"
+          :class="[panelClasses.section]"
+        >
           <div class="overflow-x-auto">
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)] bg-[#fafaf7]/50 dark:bg-[#1f1d1a]/50">
-                  <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">类型</th>
-                  <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">说明</th>
+                  <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                    类型
+                  </th>
+                  <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                    说明
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -218,11 +253,16 @@ const systemSettings = [
         </div>
       </div>
 
-      <div :class="[panelClasses.section, 'p-4']">
+      <div
+        class="p-4"
+        :class="[panelClasses.section]"
+      >
         <div class="flex items-start gap-3">
           <Info class="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
           <div class="text-sm text-[#666663] dark:text-[#a3a094]">
-            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">使用场景</p>
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              使用场景
+            </p>
             <ul class="mt-1 space-y-1">
               <li>• 添加额外的认证信息（如 API 版本号）</li>
               <li>• 添加跟踪标记（如请求 ID、来源标识）</li>
@@ -239,12 +279,17 @@ const systemSettings = [
         代理设置
       </h2>
 
-      <div :class="[panelClasses.section, 'p-5']">
+      <div
+        class="p-5"
+        :class="[panelClasses.section]"
+      >
         <div class="flex items-center gap-3 mb-4">
           <div class="p-2 rounded-lg bg-blue-500/10">
             <Globe class="h-5 w-5 text-blue-500" />
           </div>
-          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">HTTP 代理</h3>
+          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+            HTTP 代理
+          </h3>
         </div>
 
         <p class="text-sm text-[#666663] dark:text-[#a3a094] mb-4">
@@ -253,14 +298,18 @@ const systemSettings = [
 
         <div class="space-y-3">
           <div class="p-4 rounded-lg bg-[#f5f5f0]/50 dark:bg-[#1f1d1a]/50">
-            <h4 class="font-medium text-[#262624] dark:text-[#f1ead8]">端点级代理</h4>
+            <h4 class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              端点级代理
+            </h4>
             <p class="text-sm text-[#666663] dark:text-[#a3a094] mt-1">
               在端点配置中填写代理地址，格式如 <code class="text-xs bg-[#f5f5f0] dark:bg-[#1f1d1a] px-1.5 py-0.5 rounded">http://proxy:8080</code>
             </p>
           </div>
 
           <div class="p-4 rounded-lg bg-[#f5f5f0]/50 dark:bg-[#1f1d1a]/50">
-            <h4 class="font-medium text-[#262624] dark:text-[#f1ead8]">全局代理</h4>
+            <h4 class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              全局代理
+            </h4>
             <p class="text-sm text-[#666663] dark:text-[#a3a094] mt-1">
               也可以通过环境变量 <code class="text-xs bg-[#f5f5f0] dark:bg-[#1f1d1a] px-1.5 py-0.5 rounded">HTTP_PROXY</code> 设置全局代理
             </p>
@@ -283,11 +332,14 @@ const systemSettings = [
         <div
           v-for="category in systemSettings"
           :key="category.category"
-          :class="[panelClasses.section, 'p-4']"
+          class="p-4"
+          :class="[panelClasses.section]"
         >
           <div class="flex items-center gap-2 mb-3">
             <Settings class="h-4 w-4 text-[#cc785c]" />
-            <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">{{ category.category }}</h3>
+            <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+              {{ category.category }}
+            </h3>
           </div>
           <ul class="space-y-2">
             <li
@@ -309,12 +361,17 @@ const systemSettings = [
         健康监控
       </h2>
 
-      <div :class="[panelClasses.section, 'p-5']">
+      <div
+        class="p-5"
+        :class="[panelClasses.section]"
+      >
         <div class="flex items-center gap-3 mb-4">
           <div class="p-2 rounded-lg bg-green-500/10">
             <Shield class="h-5 w-5 text-green-500" />
           </div>
-          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">端点健康检查</h3>
+          <h3 class="font-semibold text-[#262624] dark:text-[#f1ead8]">
+            端点健康检查
+          </h3>
         </div>
 
         <ul class="space-y-3 text-sm text-[#666663] dark:text-[#a3a094]">
@@ -337,11 +394,16 @@ const systemSettings = [
         </ul>
       </div>
 
-      <div :class="[panelClasses.section, 'p-4']">
+      <div
+        class="p-4"
+        :class="[panelClasses.section]"
+      >
         <div class="flex items-start gap-3">
           <AlertTriangle class="h-5 w-5 text-yellow-500 flex-shrink-0 mt-0.5" />
           <div class="text-sm text-[#666663] dark:text-[#a3a094]">
-            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">端点显示不健康？</p>
+            <p class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              端点显示不健康？
+            </p>
             <p class="mt-1">
               检查：1) API URL 是否正确；2) API Key 是否有效；3) 网络是否可达；4) 是否需要配置代理。
             </p>
@@ -354,11 +416,16 @@ const systemSettings = [
     <section class="pt-4">
       <RouterLink
         to="/guide/faq"
-        :class="[panelClasses.section, panelClasses.cardHover, 'p-4 flex items-center gap-3 group']"
+        class="p-4 flex items-center gap-3 group"
+        :class="[panelClasses.section, panelClasses.cardHover]"
       >
         <div class="flex-1">
-          <div class="font-medium text-[#262624] dark:text-[#f1ead8]">常见问题</div>
-          <div class="text-sm text-[#666663] dark:text-[#a3a094]">查看使用中的常见问题和解答</div>
+          <div class="font-medium text-[#262624] dark:text-[#f1ead8]">
+            常见问题
+          </div>
+          <div class="text-sm text-[#666663] dark:text-[#a3a094]">
+            查看使用中的常见问题和解答
+          </div>
         </div>
         <ArrowRight class="h-5 w-5 text-[#999] group-hover:text-[#cc785c] transition-colors" />
       </RouterLink>

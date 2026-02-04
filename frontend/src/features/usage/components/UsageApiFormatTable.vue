@@ -7,64 +7,64 @@
     </div>
     <div class="overflow-auto max-h-[320px]">
       <Table class="text-sm">
-      <TableHeader>
-        <TableRow>
-          <TableHead class="h-8 px-2">
-            API格式
-          </TableHead>
-          <TableHead class="h-8 px-2 text-right">
-            请求数
-          </TableHead>
-          <TableHead class="h-8 px-2 text-right">
-            Tokens
-          </TableHead>
-          <TableHead class="h-8 px-2 text-right">
-            费用
-          </TableHead>
-          <TableHead class="h-8 px-2 text-right">
-            平均响应
-          </TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        <TableRow v-if="data.length === 0">
-          <TableCell
-            :colspan="5"
-            class="text-center py-6 text-muted-foreground px-2"
+        <TableHeader>
+          <TableRow>
+            <TableHead class="h-8 px-2">
+              API格式
+            </TableHead>
+            <TableHead class="h-8 px-2 text-right">
+              请求数
+            </TableHead>
+            <TableHead class="h-8 px-2 text-right">
+              Tokens
+            </TableHead>
+            <TableHead class="h-8 px-2 text-right">
+              费用
+            </TableHead>
+            <TableHead class="h-8 px-2 text-right">
+              平均响应
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow v-if="data.length === 0">
+            <TableCell
+              :colspan="5"
+              class="text-center py-6 text-muted-foreground px-2"
+            >
+              暂无API格式统计数据
+            </TableCell>
+          </TableRow>
+          <TableRow
+            v-for="item in data"
+            :key="item.api_format"
           >
-            暂无API格式统计数据
-          </TableCell>
-        </TableRow>
-        <TableRow
-          v-for="item in data"
-          :key="item.api_format"
-        >
-          <TableCell class="font-medium py-2 px-2">
-            {{ formatApiFormat(item.api_format) }}
-          </TableCell>
-          <TableCell class="text-right py-2 px-2">
-            {{ item.request_count }}
-          </TableCell>
-          <TableCell class="text-right py-2 px-2">
-            <span>{{ formatTokens(item.total_tokens) }}</span>
-          </TableCell>
-          <TableCell class="text-right py-2 px-2">
-            <div class="flex flex-col items-end text-xs gap-0.5">
-              <span class="text-primary font-medium">{{ formatCurrency(item.total_cost) }}</span>
-              <span
-                v-if="isAdmin && item.actual_cost !== undefined"
-                class="text-muted-foreground text-[10px]"
-              >
-                {{ formatCurrency(item.actual_cost) }}
-              </span>
-            </div>
-          </TableCell>
-          <TableCell class="text-right text-muted-foreground py-2 px-2">
-            {{ item.avgResponseTime }}
-          </TableCell>
-        </TableRow>
-      </TableBody>
-    </Table>
+            <TableCell class="font-medium py-2 px-2">
+              {{ formatApiFormat(item.api_format) }}
+            </TableCell>
+            <TableCell class="text-right py-2 px-2">
+              {{ item.request_count }}
+            </TableCell>
+            <TableCell class="text-right py-2 px-2">
+              <span>{{ formatTokens(item.total_tokens) }}</span>
+            </TableCell>
+            <TableCell class="text-right py-2 px-2">
+              <div class="flex flex-col items-end text-xs gap-0.5">
+                <span class="text-primary font-medium">{{ formatCurrency(item.total_cost) }}</span>
+                <span
+                  v-if="isAdmin && item.actual_cost !== undefined"
+                  class="text-muted-foreground text-[10px]"
+                >
+                  {{ formatCurrency(item.actual_cost) }}
+                </span>
+              </div>
+            </TableCell>
+            <TableCell class="text-right text-muted-foreground py-2 px-2">
+              {{ item.avgResponseTime }}
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
     </div>
   </Card>
 </template>

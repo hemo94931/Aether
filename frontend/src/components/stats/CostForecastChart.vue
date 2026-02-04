@@ -1,14 +1,28 @@
 <template>
   <div class="space-y-3">
     <div class="flex items-center justify-between">
-      <h3 class="text-sm font-semibold">{{ title }}</h3>
-      <span class="text-xs text-muted-foreground" v-if="subtitle">{{ subtitle }}</span>
+      <h3 class="text-sm font-semibold">
+        {{ title }}
+      </h3>
+      <span
+        v-if="subtitle"
+        class="text-xs text-muted-foreground"
+      >{{ subtitle }}</span>
     </div>
-    <div v-if="loading" class="p-6">
+    <div
+      v-if="loading"
+      class="p-6"
+    >
       <LoadingState />
     </div>
-    <div v-else class="h-[280px]">
-      <LineChart :data="chartData" :options="chartOptions" />
+    <div
+      v-else
+      class="h-[280px]"
+    >
+      <LineChart
+        :data="chartData"
+        :options="chartOptions"
+      />
     </div>
   </div>
 </template>

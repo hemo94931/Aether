@@ -2,8 +2,12 @@
   <div class="space-y-6 px-4 sm:px-6 lg:px-0">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
       <div>
-        <h1 class="text-lg font-semibold">性能分析</h1>
-        <p class="text-xs text-muted-foreground">延迟分布与错误统计</p>
+        <h1 class="text-lg font-semibold">
+          性能分析
+        </h1>
+        <p class="text-xs text-muted-foreground">
+          延迟分布与错误统计
+        </p>
       </div>
       <TimeRangePicker v-model="timeRange" />
     </div>
@@ -36,22 +40,38 @@
         />
       </Card>
       <Card class="p-4 space-y-3">
-        <h3 class="text-sm font-semibold">错误趋势</h3>
-        <div v-if="errorLoading" class="p-6">
+        <h3 class="text-sm font-semibold">
+          错误趋势
+        </h3>
+        <div
+          v-if="errorLoading"
+          class="p-6"
+        >
           <LoadingState />
         </div>
-        <div v-else class="h-[260px]">
+        <div
+          v-else
+          class="h-[260px]"
+        >
           <LineChart :data="errorTrendChartData" />
         </div>
       </Card>
     </div>
 
     <Card class="p-4 space-y-3">
-      <h3 class="text-sm font-semibold">提供商健康度</h3>
-      <div v-if="providerLoading" class="p-4">
+      <h3 class="text-sm font-semibold">
+        提供商健康度
+      </h3>
+      <div
+        v-if="providerLoading"
+        class="p-4"
+      >
         <LoadingState />
       </div>
-      <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+      <div
+        v-else
+        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm"
+      >
         <div
           v-for="provider in providerStatus"
           :key="provider.name"

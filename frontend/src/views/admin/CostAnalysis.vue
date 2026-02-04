@@ -2,31 +2,49 @@
   <div class="space-y-6 px-4 sm:px-6 lg:px-0">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
       <div>
-        <h1 class="text-lg font-semibold">成本分析</h1>
-        <p class="text-xs text-muted-foreground">成本趋势、预测与节省统计</p>
+        <h1 class="text-lg font-semibold">
+          成本分析
+        </h1>
+        <p class="text-xs text-muted-foreground">
+          成本趋势、预测与节省统计
+        </p>
       </div>
       <TimeRangePicker v-model="timeRange" />
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
       <Card class="p-4 space-y-2">
-        <div class="text-xs text-muted-foreground">缓存节省</div>
-        <div class="text-lg font-semibold">{{ formatCurrency(costSavings?.cache_savings ?? 0) }}</div>
+        <div class="text-xs text-muted-foreground">
+          缓存节省
+        </div>
+        <div class="text-lg font-semibold">
+          {{ formatCurrency(costSavings?.cache_savings ?? 0) }}
+        </div>
         <div class="text-xs text-muted-foreground">
           读取成本 {{ formatCurrency(costSavings?.cache_read_cost ?? 0) }}
         </div>
       </Card>
       <Card class="p-4 space-y-2">
-        <div class="text-xs text-muted-foreground">缓存读取 Tokens</div>
-        <div class="text-lg font-semibold">{{ formatTokens(costSavings?.cache_read_tokens ?? 0) }}</div>
+        <div class="text-xs text-muted-foreground">
+          缓存读取 Tokens
+        </div>
+        <div class="text-lg font-semibold">
+          {{ formatTokens(costSavings?.cache_read_tokens ?? 0) }}
+        </div>
         <div class="text-xs text-muted-foreground">
           预计全额成本 {{ formatCurrency(costSavings?.estimated_full_cost ?? 0) }}
         </div>
       </Card>
       <Card class="p-4 space-y-2">
-        <div class="text-xs text-muted-foreground">缓存创建成本</div>
-        <div class="text-lg font-semibold">{{ formatCurrency(costSavings?.cache_creation_cost ?? 0) }}</div>
-        <div class="text-xs text-muted-foreground">基于当前时间范围</div>
+        <div class="text-xs text-muted-foreground">
+          缓存创建成本
+        </div>
+        <div class="text-lg font-semibold">
+          {{ formatCurrency(costSavings?.cache_creation_cost ?? 0) }}
+        </div>
+        <div class="text-xs text-muted-foreground">
+          基于当前时间范围
+        </div>
       </Card>
     </div>
 

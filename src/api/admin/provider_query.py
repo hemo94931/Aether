@@ -438,12 +438,28 @@ async def test_model(
         raise HTTPException(status_code=500, detail="Failed to decrypt API key")
 
     # 构建请求配置
+    extra_headers = get_extra_headers_from_endpoint(endpoint) or {}
+
+    # OAuth 认证：从 auth_config 获取 account_id 并添加到请求头
+    if api_key.auth_type == "oauth" and api_key.auth_config:
+        try:
+            import json
+
+            decrypted_config = crypto_service.decrypt(api_key.auth_config)
+            auth_config = json.loads(decrypted_config)
+            account_id = auth_config.get("account_id")
+            if account_id:
+                extra_headers["chatgpt-account-id"] = account_id
+                logger.debug("[test-model] Added chatgpt-account-id header: {}", account_id)
+        except Exception as e:
+            logger.warning("[test-model] Failed to parse OAuth auth_config: {}", e)
+
     endpoint_config = {
         "api_key": api_key_value,
         "api_key_id": api_key.id,  # 添加API Key ID用于用量记录
         "base_url": endpoint.base_url,
         "api_format": endpoint.api_format,
-        "extra_headers": get_extra_headers_from_endpoint(endpoint),
+        "extra_headers": extra_headers if extra_headers else None,
         "timeout": TimeoutDefaults.HTTP_REQUEST,
     }
 
@@ -478,8 +494,7 @@ async def test_model(
         async with httpx.AsyncClient(
             timeout=endpoint_config["timeout"], verify=get_ssl_context()
         ) as client:
-            # 非流式测试
-            logger.debug(f"[test-model] 开始非流式测试...")
+            logger.debug("[test-model] 开始端点测试...")
 
             response = await adapter_class.check_endpoint(
                 client,
@@ -497,7 +512,7 @@ async def test_model(
             )
 
             # 记录提供商返回信息
-            logger.debug(f"[test-model] 非流式测试结果:")
+            logger.debug("[test-model] 端点测试结果:")
             logger.debug(f"[test-model] Status Code: {response.get('status_code')}")
             logger.debug(f"[test-model] Response Headers: {response.get('headers', {})}")
             response_data = response.get("response", {})

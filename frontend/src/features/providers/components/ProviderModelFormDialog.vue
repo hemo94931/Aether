@@ -89,7 +89,9 @@
 
         <!-- 视频计费（可选覆盖） -->
         <div class="pt-3 border-t space-y-2">
-          <div class="text-sm font-medium">视频计费（可选覆盖）</div>
+          <div class="text-sm font-medium">
+            视频计费（可选覆盖）
+          </div>
 
           <div class="flex items-center gap-1.5 flex-wrap">
             <Button
@@ -138,7 +140,7 @@
             <div class="grid grid-cols-[1fr_1fr_32px] gap-0 text-xs text-muted-foreground bg-muted/50 px-3 py-1.5 border-b border-border">
               <span>分辨率</span>
               <span>单价（$/秒）</span>
-              <span></span>
+              <span />
             </div>
             <div class="divide-y divide-border">
               <div
@@ -176,7 +178,6 @@
           </div>
         </div>
       </div>
-
     </form>
 
     <template #footer>

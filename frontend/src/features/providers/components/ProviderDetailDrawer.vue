@@ -142,7 +142,7 @@
                       {{ ((provider.monthly_used_usd || 0) / provider.monthly_quota_usd * 100).toFixed(1) }}%
                     </Badge>
                   </div>
-                  <div class="relative w-full h-2 bg-muted rounded-full overflow-hidden">
+                  <div class="relative w-full h-2 bg-border rounded-full overflow-hidden">
                     <div
                       class="absolute left-0 top-0 h-full transition-all duration-300"
                       :class="{
@@ -172,7 +172,7 @@
                 <div class="p-4 border-b border-border/60">
                   <div class="flex items-center justify-between">
                     <h3 class="text-sm font-semibold">
-                      密钥管理
+                      {{ provider.provider_type === 'custom' ? '密钥管理' : '账号管理' }}
                     </h3>
                     <Button
                       v-if="endpoints.length > 0"
@@ -182,7 +182,7 @@
                       @click="handleAddKeyToFirstEndpoint"
                     >
                       <Plus class="w-3.5 h-3.5 mr-1.5" />
-                      添加密钥
+                      {{ provider.provider_type === 'custom' ? '添加密钥' : '添加账号' }}
                     </Button>
                   </div>
                 </div>
@@ -216,20 +216,58 @@
                           <GripVertical class="w-4 h-4" />
                         </div>
                         <div class="flex flex-col min-w-0">
-                          <span class="text-sm font-medium truncate">{{ key.name || '未命名密钥' }}</span>
+                          <div class="flex items-center gap-1.5">
+                            <span class="text-sm font-medium truncate">{{ key.name || '未命名密钥' }}</span>
+                            <!-- OAuth 订阅类型标签 -->
+                            <Badge
+                              v-if="key.oauth_plan_type"
+                              variant="outline"
+                              class="text-[10px] px-1.5 py-0 shrink-0"
+                              :class="getOAuthPlanTypeClass(key.oauth_plan_type)"
+                            >
+                              {{ formatOAuthPlanType(key.oauth_plan_type) }}
+                            </Badge>
+                          </div>
                           <div class="flex items-center gap-1">
                             <span class="text-[11px] font-mono text-muted-foreground">
-                              {{ key.auth_type === 'vertex_ai' ? 'Vertex AI' : key.api_key_masked }}
+                              {{ key.auth_type === 'oauth' ? '[Refresh Token]' : (key.auth_type === 'vertex_ai' ? 'Vertex AI' : key.api_key_masked) }}
                             </span>
                             <Button
                               variant="ghost"
                               size="icon"
                               class="h-4 w-4 shrink-0"
-                              title="复制密钥"
+                              :title="key.auth_type === 'oauth' ? '复制 Refresh Token' : '复制密钥'"
                               @click.stop="copyFullKey(key)"
                             >
                               <Copy class="w-2.5 h-2.5" />
                             </Button>
+                            <!-- OAuth 状态（失效/过期/倒计时）和刷新按钮 -->
+                            <template v-if="getKeyOAuthExpires(key)">
+                              <span
+                                class="text-[10px]"
+                                :class="{
+                                  'text-destructive': getKeyOAuthExpires(key)?.isInvalid || getKeyOAuthExpires(key)?.isExpired,
+                                  'text-warning': getKeyOAuthExpires(key)?.isExpiringSoon && !getKeyOAuthExpires(key)?.isExpired && !getKeyOAuthExpires(key)?.isInvalid,
+                                  'text-muted-foreground': !getKeyOAuthExpires(key)?.isExpired && !getKeyOAuthExpires(key)?.isExpiringSoon && !getKeyOAuthExpires(key)?.isInvalid
+                                }"
+                                :title="getOAuthStatusTitle(key)"
+                              >
+                                {{ getKeyOAuthExpires(key)?.text }}
+                              </span>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                class="h-4 w-4 shrink-0"
+                                :disabled="refreshingOAuthKeyId === key.id"
+                                :title="getKeyOAuthExpires(key)?.isInvalid ? '重新授权' : '刷新 Token'"
+                                @click.stop="handleRefreshOAuth(key)"
+                              >
+                                <RefreshCw
+                                  class="w-2.5 h-2.5"
+                                  :class="{ 'animate-spin': refreshingOAuthKeyId === key.id }"
+                                />
+                              </Button>
+                            </template>
                           </div>
                         </div>
                       </div>
@@ -248,7 +286,7 @@
                           v-if="key.health_score !== undefined"
                           class="flex items-center gap-1 mr-1"
                         >
-                          <div class="w-10 h-1.5 bg-muted/80 rounded-full overflow-hidden">
+                          <div class="w-10 h-1.5 bg-border rounded-full overflow-hidden">
                             <div
                               class="h-full transition-all duration-300"
                               :class="getHealthScoreBarColor(key.health_score || 0)"
@@ -273,6 +311,7 @@
                           <RefreshCw class="w-3.5 h-3.5" />
                         </Button>
                         <Button
+                          v-if="key.auth_type !== 'oauth'"
                           variant="ghost"
                           size="icon"
                           class="h-7 w-7"
@@ -282,6 +321,7 @@
                           <Shield class="w-3.5 h-3.5" />
                         </Button>
                         <Button
+                          v-if="key.auth_type !== 'oauth'"
                           variant="ghost"
                           size="icon"
                           class="h-7 w-7"
@@ -309,6 +349,61 @@
                         >
                           <Trash2 class="w-3.5 h-3.5" />
                         </Button>
+                      </div>
+                    </div>
+                    <!-- Codex 上游额度信息（仅当有元数据时显示） -->
+                    <div
+                      v-if="key.upstream_metadata && hasCodexQuotaData(key.upstream_metadata)"
+                      class="mt-2 p-2 bg-muted/30 rounded-md"
+                    >
+                      <!-- 限额并排显示 -->
+                      <div class="grid grid-cols-2 gap-3">
+                        <!-- 周限额（7天窗口） -->
+                        <div v-if="key.upstream_metadata.primary_used_percent !== undefined">
+                          <div class="flex items-center justify-between text-[10px] mb-0.5">
+                            <span class="text-muted-foreground">周限额</span>
+                            <span :class="getQuotaRemainingClass(key.upstream_metadata.primary_used_percent)">
+                              {{ (100 - key.upstream_metadata.primary_used_percent).toFixed(1) }}%
+                            </span>
+                          </div>
+                          <div class="relative w-full h-1.5 bg-border rounded-full overflow-hidden">
+                            <div
+                              class="absolute left-0 top-0 h-full transition-all duration-300"
+                              :class="getQuotaRemainingBarColor(key.upstream_metadata.primary_used_percent)"
+                              :style="{ width: `${Math.max(100 - key.upstream_metadata.primary_used_percent, 0)}%` }"
+                            />
+                          </div>
+                          <div
+                            v-if="key.upstream_metadata.primary_reset_seconds"
+                            class="text-[9px] text-muted-foreground/70 mt-0.5"
+                          >
+                            {{ formatResetTime(key.upstream_metadata.primary_reset_seconds) }}后重置
+                          </div>
+                        </div>
+                        <!-- 5小时限额 -->
+                        <div v-if="key.upstream_metadata.secondary_used_percent !== undefined">
+                          <div class="flex items-center justify-between text-[10px] mb-0.5">
+                            <span class="text-muted-foreground">5H限额</span>
+                            <span :class="getQuotaRemainingClass(key.upstream_metadata.secondary_used_percent)">
+                              {{ (100 - key.upstream_metadata.secondary_used_percent).toFixed(1) }}%
+                            </span>
+                          </div>
+                          <div class="relative w-full h-1.5 bg-border rounded-full overflow-hidden">
+                            <div
+                              class="absolute left-0 top-0 h-full transition-all duration-300"
+                              :class="getQuotaRemainingBarColor(key.upstream_metadata.secondary_used_percent)"
+                              :style="{ width: `${Math.max(100 - key.upstream_metadata.secondary_used_percent, 0)}%` }"
+                            />
+                          </div>
+                          <div class="text-[9px] text-muted-foreground/70 mt-0.5">
+                          <template v-if="key.upstream_metadata.secondary_reset_seconds">
+                            {{ formatResetTime(key.upstream_metadata.secondary_reset_seconds) }}后重置
+                          </template>
+                          <template v-else>
+                            已重置
+                          </template>
+                        </div>
+                        </div>
                       </div>
                     </div>
                     <!-- 第二行：优先级 + API 格式（展开显示） + 统计信息 -->
@@ -459,6 +554,15 @@
     @edit-created-key="handleEditCreatedKey"
   />
 
+  <!-- OAuth 账号对话框 -->
+  <OAuthAccountDialog
+    v-if="open && provider"
+    :open="oauthAccountDialogOpen"
+    :provider-id="provider.id"
+    @close="oauthAccountDialogOpen = false"
+    @saved="handleKeyChanged"
+  />
+
   <!-- 模型权限对话框 -->
   <KeyAllowedModelsEditDialog
     v-if="open"
@@ -526,14 +630,15 @@ import Badge from '@/components/ui/badge.vue'
 import Card from '@/components/ui/card.vue'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
-import { useCountdownTimer, formatCountdown } from '@/composables/useCountdownTimer'
+import { useCountdownTimer, formatCountdown, getOAuthExpiresCountdown } from '@/composables/useCountdownTimer'
 import { getProvider, getProviderEndpoints, updateProvider } from '@/api/endpoints'
 import { adminApi } from '@/api/admin'
 import {
   KeyFormDialog,
   KeyAllowedModelsEditDialog,
   ModelsTab,
-  BatchAssignModelsDialog
+  BatchAssignModelsDialog,
+  OAuthAccountDialog
 } from '@/features/providers/components'
 import ModelMappingTab from '@/features/providers/components/provider-tabs/ModelMappingTab.vue'
 import EndpointFormDialog from '@/features/providers/components/EndpointFormDialog.vue'
@@ -545,6 +650,7 @@ import {
   getProviderKeys,
   updateProviderKey,
   revealEndpointKey,
+  refreshProviderOAuth,
   type ProviderEndpoint,
   type EndpointAPIKey,
   type Model,
@@ -591,6 +697,7 @@ const endpointDialogOpen = ref(false)
 // 密钥相关状态
 const keyFormDialogOpen = ref(false)
 const keyPermissionsDialogOpen = ref(false)
+const oauthAccountDialogOpen = ref(false)
 const currentEndpoint = ref<ProviderEndpoint | null>(null)
 const editingKey = ref<EndpointAPIKey | null>(null)
 const deleteKeyConfirmOpen = ref(false)
@@ -620,6 +727,9 @@ const editingPriorityValue = ref<number>(0)
 const priorityInputRef = ref<HTMLInputElement[] | null>(null)
 const prioritySaving = ref(false)
 
+// OAuth 刷新状态
+const refreshingOAuthKeyId = ref<string | null>(null)
+
 // 点击编辑倍率相关状态
 const editingMultiplierKey = ref<string | null>(null)
 const editingMultiplierFormat = ref<string | null>(null)
@@ -632,6 +742,7 @@ const hasBlockingDialogOpen = computed(() =>
   endpointDialogOpen.value ||
   keyFormDialogOpen.value ||
   keyPermissionsDialogOpen.value ||
+  oauthAccountDialogOpen.value ||
   deleteKeyConfirmOpen.value ||
   modelFormDialogOpen.value ||
   batchAssignDialogOpen.value ||
@@ -695,6 +806,7 @@ watch(() => props.open, (newOpen) => {
     endpointDialogOpen.value = false
     keyFormDialogOpen.value = false
     keyPermissionsDialogOpen.value = false
+    oauthAccountDialogOpen.value = false
     deleteKeyConfirmOpen.value = false
     batchAssignDialogOpen.value = false
 
@@ -759,9 +871,15 @@ function handleAddKey(endpoint: ProviderEndpoint) {
   keyFormDialogOpen.value = true
 }
 
-// 添加密钥（如果有多个端点则添加到第一个）
+// 添加密钥/账号（如果有多个端点则添加到第一个）
 function handleAddKeyToFirstEndpoint() {
-  if (endpoints.value.length > 0) {
+  if (endpoints.value.length === 0) return
+
+  // 非自定义提供商：打开 OAuth 账号对话框
+  if (provider.value?.provider_type !== 'custom') {
+    oauthAccountDialogOpen.value = true
+  } else {
+    // 自定义提供商：打开密钥表单对话框
     handleAddKey(endpoints.value[0])
   }
 }
@@ -846,6 +964,25 @@ async function handleRecoverKey(key: EndpointAPIKey) {
     emit('refresh')
   } catch (err: any) {
     showError(err.response?.data?.detail || 'Key恢复失败', '错误')
+  }
+}
+
+async function handleRefreshOAuth(key: EndpointAPIKey) {
+  if (refreshingOAuthKeyId.value) return
+  refreshingOAuthKeyId.value = key.id
+  try {
+    const result = await refreshProviderOAuth(key.id)
+    showSuccess('Token 刷新成功')
+    // 更新本地数据
+    const keyInList = providerKeys.value.find(k => k.id === key.id)
+    if (keyInList) {
+      keyInList.oauth_expires_at = result.expires_at
+    }
+    emit('refresh')
+  } catch (err: any) {
+    showError(err.response?.data?.detail || 'Token 刷新失败', '错误')
+  } finally {
+    refreshingOAuthKeyId.value = null
   }
 }
 
@@ -1201,6 +1338,95 @@ function getKeyRateMultiplier(key: EndpointAPIKey, format: string): number {
     return key.rate_multipliers[format]
   }
   return 1.0
+}
+
+// OAuth 订阅类型格式化
+function formatOAuthPlanType(planType: string): string {
+  const labels: Record<string, string> = {
+    plus: 'Plus',
+    pro: 'Pro',
+    free: 'Free',
+    team: 'Team',
+    enterprise: 'Enterprise',
+  }
+  return labels[planType] || planType
+}
+
+// Codex 剩余额度样式（基于已用百分比计算剩余）
+function getQuotaRemainingClass(usedPercent: number): string {
+  const remaining = 100 - usedPercent
+  if (remaining <= 10) return 'text-red-600 dark:text-red-400'
+  if (remaining <= 30) return 'text-yellow-600 dark:text-yellow-400'
+  return 'text-green-600 dark:text-green-400'
+}
+
+// Codex 剩余额度进度条颜色
+function getQuotaRemainingBarColor(usedPercent: number): string {
+  const remaining = 100 - usedPercent
+  if (remaining <= 10) return 'bg-red-500 dark:bg-red-400'
+  if (remaining <= 30) return 'bg-yellow-500 dark:bg-yellow-400'
+  return 'bg-green-500 dark:bg-green-400'
+}
+
+// 检查是否有 Codex 额度数据
+function hasCodexQuotaData(metadata: any): boolean {
+  if (!metadata) return false
+  return metadata.primary_used_percent !== undefined ||
+         metadata.secondary_used_percent !== undefined ||
+         (metadata.has_credits && metadata.credits_balance !== undefined)
+}
+
+// 格式化重置时间
+function formatResetTime(seconds: number): string {
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+
+  if (days > 0) {
+    return `${days}天 ${hours}小时`
+  }
+  if (hours > 0) {
+    return `${hours}小时 ${minutes}分钟`
+  }
+  return `${minutes}分钟`
+}
+
+// OAuth 订阅类型样式
+function getOAuthPlanTypeClass(planType: string): string {
+  const classes: Record<string, string> = {
+    plus: 'border-green-500/50 text-green-600 dark:text-green-400',
+    pro: 'border-blue-500/50 text-blue-600 dark:text-blue-400',
+    free: 'border-primary/50 text-primary',
+    team: 'border-purple-500/50 text-purple-600 dark:text-purple-400',
+    enterprise: 'border-amber-500/50 text-amber-600 dark:text-amber-400',
+  }
+  return classes[planType] || ''
+}
+
+// OAuth 状态信息（包括失效和过期）
+function getKeyOAuthExpires(key: EndpointAPIKey) {
+  if (key.auth_type !== 'oauth') return null
+  // 即使没有 expires_at，也要检查 invalid_at
+  if (!key.oauth_expires_at && !key.oauth_invalid_at) return null
+  return getOAuthExpiresCountdown(
+    key.oauth_expires_at,
+    countdownTick.value,
+    key.oauth_invalid_at,
+    key.oauth_invalid_reason
+  )
+}
+
+// OAuth 状态的 title 提示
+function getOAuthStatusTitle(key: EndpointAPIKey): string {
+  const status = getKeyOAuthExpires(key)
+  if (!status) return ''
+  if (status.isInvalid) {
+    return status.invalidReason ? `Token 已失效: ${status.invalidReason}` : 'Token 已失效'
+  }
+  if (status.isExpired) {
+    return 'Token 已过期，请重新授权'
+  }
+  return `Token 剩余有效期: ${status.text}`
 }
 
 // 健康度颜色

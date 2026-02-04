@@ -67,3 +67,70 @@ export function getProbeCountdown(nextProbeAt: string | null | undefined, _tick:
   }
   return '探测中'
 }
+
+/**
+ * OAuth Token 状态信息
+ */
+export interface OAuthStatusInfo {
+  text: string
+  isExpired: boolean
+  isExpiringSoon: boolean
+  isInvalid: boolean  // Token 已失效（账号被封、授权撤销等）
+  invalidReason?: string  // 失效原因
+}
+
+/**
+ * 格式化 OAuth Token 过期倒计时
+ * @param expiresAt Unix 时间戳（秒）
+ * @param _tick 响应式触发器（传入 tick.value 以触发响应式更新）
+ * @param invalidAt 失效时间戳（秒），可选
+ * @param invalidReason 失效原因，可选
+ * @returns 状态信息对象
+ */
+export function getOAuthExpiresCountdown(
+  expiresAt: number | null | undefined,
+  _tick: number,
+  invalidAt?: number | null,
+  invalidReason?: string | null
+): OAuthStatusInfo | null {
+  void _tick
+
+  // 优先检查失效状态（失效比过期更严重）
+  if (invalidAt != null) {
+    return {
+      text: '已失效',
+      isExpired: false,
+      isExpiringSoon: false,
+      isInvalid: true,
+      invalidReason: invalidReason || undefined
+    }
+  }
+
+  if (expiresAt == null) return null
+
+  const now = Math.floor(Date.now() / 1000)
+  const diffSeconds = expiresAt - now
+
+  if (diffSeconds <= 0) {
+    return { text: '已过期', isExpired: true, isExpiringSoon: false, isInvalid: false }
+  }
+
+  // 24 小时内过期视为即将过期
+  const isExpiringSoon = diffSeconds < 24 * 3600
+
+  // 格式化时间
+  const days = Math.floor(diffSeconds / 86400)
+  const hours = Math.floor((diffSeconds % 86400) / 3600)
+  const minutes = Math.floor((diffSeconds % 3600) / 60)
+
+  let text: string
+  if (days > 0) {
+    text = `${days}天${hours}时`
+  } else if (hours > 0) {
+    text = `${hours}时${minutes}分`
+  } else {
+    text = `${minutes}分钟`
+  }
+
+  return { text, isExpired: false, isExpiringSoon, isInvalid: false }
+}

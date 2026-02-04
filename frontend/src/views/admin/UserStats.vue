@@ -2,12 +2,22 @@
   <div class="space-y-6 px-4 sm:px-6 lg:px-0">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
       <div>
-        <h1 class="text-lg font-semibold">用户统计</h1>
-        <p class="text-xs text-muted-foreground">查看用户排行榜与使用趋势</p>
+        <h1 class="text-lg font-semibold">
+          用户统计
+        </h1>
+        <p class="text-xs text-muted-foreground">
+          查看用户排行榜与使用趋势
+        </p>
       </div>
       <div class="flex flex-wrap items-center gap-3">
-        <TimeRangePicker v-model="timeRange" :allow-hourly="true" />
-        <Select v-model:open="userSelectOpen" v-model="selectedUserId">
+        <TimeRangePicker
+          v-model="timeRange"
+          :allow-hourly="true"
+        />
+        <Select
+          v-model:open="userSelectOpen"
+          v-model="selectedUserId"
+        >
           <SelectTrigger class="h-8 text-xs w-52">
             <SelectValue placeholder="选择用户" />
           </SelectTrigger>
@@ -21,12 +31,17 @@
             </SelectItem>
           </SelectContent>
         </Select>
-        <Select v-model:open="compareUserSelectOpen" v-model="compareUserId">
+        <Select
+          v-model:open="compareUserSelectOpen"
+          v-model="compareUserId"
+        >
           <SelectTrigger class="h-8 text-xs w-52">
             <SelectValue placeholder="对比用户（可选）" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__none__">不对比</SelectItem>
+            <SelectItem value="__none__">
+              不对比
+            </SelectItem>
             <SelectItem
               v-for="user in users"
               :key="`compare-${user.id}`"
@@ -49,43 +64,80 @@
       />
 
       <Card class="p-4 space-y-3">
-        <h3 class="text-sm font-semibold">用户摘要</h3>
-        <div v-if="summaryLoading" class="p-6">
+        <h3 class="text-sm font-semibold">
+          用户摘要
+        </h3>
+        <div
+          v-if="summaryLoading"
+          class="p-6"
+        >
           <LoadingState />
         </div>
-        <div v-else class="grid grid-cols-2 gap-3 text-sm">
+        <div
+          v-else
+          class="grid grid-cols-2 gap-3 text-sm"
+        >
           <div>
-            <div class="text-xs text-muted-foreground">请求数</div>
-            <div class="font-semibold">{{ userSummary?.total_requests ?? 0 }}</div>
+            <div class="text-xs text-muted-foreground">
+              请求数
+            </div>
+            <div class="font-semibold">
+              {{ userSummary?.total_requests ?? 0 }}
+            </div>
           </div>
           <div>
-            <div class="text-xs text-muted-foreground">Tokens</div>
-            <div class="font-semibold">{{ formatTokens(userSummary?.total_tokens ?? 0) }}</div>
+            <div class="text-xs text-muted-foreground">
+              Tokens
+            </div>
+            <div class="font-semibold">
+              {{ formatTokens(userSummary?.total_tokens ?? 0) }}
+            </div>
           </div>
           <div>
-            <div class="text-xs text-muted-foreground">成本</div>
-            <div class="font-semibold">{{ formatCurrency(userSummary?.total_cost ?? 0) }}</div>
+            <div class="text-xs text-muted-foreground">
+              成本
+            </div>
+            <div class="font-semibold">
+              {{ formatCurrency(userSummary?.total_cost ?? 0) }}
+            </div>
           </div>
           <div>
-            <div class="text-xs text-muted-foreground">错误率</div>
-            <div class="font-semibold">{{ userSummary?.error_rate ?? 0 }}%</div>
+            <div class="text-xs text-muted-foreground">
+              错误率
+            </div>
+            <div class="font-semibold">
+              {{ userSummary?.error_rate ?? 0 }}%
+            </div>
           </div>
         </div>
       </Card>
     </div>
 
     <Card class="p-4 space-y-4">
-      <h3 class="text-sm font-semibold">用户使用趋势</h3>
-      <div v-if="seriesLoading" class="p-6">
+      <h3 class="text-sm font-semibold">
+        用户使用趋势
+      </h3>
+      <div
+        v-if="seriesLoading"
+        class="p-6"
+      >
         <LoadingState />
       </div>
-      <div v-else class="h-[280px]">
+      <div
+        v-else
+        class="h-[280px]"
+      >
         <LineChart :data="seriesChartData" />
       </div>
     </Card>
 
-    <Card v-if="comparisonSeries.length > 0" class="p-4 space-y-4">
-      <h3 class="text-sm font-semibold">用户对比趋势</h3>
+    <Card
+      v-if="comparisonSeries.length > 0"
+      class="p-4 space-y-4"
+    >
+      <h3 class="text-sm font-semibold">
+        用户对比趋势
+      </h3>
       <div class="h-[280px]">
         <LineChart :data="comparisonChartData" />
       </div>

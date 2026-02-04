@@ -516,10 +516,10 @@ const navigation = computed(() => {
   // 动态添加已激活模块的菜单项
   // 图标映射
   const iconMap: Record<string, LucideIcon> = {
-    'Key': Key,
-    'FileUp': FileUp,
-    'Shield': Shield,
-    'Puzzle': Puzzle,
+    Key,
+    FileUp,
+    Shield,
+    Puzzle,
   }
 
   // 添加模块菜单项（按 admin_menu_order 排序，只显示已激活的）

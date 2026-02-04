@@ -154,9 +154,7 @@ class ProviderEndpointResponse(BaseModel):
     header_rules: list[HeaderRule] | None = Field(default=None, description="请求头规则列表")
 
     # 请求体配置
-    body_rules: list[BodyRule] | None = Field(
-        default=None, description="请求体规则列表"
-    )
+    body_rules: list[BodyRule] | None = Field(default=None, description="请求体规则列表")
 
     max_retries: int
 
@@ -514,7 +512,18 @@ class EndpointAPIKeyResponse(BaseModel):
     capabilities: dict[str, bool] | None = Field(default=None, description="Key 能力标签")
 
     # OAuth 相关
-    oauth_expires_at: int | None = Field(default=None, description="OAuth Token 过期时间（Unix 时间戳）")
+    oauth_expires_at: int | None = Field(
+        default=None, description="OAuth Token 过期时间（Unix 时间戳）"
+    )
+    oauth_email: str | None = Field(default=None, description="OAuth 账号邮箱")
+    oauth_plan_type: str | None = Field(
+        default=None, description="OAuth 账号套餐类型（如 free/plus/team/enterprise）"
+    )
+    oauth_account_id: str | None = Field(default=None, description="OAuth 账号 ID")
+    oauth_invalid_at: int | None = Field(
+        default=None, description="OAuth Token 失效时间（Unix 时间戳），如账号被封、授权撤销等"
+    )
+    oauth_invalid_reason: str | None = Field(default=None, description="OAuth Token 失效原因")
 
     # 缓存与熔断配置
     cache_ttl_minutes: int = Field(default=5, description="缓存 TTL（分钟），0=禁用")
@@ -575,6 +584,11 @@ class EndpointAPIKeyResponse(BaseModel):
     # 模型过滤规则
     model_include_patterns: list[str] | None = Field(None, description="模型包含规则")
     model_exclude_patterns: list[str] | None = Field(None, description="模型排除规则")
+
+    # 上游元数据（由响应头采集，如 Codex 额度信息）
+    upstream_metadata: dict[str, Any] | None = Field(
+        None, description="上游元数据（如 Codex 额度信息）"
+    )
 
     # 时间戳
     last_used_at: datetime | None = None
@@ -701,7 +715,9 @@ class ProviderWithEndpointsSummary(BaseModel):
     # Provider 基本信息
     id: str
     name: str
-    provider_type: str | None = Field(default=None, description="Provider 类型（custom/claude_code/codex/gemini_cli/antigravity）")
+    provider_type: str | None = Field(
+        default=None, description="Provider 类型（custom/claude_code/codex/gemini_cli/antigravity）"
+    )
     description: str | None = None
     website: str | None = None
     provider_priority: int = Field(default=100, description="提供商优先级(数字越小越优先)")

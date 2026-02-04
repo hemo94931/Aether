@@ -1,18 +1,39 @@
 <template>
   <Card class="p-4 space-y-4">
     <div class="flex items-center justify-between">
-      <h3 class="text-sm font-semibold">{{ title }}</h3>
-      <span class="text-xs text-muted-foreground" v-if="subtitle">{{ subtitle }}</span>
+      <h3 class="text-sm font-semibold">
+        {{ title }}
+      </h3>
+      <span
+        v-if="subtitle"
+        class="text-xs text-muted-foreground"
+      >{{ subtitle }}</span>
     </div>
 
-    <div v-if="loading" class="p-4">
+    <div
+      v-if="loading"
+      class="p-4"
+    >
       <LoadingState />
     </div>
-    <div v-else-if="providers.length === 0" class="p-4">
-      <EmptyState title="暂无数据" description="暂无月卡配额数据" />
+    <div
+      v-else-if="providers.length === 0"
+      class="p-4"
+    >
+      <EmptyState
+        title="暂无数据"
+        description="暂无月卡配额数据"
+      />
     </div>
-    <div v-else class="space-y-4">
-      <div v-for="provider in providers" :key="provider.id" class="space-y-2">
+    <div
+      v-else
+      class="space-y-4"
+    >
+      <div
+        v-for="provider in providers"
+        :key="provider.id"
+        class="space-y-2"
+      >
         <div class="flex items-center justify-between text-xs">
           <span class="font-medium">{{ provider.name }}</span>
           <span class="text-muted-foreground">

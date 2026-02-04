@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from src.core.logger import logger
@@ -135,6 +136,40 @@ class TaskScheduler:
         )
 
         logger.info(f"已注册间隔任务: {display_name}, 执行间隔: {interval_desc}")
+
+    def add_date_job(
+        self,
+        func: Callable[..., Any],
+        run_date: datetime,
+        job_id: str | None = None,
+        name: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        添加一次性定时任务（在指定时间执行一次）
+
+        Args:
+            func: 要执行的函数
+            run_date: 执行时间（datetime 对象）
+            job_id: 任务ID
+            name: 任务名称（用于日志）
+            **kwargs: 传递给任务函数的参数
+        """
+        trigger = DateTrigger(run_date=run_date)
+
+        job_id = job_id or func.__name__
+        display_name = name or job_id
+
+        self.scheduler.add_job(
+            func,
+            trigger,
+            id=job_id,
+            name=display_name,
+            replace_existing=True,
+            kwargs=kwargs,
+        )
+
+        logger.info("已注册一次性任务: {}, 执行时间: {}", display_name, run_date.isoformat())
 
     def start(self) -> Any:
         """启动调度器"""

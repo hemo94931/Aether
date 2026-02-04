@@ -9,6 +9,7 @@
 - 连接池监控：定期检查数据库连接池状态
 - Pending 状态清理：清理异常的 Pending 状态记录
 - Gemini 文件映射清理：清理过期的 Gemini 文件→Key 映射
+- OAuth Token 刷新：主动刷新即将过期的 OAuth token
 
 使用 APScheduler 进行任务调度，支持时区配置。
 """
@@ -38,11 +39,25 @@ class MaintenanceScheduler:
 
     # 签到任务的 job_id
     CHECKIN_JOB_ID = "provider_checkin"
+    # OAuth 刷新任务的 job_id
+    OAUTH_REFRESH_JOB_ID = "oauth_token_refresh"
 
     def __init__(self) -> None:
         self.running = False
         self._interval_tasks = []
         self._stats_aggregation_lock = asyncio.Lock()
+
+    def trigger_oauth_refresh_check(self) -> None:
+        """
+        触发 OAuth Token 刷新检查
+
+        当新增 OAuth Key 时调用此方法，重新调度刷新任务。
+        会取消当前的调度，并立即重新计算下次执行时间。
+        """
+        if not self.running:
+            return
+
+        asyncio.create_task(self._schedule_next_oauth_refresh())
 
     def _get_checkin_time(self) -> tuple[int, int]:
         """获取签到任务的执行时间
@@ -203,6 +218,11 @@ class MaintenanceScheduler:
             name="Provider签到",
         )
 
+        # OAuth Token 刷新任务 - 动态调度
+        # 根据最近即将过期的 token 时间来调度，避免固定间隔频繁查询
+        # 启动时先执行一次，计算下次执行时间
+        asyncio.create_task(self._schedule_next_oauth_refresh())
+
         # 启动时执行一次初始化任务
         asyncio.create_task(self._run_startup_tasks())
 
@@ -273,6 +293,152 @@ class MaintenanceScheduler:
     async def _scheduled_provider_checkin(self) -> None:
         """Provider 签到任务（定时调用）"""
         await self._perform_provider_checkin()
+
+    async def _scheduled_oauth_token_refresh(self) -> None:
+        """OAuth Token 刷新任务（定时调用）"""
+        await self._perform_oauth_token_refresh()
+        # 执行完成后，调度下次执行
+        await self._schedule_next_oauth_refresh()
+
+    async def _schedule_next_oauth_refresh(self) -> None:
+        """
+        动态调度下次 OAuth Token 刷新任务
+
+        策略：
+        - 查询所有 OAuth Key 的 expires_at
+        - 找到最近即将过期的 token（在 refresh_threshold 内）
+        - 设置下次执行时间为：最近过期时间 - 提前量（如提前 1 小时刷新）
+        - 如果没有即将过期的 token，设置默认间隔（如 6 小时后）
+        """
+        import json
+        import time
+
+        from src.core.crypto import crypto_service
+        from src.models.database import ProviderAPIKey
+
+        # 延迟启动，等待系统初始化
+        await asyncio.sleep(5)
+
+        scheduler = get_scheduler()
+        job_id = "oauth_token_refresh"
+
+        try:
+            db = create_session()
+            try:
+                # 检查配置开关
+                if not SystemConfigService.get_config(db, "enable_oauth_token_refresh", True):
+                    logger.info("OAuth Token 自动刷新已禁用，不调度任务")
+                    return
+                # 查找所有活跃的 OAuth 类型 Key
+                oauth_keys = (
+                    db.query(ProviderAPIKey)
+                    .filter(
+                        ProviderAPIKey.auth_type == "oauth",
+                        ProviderAPIKey.is_active == True,  # noqa: E712
+                    )
+                    .all()
+                )
+
+                if not oauth_keys:
+                    # 没有 OAuth Key，6 小时后再检查
+                    next_run = datetime.now(timezone.utc) + timedelta(hours=6)
+                    scheduler.add_date_job(
+                        self._scheduled_oauth_token_refresh,
+                        run_date=next_run,
+                        job_id=job_id,
+                        name="OAuth Token刷新",
+                    )
+                    logger.info("没有 OAuth Key，下次检查时间: {}", next_run.isoformat())
+                    return
+
+                now = int(time.time())
+                # 24 小时内过期的都需要刷新（含提前量）
+                refresh_window = 24 * 3600
+                # 提前 1 小时执行刷新
+                refresh_advance = 1 * 3600
+                refresh_threshold_seconds = refresh_window + refresh_advance
+                refresh_threshold = now + refresh_threshold_seconds
+
+                earliest_expires_at: int | None = None
+
+                for key in oauth_keys:
+                    if not key.auth_config:
+                        continue
+
+                    try:
+                        decrypted_config = crypto_service.decrypt(key.auth_config)
+                        token_meta = json.loads(decrypted_config)
+                        expires_at = token_meta.get("expires_at")
+
+                        if expires_at is None:
+                            continue
+
+                        expires_at_int = int(expires_at)
+
+                        # 已经过期或在阈值内，需要立即刷新
+                        if expires_at_int <= refresh_threshold:
+                            # 立即执行
+                            next_run = datetime.now(timezone.utc) + timedelta(seconds=10)
+                            scheduler.add_date_job(
+                                self._scheduled_oauth_token_refresh,
+                                run_date=next_run,
+                                job_id=job_id,
+                                name="OAuth Token刷新",
+                            )
+                            logger.info(
+                                "发现即将过期的 OAuth Token，立即执行刷新: {}",
+                                next_run.isoformat(),
+                            )
+                            return
+
+                        # 记录最近的过期时间
+                        if earliest_expires_at is None or expires_at_int < earliest_expires_at:
+                            earliest_expires_at = expires_at_int
+
+                    except Exception:
+                        continue
+
+                # 计算下次执行时间
+                if earliest_expires_at is not None:
+                    # 在最近过期时间前 24 小时 + 提前量执行
+                    next_run_ts = earliest_expires_at - refresh_threshold_seconds
+                    # 确保不会是过去的时间
+                    if next_run_ts <= now:
+                        next_run_ts = now + 60  # 1 分钟后
+                    next_run = datetime.fromtimestamp(next_run_ts, tz=timezone.utc)
+                else:
+                    # 没有有效的过期时间，6 小时后再检查
+                    next_run = datetime.now(timezone.utc) + timedelta(hours=6)
+
+                # 限制最大间隔为 24 小时
+                max_next_run = datetime.now(timezone.utc) + timedelta(hours=24)
+                if next_run > max_next_run:
+                    next_run = max_next_run
+
+                scheduler.add_date_job(
+                    self._scheduled_oauth_token_refresh,
+                    run_date=next_run,
+                    job_id=job_id,
+                    name="OAuth Token刷新",
+                )
+                logger.info("OAuth Token 刷新任务已调度，下次执行时间: {}", next_run.isoformat())
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.exception("调度 OAuth Token 刷新任务失败: {}", e)
+            # 出错时 1 小时后重试
+            next_run = datetime.now(timezone.utc) + timedelta(hours=1)
+            try:
+                scheduler.add_date_job(
+                    self._scheduled_oauth_token_refresh,
+                    run_date=next_run,
+                    job_id=job_id,
+                    name="OAuth Token刷新",
+                )
+            except Exception:
+                pass
 
     # ========== 实际任务实现 ==========
 
@@ -1030,6 +1196,294 @@ class MaintenanceScheduler:
                 break
 
         return total_deleted
+
+    async def _perform_oauth_token_refresh(self) -> None:
+        """
+        主动刷新即将过期的 OAuth token
+
+        策略：
+        - 查找所有 auth_type='oauth' 且 is_active=True 的 Key
+        - 检查 auth_config 中的 expires_at，如果在 24 小时内过期则刷新
+        - 使用 refresh_token 换取新的 access_token
+        - 更新数据库中的 token 信息
+        """
+        import json
+        import time
+
+        from src.core.crypto import crypto_service
+        from src.core.provider_oauth_utils import enrich_auth_config, post_oauth_token
+        from src.core.provider_templates.fixed_providers import FIXED_PROVIDERS
+        from src.core.provider_templates.types import ProviderType
+        from src.models.database import ProviderAPIKey
+
+        # 检查配置开关
+        check_db = create_session()
+        try:
+            if not SystemConfigService.get_config(check_db, "enable_oauth_token_refresh", True):
+                logger.info("OAuth Token 自动刷新已禁用，跳过任务")
+                return
+        finally:
+            check_db.close()
+
+        logger.info("开始执行 OAuth Token 刷新任务...")
+
+        db = create_session()
+        refreshed_count = 0
+        failed_count = 0
+        skipped_count = 0
+
+        try:
+            # 查找所有活跃的 OAuth 类型 Key
+            oauth_keys = (
+                db.query(ProviderAPIKey)
+                .filter(
+                    ProviderAPIKey.auth_type == "oauth",
+                    ProviderAPIKey.is_active == True,  # noqa: E712
+                )
+                .all()
+            )
+
+            if not oauth_keys:
+                logger.info("没有找到需要刷新的 OAuth Key")
+                return
+
+            logger.info("找到 {} 个 OAuth Key，开始检查过期状态...", len(oauth_keys))
+
+            now = int(time.time())
+            # 24 小时内过期的都刷新（含提前量）
+            refresh_window = 24 * 3600
+            # 提前 1 小时执行刷新
+            refresh_advance = 1 * 3600
+            refresh_threshold = now + refresh_window + refresh_advance
+
+            for key in oauth_keys:
+                try:
+                    # 解密 auth_config
+                    if not key.auth_config:
+                        skipped_count += 1
+                        continue
+
+                    try:
+                        decrypted_config = crypto_service.decrypt(key.auth_config)
+                        token_meta = json.loads(decrypted_config)
+                    except Exception:
+                        logger.warning("Key {} auth_config 解密失败，跳过", key.id)
+                        skipped_count += 1
+                        continue
+
+                    expires_at = token_meta.get("expires_at")
+                    refresh_token = token_meta.get("refresh_token")
+                    provider_type = str(token_meta.get("provider_type") or "")
+
+                    # 检查是否需要刷新
+                    if expires_at is None:
+                        skipped_count += 1
+                        continue
+
+                    try:
+                        expires_at_int = int(expires_at)
+                    except (ValueError, TypeError):
+                        skipped_count += 1
+                        continue
+
+                    if expires_at_int > refresh_threshold:
+                        # 还没到刷新时间
+                        skipped_count += 1
+                        continue
+
+                    if not refresh_token or not provider_type:
+                        logger.warning(
+                            "Key {} 缺少 refresh_token 或 provider_type，无法刷新", key.id
+                        )
+                        skipped_count += 1
+                        continue
+
+                    # 获取 provider 模板
+                    try:
+                        provider_type_enum = ProviderType(provider_type)
+                    except ValueError:
+                        logger.warning("Key {} 未知的 provider_type: {}", key.id, provider_type)
+                        skipped_count += 1
+                        continue
+
+                    template = FIXED_PROVIDERS.get(provider_type_enum)
+                    if not template or not template.oauth:
+                        logger.warning("Key {} provider {} 不支持 OAuth", key.id, provider_type)
+                        skipped_count += 1
+                        continue
+
+                    # 获取代理配置
+                    proxy_config = None
+                    if key.provider and key.provider.endpoints:
+                        for endpoint in key.provider.endpoints:
+                            if endpoint.proxy:
+                                proxy_config = endpoint.proxy
+                                break
+
+                    # 执行刷新
+                    token_url = template.oauth.token_url
+                    is_json = "anthropic.com" in token_url
+
+                    if is_json:
+                        body = {
+                            "grant_type": "refresh_token",
+                            "client_id": template.oauth.client_id,
+                            "refresh_token": str(refresh_token),
+                        }
+                        headers = {
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                        }
+                        data = None
+                        json_body = body
+                    else:
+                        form = {
+                            "grant_type": "refresh_token",
+                            "client_id": template.oauth.client_id,
+                            "refresh_token": str(refresh_token),
+                        }
+                        if template.oauth.client_secret:
+                            form["client_secret"] = template.oauth.client_secret
+                        headers = {
+                            "Content-Type": "application/x-www-form-urlencoded",
+                            "Accept": "application/json",
+                        }
+                        data = form
+                        json_body = None
+
+                    logger.info(
+                        "刷新 Key {} ({}) 的 OAuth token，当前过期时间: {}",
+                        key.id,
+                        key.name,
+                        datetime.fromtimestamp(expires_at_int, tz=timezone.utc).isoformat(),
+                    )
+
+                    resp = await post_oauth_token(
+                        provider_type=provider_type,
+                        token_url=token_url,
+                        headers=headers,
+                        data=data,
+                        json_body=json_body,
+                        proxy_config=proxy_config,
+                        timeout_seconds=30.0,
+                    )
+
+                    if 200 <= resp.status_code < 300:
+                        token = resp.json()
+                        access_token = str(token.get("access_token") or "")
+                        new_refresh_token = str(token.get("refresh_token") or "")
+                        expires_in = token.get("expires_in")
+                        new_expires_at = None
+
+                        try:
+                            if expires_in is not None:
+                                new_expires_at = int(time.time()) + int(expires_in)
+                        except Exception:
+                            new_expires_at = None
+
+                        if access_token:
+                            # 更新 token_meta
+                            token_meta["token_type"] = token.get("token_type")
+                            if new_refresh_token:
+                                token_meta["refresh_token"] = new_refresh_token
+                            token_meta["expires_at"] = new_expires_at
+                            token_meta["scope"] = token.get("scope")
+                            token_meta["updated_at"] = int(time.time())
+
+                            # 提取额外信息
+                            token_meta = await enrich_auth_config(
+                                provider_type=provider_type,
+                                auth_config=token_meta,
+                                token_response=token,
+                                access_token=access_token,
+                                proxy_config=proxy_config,
+                            )
+
+                            # 更新数据库
+                            encrypted_token = crypto_service.encrypt(access_token)
+                            encrypted_config = crypto_service.encrypt(json.dumps(token_meta))
+
+                            key.api_key = encrypted_token
+                            key.auth_config = encrypted_config
+                            # 刷新成功，清除失效标记
+                            key.oauth_invalid_at = None
+                            key.oauth_invalid_reason = None
+                            db.commit()
+
+                            refreshed_count += 1
+                            new_expires_str = (
+                                datetime.fromtimestamp(new_expires_at, tz=timezone.utc).isoformat()
+                                if new_expires_at
+                                else "unknown"
+                            )
+                            logger.info(
+                                "Key {} ({}) OAuth token 刷新成功，新过期时间: {}",
+                                key.id,
+                                key.name,
+                                new_expires_str,
+                            )
+                        else:
+                            failed_count += 1
+                            logger.warning(
+                                "Key {} ({}) 刷新响应中没有 access_token", key.id, key.name
+                            )
+                    else:
+                        failed_count += 1
+                        # 解析错误原因
+                        error_reason = "HTTP {}".format(resp.status_code)
+                        try:
+                            error_body = resp.json()
+                            if "error" in error_body:
+                                error_reason = str(
+                                    error_body.get("error_description") or error_body.get("error")
+                                )
+                        except Exception:
+                            error_reason = (
+                                resp.text[:100] if resp.text else "HTTP {}".format(resp.status_code)
+                            )
+
+                        # 标记为失效（400/401/403 通常表示永久性错误）
+                        if resp.status_code in (400, 401, 403):
+                            key.oauth_invalid_at = datetime.now(timezone.utc)
+                            key.oauth_invalid_reason = error_reason
+                            db.commit()
+                            logger.warning(
+                                "Key {} ({}) OAuth token 刷新失败，已标记为失效: {}",
+                                key.id,
+                                key.name,
+                                error_reason,
+                            )
+                        else:
+                            logger.warning(
+                                "Key {} ({}) OAuth token 刷新失败，状态码: {}，响应: {}",
+                                key.id,
+                                key.name,
+                                resp.status_code,
+                                resp.text[:200],
+                            )
+
+                except Exception as e:
+                    failed_count += 1
+                    logger.exception("Key {} OAuth token 刷新出错: {}", key.id, e)
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+
+                # 避免请求过于频繁
+                await asyncio.sleep(1)
+
+        except Exception as e:
+            logger.exception("OAuth Token 刷新任务执行出错: {}", e)
+        finally:
+            db.close()
+
+        logger.info(
+            "OAuth Token 刷新任务完成: 刷新 {} 个，失败 {} 个，跳过 {} 个",
+            refreshed_count,
+            failed_count,
+            skipped_count,
+        )
 
 
 # 全局单例

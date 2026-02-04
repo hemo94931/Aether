@@ -67,8 +67,10 @@ class FormatConversionRegistry:
         request: dict[str, Any],
         source_format: str,
         target_format: str,
+        *,
+        target_variant: str | None = None,
     ) -> dict[str, Any]:
-        if str(source_format).upper() == str(target_format).upper():
+        if str(source_format).upper() == str(target_format).upper() and not target_variant:
             return request
 
         src = self._require_normalizer(source_format)
@@ -79,7 +81,7 @@ class FormatConversionRegistry:
         ):
             try:
                 internal = src.request_to_internal(request)
-                return tgt.request_from_internal(internal)
+                return tgt.request_from_internal(internal, target_variant=target_variant)
             except Exception as e:
                 raise FormatConversionError(source_format, target_format, str(e)) from e
 

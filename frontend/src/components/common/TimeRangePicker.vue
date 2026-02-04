@@ -1,21 +1,46 @@
 <template>
   <div class="flex flex-wrap items-center gap-2">
-    <Select v-model:open="presetSelectOpen" v-model="selectedPreset">
+    <Select
+      v-model:open="presetSelectOpen"
+      v-model="selectedPreset"
+    >
       <SelectTrigger class="h-8 w-32 text-xs border-border/60">
         <SelectValue placeholder="选择时间段" />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="today">今天</SelectItem>
-        <SelectItem value="yesterday">昨天</SelectItem>
-        <SelectItem value="last7days">最近7天</SelectItem>
-        <SelectItem value="last30days">最近30天</SelectItem>
-        <SelectItem value="last90days">最近90天</SelectItem>
-        <SelectItem value="this_week">本周</SelectItem>
-        <SelectItem value="last_week">上周</SelectItem>
-        <SelectItem value="this_month">本月</SelectItem>
-        <SelectItem value="last_month">上月</SelectItem>
-        <SelectItem value="this_year">今年</SelectItem>
-        <SelectItem value="custom">自定义</SelectItem>
+        <SelectItem value="today">
+          今天
+        </SelectItem>
+        <SelectItem value="yesterday">
+          昨天
+        </SelectItem>
+        <SelectItem value="last7days">
+          最近7天
+        </SelectItem>
+        <SelectItem value="last30days">
+          最近30天
+        </SelectItem>
+        <SelectItem value="last90days">
+          最近90天
+        </SelectItem>
+        <SelectItem value="this_week">
+          本周
+        </SelectItem>
+        <SelectItem value="last_week">
+          上周
+        </SelectItem>
+        <SelectItem value="this_month">
+          本月
+        </SelectItem>
+        <SelectItem value="last_month">
+          上月
+        </SelectItem>
+        <SelectItem value="this_year">
+          今年
+        </SelectItem>
+        <SelectItem value="custom">
+          自定义
+        </SelectItem>
       </SelectContent>
     </Select>
 
@@ -36,15 +61,30 @@
       />
     </div>
 
-    <Select v-if="showGranularity" v-model:open="granularitySelectOpen" v-model="selectedGranularity">
+    <Select
+      v-if="showGranularity"
+      v-model:open="granularitySelectOpen"
+      v-model="selectedGranularity"
+    >
       <SelectTrigger class="h-8 w-24 text-xs border-border/60">
         <SelectValue placeholder="粒度" />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem v-if="allowHourly && canUseHourly" value="hour">小时</SelectItem>
-        <SelectItem value="day">天</SelectItem>
-        <SelectItem value="week">周</SelectItem>
-        <SelectItem value="month">月</SelectItem>
+        <SelectItem
+          v-if="allowHourly && canUseHourly"
+          value="hour"
+        >
+          小时
+        </SelectItem>
+        <SelectItem value="day">
+          天
+        </SelectItem>
+        <SelectItem value="week">
+          周
+        </SelectItem>
+        <SelectItem value="month">
+          月
+        </SelectItem>
       </SelectContent>
     </Select>
   </div>

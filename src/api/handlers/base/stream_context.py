@@ -39,6 +39,7 @@ class StreamContext:
     # Provider 信息（在请求执行时填充）
     provider_name: str | None = None
     provider_id: str | None = None
+    provider_type: str | None = None  # Provider 类型（如 codex），用于元数据采集
     endpoint_id: str | None = None
     key_id: str | None = None
     attempt_id: str | None = None

@@ -2,71 +2,122 @@
   <div class="space-y-6 pb-8">
     <!-- 统计卡片 -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <Card variant="default" class="p-4">
+      <Card
+        variant="default"
+        class="p-4"
+      >
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
             <Zap class="w-5 h-5 text-primary" />
           </div>
           <div>
-            <p class="text-2xl font-bold">{{ stats?.total ?? '-' }}</p>
-            <p class="text-xs text-muted-foreground">总任务数</p>
+            <p class="text-2xl font-bold">
+              {{ stats?.total ?? '-' }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              总任务数
+            </p>
           </div>
         </div>
       </Card>
-      <Card variant="default" class="p-4">
+      <Card
+        variant="default"
+        class="p-4"
+      >
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
-            <Loader2 class="w-5 h-5 text-blue-500" :class="{ 'animate-spin': (stats?.processing_count ?? 0) > 0 }" />
+            <Loader2
+              class="w-5 h-5 text-blue-500"
+              :class="{ 'animate-spin': (stats?.processing_count ?? 0) > 0 }"
+            />
           </div>
           <div>
-            <p class="text-2xl font-bold">{{ stats?.processing_count ?? stats?.by_status?.processing ?? '-' }}</p>
-            <p class="text-xs text-muted-foreground">处理中</p>
+            <p class="text-2xl font-bold">
+              {{ stats?.processing_count ?? stats?.by_status?.processing ?? '-' }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              处理中
+            </p>
           </div>
         </div>
       </Card>
-      <Card variant="default" class="p-4">
+      <Card
+        variant="default"
+        class="p-4"
+      >
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 rounded-lg bg-green-500/10 flex items-center justify-center">
             <CheckCircle class="w-5 h-5 text-green-500" />
           </div>
           <div>
-            <p class="text-2xl font-bold">{{ stats?.by_status?.completed ?? '-' }}</p>
-            <p class="text-xs text-muted-foreground">已完成</p>
+            <p class="text-2xl font-bold">
+              {{ stats?.by_status?.completed ?? '-' }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              已完成
+            </p>
           </div>
         </div>
       </Card>
-      <Card variant="default" class="p-4">
+      <Card
+        variant="default"
+        class="p-4"
+      >
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center">
             <Calendar class="w-5 h-5 text-amber-500" />
           </div>
           <div>
-            <p class="text-2xl font-bold">{{ stats?.today_count ?? '-' }}</p>
-            <p class="text-xs text-muted-foreground">今日任务</p>
+            <p class="text-2xl font-bold">
+              {{ stats?.today_count ?? '-' }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              今日任务
+            </p>
           </div>
         </div>
       </Card>
     </div>
 
     <!-- 任务表格 -->
-    <Card variant="default" class="overflow-hidden">
+    <Card
+      variant="default"
+      class="overflow-hidden"
+    >
       <!-- 标题和筛选器 -->
       <div class="px-4 sm:px-6 py-3.5 border-b border-border/60">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h3 class="text-base font-semibold">异步任务</h3>
+          <h3 class="text-base font-semibold">
+            异步任务
+          </h3>
           <div class="flex items-center gap-2">
             <!-- 状态筛选 -->
-            <Select v-model:open="statusSelectOpen" v-model="filterStatus">
+            <Select
+              v-model:open="statusSelectOpen"
+              v-model="filterStatus"
+            >
               <SelectTrigger class="w-28 h-8 text-xs border-border/60">
                 <SelectValue placeholder="状态" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">全部状态</SelectItem>
-                <SelectItem value="submitted">已提交</SelectItem>
-                <SelectItem value="processing">处理中</SelectItem>
-                <SelectItem value="completed">已完成</SelectItem>
-                <SelectItem value="failed">失败</SelectItem>
-                <SelectItem value="cancelled">已取消</SelectItem>
+                <SelectItem value="all">
+                  全部状态
+                </SelectItem>
+                <SelectItem value="submitted">
+                  已提交
+                </SelectItem>
+                <SelectItem value="processing">
+                  处理中
+                </SelectItem>
+                <SelectItem value="completed">
+                  已完成
+                </SelectItem>
+                <SelectItem value="failed">
+                  失败
+                </SelectItem>
+                <SelectItem value="cancelled">
+                  已取消
+                </SelectItem>
               </SelectContent>
             </Select>
             <!-- 模型筛选 -->
@@ -84,34 +135,62 @@
               :disabled="loading"
               @click="fetchTasks"
             >
-              <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': loading }" />
+              <RefreshCw
+                class="w-3.5 h-3.5"
+                :class="{ 'animate-spin': loading }"
+              />
             </Button>
           </div>
         </div>
       </div>
 
       <!-- 加载状态 -->
-      <div v-if="loading && !tasks.length" class="p-8 text-center">
+      <div
+        v-if="loading && !tasks.length"
+        class="p-8 text-center"
+      >
         <Loader2 class="w-8 h-8 animate-spin mx-auto text-muted-foreground" />
-        <p class="mt-2 text-sm text-muted-foreground">加载中...</p>
+        <p class="mt-2 text-sm text-muted-foreground">
+          加载中...
+        </p>
       </div>
 
       <!-- 空状态 -->
-      <div v-else-if="!tasks.length" class="p-8 text-center">
+      <div
+        v-else-if="!tasks.length"
+        class="p-8 text-center"
+      >
         <Zap class="w-12 h-12 mx-auto text-muted-foreground/50" />
-        <p class="mt-2 text-sm text-muted-foreground">暂无异步任务</p>
+        <p class="mt-2 text-sm text-muted-foreground">
+          暂无异步任务
+        </p>
       </div>
 
       <!-- 桌面端表格 -->
-      <Table v-else class="hidden md:table">
+      <Table
+        v-else
+        class="hidden md:table"
+      >
         <TableHeader>
           <TableRow>
-            <TableHead class="w-[25%]">任务</TableHead>
-            <TableHead class="w-[15%]">用户/Provider</TableHead>
-            <TableHead class="w-[12%]">状态</TableHead>
-            <TableHead class="w-[10%]">参数</TableHead>
-            <TableHead class="w-[15%]">时间</TableHead>
-            <TableHead class="w-[8%] text-center">操作</TableHead>
+            <TableHead class="w-[25%]">
+              任务
+            </TableHead>
+            <TableHead class="w-[15%]">
+              用户/Provider
+            </TableHead>
+            <TableHead class="w-[12%]">
+              状态
+            </TableHead>
+            <TableHead class="w-[10%]">
+              参数
+            </TableHead>
+            <TableHead class="w-[15%]">
+              时间
+            </TableHead>
+            <TableHead class="w-[8%] text-center">
+              操作
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -125,10 +204,16 @@
             <TableCell>
               <div class="space-y-1">
                 <div class="flex items-center gap-2">
-                  <Video v-if="isVideoTask(task)" class="w-4 h-4 text-muted-foreground shrink-0" />
+                  <Video
+                    v-if="isVideoTask(task)"
+                    class="w-4 h-4 text-muted-foreground shrink-0"
+                  />
                   <span class="font-medium text-sm truncate">{{ task.model }}</span>
                 </div>
-                <p class="text-xs text-muted-foreground truncate max-w-[280px]" :title="task.prompt">
+                <p
+                  class="text-xs text-muted-foreground truncate max-w-[280px]"
+                  :title="task.prompt"
+                >
                   {{ task.prompt }}
                 </p>
               </div>
@@ -149,10 +234,16 @@
             <!-- 状态 -->
             <TableCell>
               <div class="flex flex-col items-start gap-1">
-                <Badge :variant="getStatusVariant(task.status)" class="text-xs">
+                <Badge
+                  :variant="getStatusVariant(task.status)"
+                  class="text-xs"
+                >
                   {{ getStatusLabel(task.status) }}
                 </Badge>
-                <div v-if="task.progress_percent > 0 && task.status === 'processing'" class="w-full">
+                <div
+                  v-if="task.progress_percent > 0 && task.status === 'processing'"
+                  class="w-full"
+                >
                   <div class="flex items-center gap-2">
                     <div class="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
                       <div
@@ -168,12 +259,19 @@
             <!-- 参数 -->
             <TableCell>
               <div class="text-xs space-y-0.5 text-muted-foreground">
-                <div v-if="task.duration_seconds" class="flex items-center gap-1">
+                <div
+                  v-if="task.duration_seconds"
+                  class="flex items-center gap-1"
+                >
                   <Timer class="w-3 h-3" />
                   <span>{{ task.duration_seconds }}s</span>
                 </div>
-                <div v-if="task.resolution">{{ task.resolution }}</div>
-                <div v-if="task.aspect_ratio">{{ task.aspect_ratio }}</div>
+                <div v-if="task.resolution">
+                  {{ task.resolution }}
+                </div>
+                <div v-if="task.aspect_ratio">
+                  {{ task.aspect_ratio }}
+                </div>
               </div>
             </TableCell>
             <!-- 时间 -->
@@ -183,7 +281,10 @@
                   <Clock class="w-3 h-3" />
                   <span>{{ formatDate(task.created_at) }}</span>
                 </div>
-                <div v-if="task.completed_at" class="flex items-center gap-1.5 text-green-600 dark:text-green-400">
+                <div
+                  v-if="task.completed_at"
+                  class="flex items-center gap-1.5 text-green-600 dark:text-green-400"
+                >
                   <CheckCircle class="w-3 h-3" />
                   <span>{{ formatDate(task.completed_at) }}</span>
                 </div>
@@ -217,7 +318,10 @@
       </Table>
 
       <!-- 移动端卡片列表 -->
-      <div v-if="tasks.length" class="md:hidden divide-y divide-border/60">
+      <div
+        v-if="tasks.length"
+        class="md:hidden divide-y divide-border/60"
+      >
         <div
           v-for="task in tasks"
           :key="`m-${task.id}`"
@@ -227,27 +331,40 @@
           <!-- 顶部：模型和状态 -->
           <div class="flex items-start justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0 flex-1">
-              <Video v-if="isVideoTask(task)" class="w-4 h-4 text-muted-foreground shrink-0" />
+              <Video
+                v-if="isVideoTask(task)"
+                class="w-4 h-4 text-muted-foreground shrink-0"
+              />
               <span class="font-medium text-sm truncate">{{ task.model }}</span>
             </div>
-            <Badge :variant="getStatusVariant(task.status)" class="text-xs shrink-0">
+            <Badge
+              :variant="getStatusVariant(task.status)"
+              class="text-xs shrink-0"
+            >
               {{ getStatusLabel(task.status) }}
             </Badge>
           </div>
 
           <!-- 进度条（如果有） -->
-          <div v-if="task.progress_percent > 0 && task.status === 'processing'" class="space-y-1">
+          <div
+            v-if="task.progress_percent > 0 && task.status === 'processing'"
+            class="space-y-1"
+          >
             <div class="h-1.5 bg-muted rounded-full overflow-hidden">
               <div
                 class="h-full bg-primary transition-all"
                 :style="{ width: `${task.progress_percent}%` }"
               />
             </div>
-            <p class="text-xs text-muted-foreground text-right">{{ task.progress_percent }}%</p>
+            <p class="text-xs text-muted-foreground text-right">
+              {{ task.progress_percent }}%
+            </p>
           </div>
 
           <!-- Prompt -->
-          <p class="text-sm text-muted-foreground line-clamp-2">{{ task.prompt }}</p>
+          <p class="text-sm text-muted-foreground line-clamp-2">
+            {{ task.prompt }}
+          </p>
 
           <!-- 信息网格 -->
           <div class="grid grid-cols-2 gap-2 text-xs">
@@ -263,7 +380,10 @@
               <Clock class="w-3 h-3" />
               <span>{{ formatDate(task.created_at) }}</span>
             </div>
-            <div v-if="task.duration_seconds" class="flex items-center gap-1.5 text-muted-foreground">
+            <div
+              v-if="task.duration_seconds"
+              class="flex items-center gap-1.5 text-muted-foreground"
+            >
               <Timer class="w-3 h-3" />
               <span>{{ task.duration_seconds }}s</span>
             </div>
@@ -326,9 +446,14 @@
               <!-- 第一行：标题、模型、状态、操作按钮 -->
               <div class="flex items-center justify-between gap-4 mb-3">
                 <div class="flex items-center gap-3 flex-wrap">
-                  <h3 class="text-lg font-semibold">任务详情</h3>
+                  <h3 class="text-lg font-semibold">
+                    任务详情
+                  </h3>
                   <div class="flex items-center gap-1 text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                    <Video v-if="isVideoTask(selectedTask)" class="w-3.5 h-3.5 mr-1" />
+                    <Video
+                      v-if="isVideoTask(selectedTask)"
+                      class="w-3.5 h-3.5 mr-1"
+                    />
                     <span>{{ selectedTask.model }}</span>
                   </div>
                   <Badge :variant="getStatusVariant(selectedTask.status)">
@@ -344,9 +469,18 @@
                     :title="detailAutoRefresh ? '停止自动刷新' : '开启自动刷新（每5秒）'"
                     @click="toggleDetailAutoRefresh"
                   >
-                    <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': detailAutoRefresh }" />
+                    <RefreshCw
+                      class="w-4 h-4"
+                      :class="{ 'animate-spin': detailAutoRefresh }"
+                    />
                   </Button>
-                  <Button variant="ghost" size="icon" class="h-8 w-8" title="关闭" @click="closeDetail">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="h-8 w-8"
+                    title="关闭"
+                    @click="closeDetail"
+                  >
                     <X class="w-4 h-4" />
                   </Button>
                 </div>
@@ -365,7 +499,10 @@
                 <span>Provider: {{ selectedTask.provider_name }}</span>
               </div>
               <!-- 进度条 -->
-              <div v-if="selectedTask.progress_percent > 0 && selectedTask.status === 'processing'" class="mt-3">
+              <div
+                v-if="selectedTask.progress_percent > 0 && selectedTask.status === 'processing'"
+                class="mt-3"
+              >
                 <div class="flex items-center gap-3">
                   <div class="flex-1 h-2 bg-muted rounded-full overflow-hidden">
                     <div
@@ -375,7 +512,10 @@
                   </div>
                   <span class="text-xs text-muted-foreground font-medium">{{ selectedTask.progress_percent }}%</span>
                 </div>
-                <p v-if="selectedTask.progress_message" class="text-xs text-muted-foreground mt-1">
+                <p
+                  v-if="selectedTask.progress_message"
+                  class="text-xs text-muted-foreground mt-1"
+                >
                   {{ selectedTask.progress_message }}
                 </p>
               </div>
@@ -384,20 +524,31 @@
             <!-- 可滚动内容区域 -->
             <div class="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-3 sm:py-4 space-y-5">
               <!-- 错误信息 -->
-              <div v-if="selectedTask.error_message" class="p-3 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
+              <div
+                v-if="selectedTask.error_message"
+                class="p-3 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800"
+              >
                 <div class="flex items-start gap-2">
                   <AlertCircle class="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
                   <div>
-                    <p v-if="selectedTask.error_code" class="text-xs font-medium text-red-600 dark:text-red-400 mb-1">
+                    <p
+                      v-if="selectedTask.error_code"
+                      class="text-xs font-medium text-red-600 dark:text-red-400 mb-1"
+                    >
                       错误码: {{ selectedTask.error_code }}
                     </p>
-                    <p class="text-sm text-red-600 dark:text-red-400">{{ selectedTask.error_message }}</p>
+                    <p class="text-sm text-red-600 dark:text-red-400">
+                      {{ selectedTask.error_message }}
+                    </p>
                   </div>
                 </div>
               </div>
 
               <!-- 视频结果（放在最前面） -->
-              <div v-if="selectedTask.video_url || selectedTask.video_urls?.length" class="space-y-3">
+              <div
+                v-if="selectedTask.video_url || selectedTask.video_urls?.length"
+                class="space-y-3"
+              >
                 <!-- 主视频 -->
                 <div v-if="selectedTask.video_url">
                   <div class="rounded-lg overflow-hidden border border-border/60 bg-black">
@@ -412,7 +563,10 @@
                   <div class="mt-2 space-y-2">
                     <!-- 链接 -->
                     <div class="flex items-center gap-1 p-1.5 bg-muted/50 rounded border border-border/40">
-                      <code class="flex-1 text-xs text-foreground truncate px-1" :title="selectedTask.video_url">{{ selectedTask.video_url }}</code>
+                      <code
+                        class="flex-1 text-xs text-foreground truncate px-1"
+                        :title="selectedTask.video_url"
+                      >{{ selectedTask.video_url }}</code>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -423,11 +577,17 @@
                       </Button>
                     </div>
                     <!-- 元信息 -->
-                    <div v-if="selectedTask.video_size_bytes || selectedTask.video_expires_at" class="flex items-center gap-3 text-xs text-muted-foreground">
+                    <div
+                      v-if="selectedTask.video_size_bytes || selectedTask.video_expires_at"
+                      class="flex items-center gap-3 text-xs text-muted-foreground"
+                    >
                       <span v-if="selectedTask.video_size_bytes">
                         大小: {{ formatFileSize(selectedTask.video_size_bytes) }}
                       </span>
-                      <span v-if="selectedTask.video_expires_at" class="text-amber-600 dark:text-amber-400">
+                      <span
+                        v-if="selectedTask.video_expires_at"
+                        class="text-amber-600 dark:text-amber-400"
+                      >
                         过期: {{ formatDate(selectedTask.video_expires_at) }}
                       </span>
                     </div>
@@ -435,14 +595,30 @@
                 </div>
 
                 <!-- 多个视频 -->
-                <div v-else-if="selectedTask.video_urls?.length" class="space-y-4">
-                  <div v-for="(url, index) in selectedTask.video_urls" :key="index">
-                    <p class="text-xs text-muted-foreground font-medium mb-1.5">视频 {{ index + 1 }}</p>
+                <div
+                  v-else-if="selectedTask.video_urls?.length"
+                  class="space-y-4"
+                >
+                  <div
+                    v-for="(url, index) in selectedTask.video_urls"
+                    :key="index"
+                  >
+                    <p class="text-xs text-muted-foreground font-medium mb-1.5">
+                      视频 {{ index + 1 }}
+                    </p>
                     <div class="rounded-lg overflow-hidden border border-border/60 bg-black">
-                      <video :src="getVideoUrl(selectedTask.id, url)" controls preload="none" class="w-full max-h-[250px] object-contain" />
+                      <video
+                        :src="getVideoUrl(selectedTask.id, url)"
+                        controls
+                        preload="none"
+                        class="w-full max-h-[250px] object-contain"
+                      />
                     </div>
                     <div class="mt-1.5 flex items-center gap-1 p-1.5 bg-muted/50 rounded border border-border/40">
-                      <code class="flex-1 text-xs text-foreground truncate px-1" :title="url">{{ url }}</code>
+                      <code
+                        class="flex-1 text-xs text-foreground truncate px-1"
+                        :title="url"
+                      >{{ url }}</code>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -457,15 +633,22 @@
               </div>
 
               <!-- 任务完成但无视频 -->
-              <div v-else-if="selectedTask.status === 'completed'" class="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800 text-center">
+              <div
+                v-else-if="selectedTask.status === 'completed'"
+                class="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800 text-center"
+              >
                 <Video class="w-8 h-8 mx-auto mb-2 text-amber-500" />
-                <p class="text-sm text-amber-600 dark:text-amber-400">视频链接不可用或已过期</p>
+                <p class="text-sm text-amber-600 dark:text-amber-400">
+                  视频链接不可用或已过期
+                </p>
               </div>
 
               <!-- Prompt -->
               <div class="space-y-2">
                 <div class="flex items-center justify-between">
-                  <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">Prompt</h4>
+                  <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Prompt
+                  </h4>
                   <Button
                     variant="outline"
                     size="sm"
@@ -482,69 +665,134 @@
               </div>
 
               <!-- 视频信息（网格布局） -->
-              <div v-if="selectedTask.video_duration_seconds || selectedTask.resolution || selectedTask.aspect_ratio || selectedTask.size" class="space-y-2">
-                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">视频信息</h4>
+              <div
+                v-if="selectedTask.video_duration_seconds || selectedTask.resolution || selectedTask.aspect_ratio || selectedTask.size"
+                class="space-y-2"
+              >
+                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  视频信息
+                </h4>
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div v-if="selectedTask.video_duration_seconds" class="p-3 bg-muted/30 rounded-lg">
-                    <p class="text-xs text-muted-foreground mb-0.5">视频时长</p>
-                    <p class="text-sm font-medium">{{ selectedTask.video_duration_seconds.toFixed(1) }}s</p>
+                  <div
+                    v-if="selectedTask.video_duration_seconds"
+                    class="p-3 bg-muted/30 rounded-lg"
+                  >
+                    <p class="text-xs text-muted-foreground mb-0.5">
+                      视频时长
+                    </p>
+                    <p class="text-sm font-medium">
+                      {{ selectedTask.video_duration_seconds.toFixed(1) }}s
+                    </p>
                   </div>
-                  <div v-if="selectedTask.resolution" class="p-3 bg-muted/30 rounded-lg">
-                    <p class="text-xs text-muted-foreground mb-0.5">分辨率</p>
-                    <p class="text-sm font-medium">{{ selectedTask.resolution }}</p>
+                  <div
+                    v-if="selectedTask.resolution"
+                    class="p-3 bg-muted/30 rounded-lg"
+                  >
+                    <p class="text-xs text-muted-foreground mb-0.5">
+                      分辨率
+                    </p>
+                    <p class="text-sm font-medium">
+                      {{ selectedTask.resolution }}
+                    </p>
                   </div>
-                  <div v-if="selectedTask.aspect_ratio" class="p-3 bg-muted/30 rounded-lg">
-                    <p class="text-xs text-muted-foreground mb-0.5">宽高比</p>
-                    <p class="text-sm font-medium">{{ selectedTask.aspect_ratio }}</p>
+                  <div
+                    v-if="selectedTask.aspect_ratio"
+                    class="p-3 bg-muted/30 rounded-lg"
+                  >
+                    <p class="text-xs text-muted-foreground mb-0.5">
+                      宽高比
+                    </p>
+                    <p class="text-sm font-medium">
+                      {{ selectedTask.aspect_ratio }}
+                    </p>
                   </div>
-                  <div v-if="selectedTask.size" class="p-3 bg-muted/30 rounded-lg">
-                    <p class="text-xs text-muted-foreground mb-0.5">尺寸</p>
-                    <p class="text-sm font-medium">{{ selectedTask.size }}</p>
+                  <div
+                    v-if="selectedTask.size"
+                    class="p-3 bg-muted/30 rounded-lg"
+                  >
+                    <p class="text-xs text-muted-foreground mb-0.5">
+                      尺寸
+                    </p>
+                    <p class="text-sm font-medium">
+                      {{ selectedTask.size }}
+                    </p>
                   </div>
                 </div>
               </div>
 
               <!-- 执行状态（网格布局） -->
               <div class="space-y-2">
-                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">执行状态</h4>
+                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  执行状态
+                </h4>
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div class="p-3 bg-muted/30 rounded-lg">
-                    <p class="text-xs text-muted-foreground mb-0.5">轮询</p>
-                    <p class="text-sm font-medium">{{ selectedTask.poll_count }} / {{ selectedTask.max_poll_count }}</p>
+                    <p class="text-xs text-muted-foreground mb-0.5">
+                      轮询
+                    </p>
+                    <p class="text-sm font-medium">
+                      {{ selectedTask.poll_count }} / {{ selectedTask.max_poll_count }}
+                    </p>
                   </div>
                   <div class="p-3 bg-muted/30 rounded-lg">
-                    <p class="text-xs text-muted-foreground mb-0.5">重试</p>
-                    <p class="text-sm font-medium">{{ selectedTask.retry_count }} / {{ selectedTask.max_retries }}</p>
+                    <p class="text-xs text-muted-foreground mb-0.5">
+                      重试
+                    </p>
+                    <p class="text-sm font-medium">
+                      {{ selectedTask.retry_count }} / {{ selectedTask.max_retries }}
+                    </p>
                   </div>
                   <div class="p-3 bg-muted/30 rounded-lg">
-                    <p class="text-xs text-muted-foreground mb-0.5">轮询间隔</p>
-                    <p class="text-sm font-medium">{{ selectedTask.poll_interval_seconds }}s</p>
+                    <p class="text-xs text-muted-foreground mb-0.5">
+                      轮询间隔
+                    </p>
+                    <p class="text-sm font-medium">
+                      {{ selectedTask.poll_interval_seconds }}s
+                    </p>
                   </div>
-                  <div v-if="selectedTask.next_poll_at" class="p-3 bg-muted/30 rounded-lg">
-                    <p class="text-xs text-muted-foreground mb-0.5">下次轮询</p>
-                    <p class="text-sm font-medium">{{ formatDate(selectedTask.next_poll_at) }}</p>
+                  <div
+                    v-if="selectedTask.next_poll_at"
+                    class="p-3 bg-muted/30 rounded-lg"
+                  >
+                    <p class="text-xs text-muted-foreground mb-0.5">
+                      下次轮询
+                    </p>
+                    <p class="text-sm font-medium">
+                      {{ formatDate(selectedTask.next_poll_at) }}
+                    </p>
                   </div>
                 </div>
               </div>
 
               <!-- 时间范围 -->
               <div class="space-y-2">
-                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">时间范围</h4>
+                <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  时间范围
+                </h4>
                 <div class="flex items-center gap-1 text-sm font-medium">
                   <span>{{ formatTimeWithMs(selectedTask.created_at) }}</span>
                   <span class="time-arrow-container">
-                    <span v-if="selectedTask.completed_at" class="time-duration">+{{ calcDuration(selectedTask.created_at, selectedTask.completed_at) }}</span>
+                    <span
+                      v-if="selectedTask.completed_at"
+                      class="time-duration"
+                    >+{{ calcDuration(selectedTask.created_at, selectedTask.completed_at) }}</span>
                     <span class="time-arrow">→</span>
                   </span>
                   <template v-if="selectedTask.completed_at">
                     <span>{{ formatTimeWithMs(selectedTask.completed_at) }}</span>
                   </template>
-                  <span v-else class="text-muted-foreground">处理中...</span>
+                  <span
+                    v-else
+                    class="text-muted-foreground"
+                  >处理中...</span>
                 </div>
               </div>
 
               <!-- 响应数据 -->
-              <div v-if="selectedTask.request_metadata?.poll_raw_response" class="space-y-2">
+              <div
+                v-if="selectedTask.request_metadata?.poll_raw_response"
+                class="space-y-2"
+              >
                 <div class="flex items-center justify-between">
                   <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-2">
                     <FileJson class="w-3.5 h-3.5" />
@@ -566,7 +814,10 @@
               </div>
 
               <!-- 操作按钮 -->
-              <div v-if="canCancel(selectedTask.status)" class="pt-4 border-t border-border/60">
+              <div
+                v-if="canCancel(selectedTask.status)"
+                class="pt-4 border-t border-border/60"
+              >
                 <Button
                   variant="destructive"
                   class="w-full"
@@ -590,52 +841,6 @@
     />
   </div>
 </template>
-
-<style scoped>
-.drawer-enter-active,
-.drawer-leave-active {
-  transition: all 0.3s ease;
-}
-.drawer-enter-active > div:first-child,
-.drawer-leave-active > div:first-child {
-  transition: opacity 0.3s ease;
-}
-.drawer-enter-active > div:last-child,
-.drawer-leave-active > div:last-child {
-  transition: transform 0.3s ease;
-}
-.drawer-enter-from,
-.drawer-leave-to {
-  opacity: 0;
-}
-.drawer-enter-from > div:last-child,
-.drawer-leave-to > div:last-child {
-  transform: translateX(100%);
-}
-
-/* 时间范围箭头容器 */
-.time-arrow-container {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 0.25rem;
-}
-
-.time-arrow {
-  color: hsl(var(--muted-foreground));
-}
-
-.time-duration {
-  position: absolute;
-  top: -1rem;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 0.65rem;
-  color: hsl(var(--muted-foreground));
-  white-space: nowrap;
-}
-</style>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
@@ -1043,3 +1248,49 @@ onUnmounted(() => {
   clearTimeout(filterTimeout)
 })
 </script>
+
+<style scoped>
+.drawer-enter-active,
+.drawer-leave-active {
+  transition: all 0.3s ease;
+}
+.drawer-enter-active > div:first-child,
+.drawer-leave-active > div:first-child {
+  transition: opacity 0.3s ease;
+}
+.drawer-enter-active > div:last-child,
+.drawer-leave-active > div:last-child {
+  transition: transform 0.3s ease;
+}
+.drawer-enter-from,
+.drawer-leave-to {
+  opacity: 0;
+}
+.drawer-enter-from > div:last-child,
+.drawer-leave-to > div:last-child {
+  transform: translateX(100%);
+}
+
+/* 时间范围箭头容器 */
+.time-arrow-container {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.25rem;
+}
+
+.time-arrow {
+  color: hsl(var(--muted-foreground));
+}
+
+.time-duration {
+  position: absolute;
+  top: -1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.65rem;
+  color: hsl(var(--muted-foreground));
+  white-space: nowrap;
+}
+</style>

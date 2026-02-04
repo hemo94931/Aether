@@ -242,9 +242,7 @@ class AdminUpdateEndpointKeyAdapter(AdminApiAdapter):
         if "auth_type" in update_data:
             if target_auth_type == "api_key":
                 if current_auth_type in {"vertex_ai", "oauth"} and not update_data.get("api_key"):
-                    raise InvalidRequestException(
-                        "切换到 API Key 认证模式时，必须提供新的 API Key"
-                    )
+                    raise InvalidRequestException("切换到 API Key 认证模式时，必须提供新的 API Key")
                 # 切换回 API Key：清理非本模式配置
                 update_data["auth_config"] = None
             elif target_auth_type == "vertex_ai":
@@ -629,16 +627,29 @@ def _build_key_response(
     key_dict.pop("_sa_instance_state", None)
     key_dict.pop("api_key", None)  # 移除敏感字段，避免泄露
 
-    # 提取 OAuth expires_at（如果是 OAuth 类型）
+    # 提取 OAuth 元数据（如果是 OAuth 类型）
     oauth_expires_at = None
+    oauth_email = None
+    oauth_plan_type = None
+    oauth_account_id = None
     encrypted_auth_config = key_dict.pop("auth_config", None)  # 移除敏感字段，避免泄露
     if auth_type == "oauth" and encrypted_auth_config:
         try:
             decrypted_config = crypto_service.decrypt(encrypted_auth_config)
             auth_config = json.loads(decrypted_config)
             oauth_expires_at = auth_config.get("expires_at")
-        except Exception:
-            pass
+            oauth_email = auth_config.get("email")
+            oauth_plan_type = auth_config.get("plan_type")  # Codex: plus/free/team/enterprise
+            oauth_account_id = auth_config.get("account_id")  # Codex: chatgpt_account_id
+            logger.debug(
+                "OAuth key {} auth_config: email={} plan_type={} account_id={}",
+                key.id,
+                oauth_email,
+                oauth_plan_type,
+                oauth_account_id,
+            )
+        except Exception as e:
+            logger.error("Failed to decrypt auth_config for key {}: {}", key.id, e)
 
     # 从 health_by_format 计算汇总字段（便于列表展示）
     health_by_format = key.health_by_format or {}
@@ -685,6 +696,13 @@ def _build_key_response(
             "circuit_breaker_open": any_circuit_open,
             # OAuth 相关
             "oauth_expires_at": oauth_expires_at,
+            "oauth_email": oauth_email,
+            "oauth_plan_type": oauth_plan_type,
+            "oauth_account_id": oauth_account_id,
+            "oauth_invalid_at": (
+                int(key.oauth_invalid_at.timestamp()) if key.oauth_invalid_at else None
+            ),
+            "oauth_invalid_reason": key.oauth_invalid_reason,
         }
     )
 

@@ -10,7 +10,6 @@ import jwt
 from src.clients.http_client import HTTPClientPool, build_proxy_url
 from src.core.logger import logger
 
-
 _ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json"
 
@@ -206,18 +205,20 @@ async def post_oauth_token(
     )
 
 
-def parse_codex_id_token(id_token: str | None) -> tuple[str | None, str | None]:
+def parse_codex_id_token(id_token: str | None) -> dict[str, Any]:
     """Parse Codex id_token WITHOUT signature verification.
 
-    Extract:
+    Extract from claim `https://api.openai.com/auth`:
     - email: claim `email`
-    - account_id: claim `https://api.openai.com/auth`.`chatgpt_account_id`
+    - account_id: `chatgpt_account_id`
+    - plan_type: `chatgpt_plan_type` (e.g. "plus", "free", "team", "enterprise")
+    - user_id: `chatgpt_user_id`
 
-    Return (email, account_id). On any failure returns (None, None).
+    Return dict with extracted fields. On any failure returns empty dict.
     """
 
     if not id_token:
-        return (None, None)
+        return {}
     try:
         claims = jwt.decode(
             id_token,
@@ -226,17 +227,29 @@ def parse_codex_id_token(id_token: str | None) -> tuple[str | None, str | None]:
                 "verify_aud": False,
             },
         )
+        result: dict[str, Any] = {}
+
         email = claims.get("email")
+        if isinstance(email, str) and email:
+            result["email"] = email
+
         auth_info = claims.get("https://api.openai.com/auth") or {}
-        account_id = None
         if isinstance(auth_info, dict):
             account_id = auth_info.get("chatgpt_account_id")
-        return (
-            str(email) if isinstance(email, str) and email else None,
-            str(account_id) if isinstance(account_id, str) and account_id else None,
-        )
+            if isinstance(account_id, str) and account_id:
+                result["account_id"] = account_id
+
+            plan_type = auth_info.get("chatgpt_plan_type")
+            if isinstance(plan_type, str) and plan_type:
+                result["plan_type"] = plan_type
+
+            user_id = auth_info.get("chatgpt_user_id")
+            if isinstance(user_id, str) and user_id:
+                result["user_id"] = user_id
+
+        return result
     except Exception:
-        return (None, None)
+        return {}
 
 
 async def fetch_google_email(
@@ -306,11 +319,22 @@ async def enrich_auth_config(
     # Codex
     if provider_type == "codex":
         id_token = token_response.get("id_token")
-        email, account_id = parse_codex_id_token(str(id_token) if id_token else None)
-        if email:
-            auth_config["email"] = email
-        if account_id:
-            auth_config["account_id"] = account_id
+        logger.debug(
+            "Codex enrich_auth_config: id_token_present={} token_keys={}",
+            bool(id_token),
+            list(token_response.keys()),
+        )
+        codex_info = parse_codex_id_token(str(id_token) if id_token else None)
+        if codex_info:
+            logger.debug("Codex parsed id_token fields: {}", list(codex_info.keys()))
+        if codex_info.get("email"):
+            auth_config["email"] = codex_info["email"]
+        if codex_info.get("account_id"):
+            auth_config["account_id"] = codex_info["account_id"]
+        if codex_info.get("plan_type"):
+            auth_config["plan_type"] = codex_info["plan_type"]
+        if codex_info.get("user_id"):
+            auth_config["user_id"] = codex_info["user_id"]
         return auth_config
 
     # Gemini family (gemini_cli / antigravity)

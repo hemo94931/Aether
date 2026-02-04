@@ -61,16 +61,16 @@ const conceptIconColors = {
         <div
           v-for="concept in coreConcepts"
           :key="concept.name"
+          class="p-4 rounded-xl border-2 transition-all"
           :class="[
-            'p-4 rounded-xl border-2 transition-all',
             conceptColors[concept.color as keyof typeof conceptColors]
           ]"
         >
           <div class="flex items-start gap-3">
             <component
               :is="conceptIcons[concept.color as keyof typeof conceptIcons]"
+              class="h-6 w-6 flex-shrink-0 mt-0.5"
               :class="[
-                'h-6 w-6 flex-shrink-0 mt-0.5',
                 conceptIconColors[concept.color as keyof typeof conceptIconColors]
               ]"
             />
@@ -87,7 +87,10 @@ const conceptIconColors = {
       </div>
 
       <!-- 关系图 -->
-      <div :class="[panelClasses.section, 'p-6 mt-6']">
+      <div
+        class="p-6 mt-6"
+        :class="[panelClasses.section]"
+      >
         <h3 class="text-sm font-medium text-[#666663] dark:text-[#a3a094] mb-4">
           它们之间的关系
         </h3>
@@ -134,7 +137,8 @@ const conceptIconColors = {
         <div
           v-for="step in configSteps"
           :key="step.step"
-          :class="[panelClasses.section, 'p-4 relative']"
+          class="p-4 relative"
+          :class="[panelClasses.section]"
         >
           <div class="absolute -top-3 -left-2 w-8 h-8 rounded-full bg-[#cc785c] flex items-center justify-center text-white font-bold text-sm">
             {{ step.step }}
@@ -160,15 +164,26 @@ const conceptIconColors = {
         Aether 支持多种 API 格式，可以作为不同客户端的统一入口：
       </p>
 
-      <div :class="[panelClasses.section, 'overflow-hidden']">
+      <div
+        class="overflow-hidden"
+        :class="[panelClasses.section]"
+      >
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)] bg-[#fafaf7]/50 dark:bg-[#1f1d1a]/50">
-                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">格式</th>
-                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">端点</th>
-                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">认证方式</th>
-                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">常用客户端</th>
+                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                  格式
+                </th>
+                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                  端点
+                </th>
+                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                  认证方式
+                </th>
+                <th class="px-4 py-3 text-left font-medium text-[#666663] dark:text-[#a3a094]">
+                  常用客户端
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -204,36 +219,51 @@ const conceptIconColors = {
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <RouterLink
           to="/guide/provider"
-          :class="[panelClasses.section, panelClasses.cardHover, 'p-4 flex items-center gap-3 group']"
+          class="p-4 flex items-center gap-3 group"
+          :class="[panelClasses.section, panelClasses.cardHover]"
         >
           <Server class="h-5 w-5 text-[#cc785c]" />
           <div class="flex-1">
-            <div class="font-medium text-[#262624] dark:text-[#f1ead8]">供应商管理</div>
-            <div class="text-sm text-[#666663] dark:text-[#a3a094]">添加和配置 API 供应商</div>
+            <div class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              供应商管理
+            </div>
+            <div class="text-sm text-[#666663] dark:text-[#a3a094]">
+              添加和配置 API 供应商
+            </div>
           </div>
           <ArrowRight class="h-5 w-5 text-[#999] group-hover:text-[#cc785c] transition-colors" />
         </RouterLink>
 
         <RouterLink
           to="/guide/model"
-          :class="[panelClasses.section, panelClasses.cardHover, 'p-4 flex items-center gap-3 group']"
+          class="p-4 flex items-center gap-3 group"
+          :class="[panelClasses.section, panelClasses.cardHover]"
         >
           <Layers class="h-5 w-5 text-[#cc785c]" />
           <div class="flex-1">
-            <div class="font-medium text-[#262624] dark:text-[#f1ead8]">模型管理</div>
-            <div class="text-sm text-[#666663] dark:text-[#a3a094]">配置模型和负载均衡</div>
+            <div class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              模型管理
+            </div>
+            <div class="text-sm text-[#666663] dark:text-[#a3a094]">
+              配置模型和负载均衡
+            </div>
           </div>
           <ArrowRight class="h-5 w-5 text-[#999] group-hover:text-[#cc785c] transition-colors" />
         </RouterLink>
 
         <RouterLink
           to="/guide/user-key"
-          :class="[panelClasses.section, panelClasses.cardHover, 'p-4 flex items-center gap-3 group']"
+          class="p-4 flex items-center gap-3 group"
+          :class="[panelClasses.section, panelClasses.cardHover]"
         >
           <Key class="h-5 w-5 text-[#cc785c]" />
           <div class="flex-1">
-            <div class="font-medium text-[#262624] dark:text-[#f1ead8]">用户与密钥</div>
-            <div class="text-sm text-[#666663] dark:text-[#a3a094]">管理用户和 API Key</div>
+            <div class="font-medium text-[#262624] dark:text-[#f1ead8]">
+              用户与密钥
+            </div>
+            <div class="text-sm text-[#666663] dark:text-[#a3a094]">
+              管理用户和 API Key
+            </div>
           </div>
           <ArrowRight class="h-5 w-5 text-[#999] group-hover:text-[#cc785c] transition-colors" />
         </RouterLink>

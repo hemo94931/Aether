@@ -638,13 +638,13 @@ class CliAdapterBase(ApiAdapter):
         url = cls.build_endpoint_url(base_url, request_data, model_name)
 
         # 合并 CLI 额外头部到 extra_headers
-        cli_extra = cls.get_cli_extra_headers()
+        cli_extra = cls.get_cli_extra_headers(base_url=base_url)
         merged_extra = dict(extra_headers) if extra_headers else {}
         merged_extra.update(cli_extra)
 
         # 使用统一的头部构建函数
         headers = cls.build_headers_with_extra(api_key, merged_extra if merged_extra else None)
-        body = cls.build_request_body(request_data)
+        body = cls.build_request_body(request_data, base_url=base_url)
 
         # 获取有效的模型名称
         effective_model_name = model_name or request_data.get("model")
@@ -686,17 +686,25 @@ class CliAdapterBase(ApiAdapter):
         raise NotImplementedError(f"{cls.FORMAT_ID} adapter must implement build_endpoint_url")
 
     @classmethod
-    def build_request_body(cls, request_data: dict[str, Any] | None = None) -> dict[str, Any]:
+    def build_request_body(
+        cls,
+        request_data: dict[str, Any] | None = None,
+        *,
+        base_url: str | None = None,
+    ) -> dict[str, Any]:
         """构建测试请求体，使用转换器注册表自动处理格式转换
 
         Args:
             request_data: 可选的请求数据，会与默认测试请求合并
+            base_url: API 基础 URL，用于判断特殊端点（如 Codex）
 
         Returns:
             转换为目标 API 格式的请求体
         """
         from src.api.handlers.base.request_builder import build_test_request_body
 
+        # 基类不使用 base_url，子类可覆盖以支持特殊端点
+        _ = base_url
         return build_test_request_body(cls.FORMAT_ID, request_data)
 
     @classmethod
@@ -710,12 +718,15 @@ class CliAdapterBase(ApiAdapter):
         return None
 
     @classmethod
-    def get_cli_extra_headers(cls) -> dict[str, str]:
+    def get_cli_extra_headers(cls, *, base_url: str | None = None) -> dict[str, str]:
         """
         获取CLI额外请求头 - 子类可覆盖
 
         用于 check_endpoint 测试请求时添加额外的头部。
         默认实现只添加 User-Agent（如果有）。
+
+        Args:
+            base_url: API 基础 URL，子类可据此判断特殊端点（如 Codex）
 
         Returns:
             额外请求头字典

@@ -533,6 +533,12 @@ const props = defineProps<{
   providerFormatConversionEnabled?: boolean
 }>()
 
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean]
+  'endpointCreated': []
+  'endpointUpdated': []
+}>()
+
 // 计算端点级格式转换是否应该被禁用
 const isEndpointFormatConversionDisabled = computed(() => {
   return props.systemFormatConversionEnabled || props.providerFormatConversionEnabled
@@ -548,12 +554,6 @@ const formatConversionDisabledTooltip = computed(() => {
   }
   return ''
 })
-
-const emit = defineEmits<{
-  'update:modelValue': [value: boolean]
-  'endpointCreated': []
-  'endpointUpdated': []
-}>()
 
 const { success, error: showError } = useToast()
 

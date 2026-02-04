@@ -164,7 +164,7 @@
               type="text"
               class="w-full px-3 py-2 text-sm rounded-lg border border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)] bg-white dark:bg-[#1f1d1a] text-[#191919] dark:text-white placeholder-[#91918d] focus:outline-none focus:ring-2 focus:ring-[#cc785c]/30"
               placeholder="https://your-aether.com"
-            />
+            >
             <p class="mt-1.5 text-xs text-[#91918d]">
               代码示例将使用此 URL
             </p>
@@ -176,7 +176,10 @@
       <main class="flex-1 min-w-0">
         <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-12">
           <RouterView v-slot="{ Component }">
-            <component :is="Component" :base-url="baseUrl" />
+            <component
+              :is="Component"
+              :base-url="baseUrl"
+            />
           </RouterView>
         </div>
       </main>
