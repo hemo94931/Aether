@@ -614,9 +614,16 @@ class AuthService:
             RateLimitException: 超过速率限制时抛出（用于返回 429）
         """
         from src.core.exceptions import RateLimitException
+        from src.core.modules import get_module_registry
         from src.models.database import AuditEventType, ManagementToken
         from src.services.rate_limit.ip_limiter import IPRateLimiter
         from src.services.system.audit import AuditService
+
+        # 检查访问令牌模块是否激活
+        module_registry = get_module_registry()
+        if not module_registry.is_active("management_tokens", db):
+            logger.warning("Management Token 认证失败 - 访问令牌模块未激活")
+            return None
 
         # 速率限制检查（防止暴力破解）
         allowed, remaining, ttl = await IPRateLimiter.check_limit(

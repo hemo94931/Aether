@@ -21,11 +21,13 @@ This migration consolidates all schema changes from 2026-01-08 to 2026-01-10:
 """
 
 import logging
-from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
-from sqlalchemy import inspect
 
+import sqlalchemy as sa
+from sqlalchemy import inspect
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import ProgrammingError
+
+from alembic import op
 
 # 配置日志
 alembic_logger = logging.getLogger("alembic.runtime.migration")
@@ -66,9 +68,18 @@ def upgrade() -> None:
 
     # ========== 1. provider_api_keys: 添加 provider_id 和 api_formats ==========
     if not _column_exists("provider_api_keys", "provider_id"):
-        op.add_column("provider_api_keys", sa.Column("provider_id", sa.String(36), nullable=True))
+        try:
+            op.add_column(
+                "provider_api_keys", sa.Column("provider_id", sa.String(36), nullable=True)
+            )
+        except ProgrammingError as exc:
+            if getattr(getattr(exc, "orig", None), "pgcode", None) == "42701":
+                alembic_logger.warning("provider_api_keys.provider_id already exists; skipping add")
+            else:
+                raise
 
-        # 数据迁移：从 endpoint 获取 provider_id
+    # 数据迁移：从 endpoint 获取 provider_id（如果 endpoint_id 仍存在）
+    if _column_exists("provider_api_keys", "endpoint_id"):
         op.execute("""
             UPDATE provider_api_keys k
             SET provider_id = e.provider_id
@@ -76,63 +87,65 @@ def upgrade() -> None:
             WHERE k.endpoint_id = e.id AND k.provider_id IS NULL
         """)
 
-        # 检查无法关联的孤儿 Key
-        result = bind.execute(sa.text(
-            "SELECT COUNT(*) FROM provider_api_keys WHERE provider_id IS NULL"
-        ))
-        orphan_count = result.scalar() or 0
-        if orphan_count > 0:
-            # 使用 logger 记录更明显的告警
-            alembic_logger.warning("=" * 60)
-            alembic_logger.warning(f"[MIGRATION WARNING] 发现 {orphan_count} 个无法关联 Provider 的孤儿 Key")
-            alembic_logger.warning("=" * 60)
-            alembic_logger.info("正在备份孤儿 Key 到 _orphan_api_keys_backup 表...")
+    # 检查无法关联的孤儿 Key
+    result = bind.execute(
+        sa.text("SELECT COUNT(*) FROM provider_api_keys WHERE provider_id IS NULL")
+    )
+    orphan_count = result.scalar() or 0
+    if orphan_count > 0:
+        # 使用 logger 记录更明显的告警
+        alembic_logger.warning("=" * 60)
+        alembic_logger.warning(
+            f"[MIGRATION WARNING] 发现 {orphan_count} 个无法关联 Provider 的孤儿 Key"
+        )
+        alembic_logger.warning("=" * 60)
+        alembic_logger.info("正在备份孤儿 Key 到 _orphan_api_keys_backup 表...")
 
-            # 先备份孤儿数据到临时表，避免数据丢失
-            op.execute("""
-                CREATE TABLE IF NOT EXISTS _orphan_api_keys_backup AS
-                SELECT *, NOW() as backup_at
-                FROM provider_api_keys
-                WHERE provider_id IS NULL
-            """)
+        # 先备份孤儿数据到临时表，避免数据丢失
+        op.execute("""
+            CREATE TABLE IF NOT EXISTS _orphan_api_keys_backup AS
+            SELECT *, NOW() as backup_at
+            FROM provider_api_keys
+            WHERE provider_id IS NULL
+        """)
 
-            # 记录备份的 Key ID
-            orphan_ids = bind.execute(sa.text(
-                "SELECT id, name FROM provider_api_keys WHERE provider_id IS NULL"
-            )).fetchall()
-            alembic_logger.info("备份的孤儿 Key 列表：")
-            for key_id, key_name in orphan_ids:
-                alembic_logger.info(f"  - Key: {key_name} (ID: {key_id})")
+        # 记录备份的 Key ID
+        orphan_ids = bind.execute(
+            sa.text("SELECT id, name FROM provider_api_keys WHERE provider_id IS NULL")
+        ).fetchall()
+        alembic_logger.info("备份的孤儿 Key 列表：")
+        for key_id, key_name in orphan_ids:
+            alembic_logger.info(f"  - Key: {key_name} (ID: {key_id})")
 
-            # 删除孤儿数据
-            op.execute("DELETE FROM provider_api_keys WHERE provider_id IS NULL")
-            alembic_logger.info(f"已备份并删除 {orphan_count} 个孤儿 Key")
+        # 删除孤儿数据
+        op.execute("DELETE FROM provider_api_keys WHERE provider_id IS NULL")
+        alembic_logger.info(f"已备份并删除 {orphan_count} 个孤儿 Key")
 
-            # 提供恢复指南
-            alembic_logger.warning("-" * 60)
-            alembic_logger.warning("[恢复指南] 如需恢复孤儿 Key：")
-            alembic_logger.warning("  1. 查询备份表: SELECT * FROM _orphan_api_keys_backup;")
-            alembic_logger.warning("  2. 确定正确的 provider_id")
-            alembic_logger.warning("  3. 执行恢复:")
-            alembic_logger.warning("     INSERT INTO provider_api_keys (...)")
-            alembic_logger.warning("     SELECT ... FROM _orphan_api_keys_backup WHERE ...;")
-            alembic_logger.warning("-" * 60)
+        # 提供恢复指南
+        alembic_logger.warning("-" * 60)
+        alembic_logger.warning("[恢复指南] 如需恢复孤儿 Key：")
+        alembic_logger.warning("  1. 查询备份表: SELECT * FROM _orphan_api_keys_backup;")
+        alembic_logger.warning("  2. 确定正确的 provider_id")
+        alembic_logger.warning("  3. 执行恢复:")
+        alembic_logger.warning("     INSERT INTO provider_api_keys (...)")
+        alembic_logger.warning("     SELECT ... FROM _orphan_api_keys_backup WHERE ...;")
+        alembic_logger.warning("-" * 60)
 
-        # 设置 NOT NULL 并创建外键
-        op.alter_column("provider_api_keys", "provider_id", nullable=False)
+    # 设置 NOT NULL 并创建外键
+    op.alter_column("provider_api_keys", "provider_id", nullable=False)
 
-        if not _constraint_exists("provider_api_keys", "fk_provider_api_keys_provider"):
-            op.create_foreign_key(
-                "fk_provider_api_keys_provider",
-                "provider_api_keys",
-                "providers",
-                ["provider_id"],
-                ["id"],
-                ondelete="CASCADE",
-            )
+    if not _constraint_exists("provider_api_keys", "fk_provider_api_keys_provider"):
+        op.create_foreign_key(
+            "fk_provider_api_keys_provider",
+            "provider_api_keys",
+            "providers",
+            ["provider_id"],
+            ["id"],
+            ondelete="CASCADE",
+        )
 
-        if not _index_exists("provider_api_keys", "idx_provider_api_keys_provider_id"):
-            op.create_index("idx_provider_api_keys_provider_id", "provider_api_keys", ["provider_id"])
+    if not _index_exists("provider_api_keys", "idx_provider_api_keys_provider_id"):
+        op.create_index("idx_provider_api_keys_provider_id", "provider_api_keys", ["provider_id"])
 
     if not _column_exists("provider_api_keys", "api_formats"):
         op.add_column("provider_api_keys", sa.Column("api_formats", sa.JSON(), nullable=True))
@@ -149,7 +162,9 @@ def upgrade() -> None:
 
     # 修改 endpoint_id 为可空，外键改为 SET NULL
     if _constraint_exists("provider_api_keys", "provider_api_keys_endpoint_id_fkey"):
-        op.drop_constraint("provider_api_keys_endpoint_id_fkey", "provider_api_keys", type_="foreignkey")
+        op.drop_constraint(
+            "provider_api_keys_endpoint_id_fkey", "provider_api_keys", type_="foreignkey"
+        )
         op.alter_column("provider_api_keys", "endpoint_id", nullable=True)
         # 不再重建外键，因为后面会删除这个字段
 
@@ -239,10 +254,14 @@ def upgrade() -> None:
         op.alter_column("provider_api_keys", "max_concurrent", new_column_name="rpm_limit")
 
     if _column_exists("provider_api_keys", "learned_max_concurrent"):
-        op.alter_column("provider_api_keys", "learned_max_concurrent", new_column_name="learned_rpm_limit")
+        op.alter_column(
+            "provider_api_keys", "learned_max_concurrent", new_column_name="learned_rpm_limit"
+        )
 
     if _column_exists("provider_api_keys", "last_concurrent_peak"):
-        op.alter_column("provider_api_keys", "last_concurrent_peak", new_column_name="last_rpm_peak")
+        op.alter_column(
+            "provider_api_keys", "last_concurrent_peak", new_column_name="last_rpm_peak"
+        )
 
     # 删除废弃字段
     for col in ["rate_limit", "daily_limit", "monthly_limit"]:
@@ -431,7 +450,9 @@ def downgrade() -> None:
 
     # 11. 恢复 provider_endpoints.max_concurrent
     if not _column_exists("provider_endpoints", "max_concurrent"):
-        op.add_column("provider_endpoints", sa.Column("max_concurrent", sa.Integer(), nullable=True))
+        op.add_column(
+            "provider_endpoints", sa.Column("max_concurrent", sa.Integer(), nullable=True)
+        )
 
     # 10. 恢复 endpoint_id
     if not _column_exists("provider_api_keys", "endpoint_id"):
@@ -457,9 +478,13 @@ def downgrade() -> None:
     if _column_exists("provider_api_keys", "rpm_limit"):
         op.alter_column("provider_api_keys", "rpm_limit", new_column_name="max_concurrent")
     if _column_exists("provider_api_keys", "learned_rpm_limit"):
-        op.alter_column("provider_api_keys", "learned_rpm_limit", new_column_name="learned_max_concurrent")
+        op.alter_column(
+            "provider_api_keys", "learned_rpm_limit", new_column_name="learned_max_concurrent"
+        )
     if _column_exists("provider_api_keys", "last_rpm_peak"):
-        op.alter_column("provider_api_keys", "last_rpm_peak", new_column_name="last_concurrent_peak")
+        op.alter_column(
+            "provider_api_keys", "last_rpm_peak", new_column_name="last_concurrent_peak"
+        )
 
     # 恢复已删除的字段
     if not _column_exists("provider_api_keys", "rate_limit"):
@@ -491,12 +516,12 @@ def downgrade() -> None:
         op.drop_column("providers", "timeout")
 
     # 3. models: global_model_id 改回 NOT NULL
-    result = bind.execute(sa.text(
-        "SELECT COUNT(*) FROM models WHERE global_model_id IS NULL"
-    ))
+    result = bind.execute(sa.text("SELECT COUNT(*) FROM models WHERE global_model_id IS NULL"))
     orphan_model_count = result.scalar() or 0
     if orphan_model_count > 0:
-        alembic_logger.warning(f"[WARN] 发现 {orphan_model_count} 个无 global_model_id 的独立模型，将被删除")
+        alembic_logger.warning(
+            f"[WARN] 发现 {orphan_model_count} 个无 global_model_id 的独立模型，将被删除"
+        )
         op.execute("DELETE FROM models WHERE global_model_id IS NULL")
         alembic_logger.info(f"已删除 {orphan_model_count} 个独立模型")
     op.alter_column("models", "global_model_id", nullable=False)

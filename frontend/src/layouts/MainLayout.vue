@@ -493,7 +493,6 @@ const navigation = computed(() => {
       items: [
         { name: '模型目录', href: '/dashboard/models', icon: Box },
         { name: 'API 密钥', href: '/dashboard/api-keys', icon: Key },
-        { name: '访问令牌', href: '/dashboard/management-tokens', icon: KeyRound },
       ]
     },
     {
@@ -517,6 +516,7 @@ const navigation = computed(() => {
   // 图标映射
   const iconMap: Record<string, LucideIcon> = {
     Key,
+    KeyRound,
     FileUp,
     Shield,
     Puzzle,
@@ -556,7 +556,6 @@ const navigation = computed(() => {
         { name: '提供商', href: '/admin/providers', icon: FolderTree },
         { name: '模型管理', href: '/admin/models', icon: Layers },
         { name: '独立密钥', href: '/admin/keys', icon: Key },
-        { name: '访问令牌', href: '/admin/management-tokens', icon: KeyRound },
         { name: '异步任务', href: '/admin/async-tasks', icon: Zap },
         { name: '使用记录', href: '/admin/usage', icon: BarChart3 },
       ]

@@ -87,7 +87,8 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'management-tokens',
         name: 'ManagementTokens',
-        component: () => importWithRetry(() => import('@/views/user/ManagementTokens.vue'))
+        component: () => importWithRetry(() => import('@/views/user/ManagementTokens.vue')),
+        meta: { module: 'management_tokens' }
       },
       {
         path: 'announcements',
@@ -139,7 +140,8 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'management-tokens',
         name: 'AdminManagementTokens',
-        component: () => importWithRetry(() => import('@/views/user/ManagementTokens.vue'))
+        component: () => importWithRetry(() => import('@/views/user/ManagementTokens.vue')),
+        meta: { module: 'management_tokens' }
       },
       {
         path: 'providers',
@@ -329,6 +331,26 @@ router.beforeEach(async (to, from, next) => {
         }
         next()
       }
+    } else if (moduleName) {
+      // 非管理员页面但需要模块的路由（如用户侧访问令牌）
+      // 确保模块状态已加载
+      if (!moduleStore.loaded) {
+        try {
+          await moduleStore.fetchModules()
+        } catch (error) {
+          // fail-close: 获取模块状态失败时拒绝访问
+          log.warn('Failed to fetch modules status, denying access', { error })
+          next('/dashboard')
+          return
+        }
+      }
+      // 用户侧需要检查模块是否激活（active），而不仅仅是可用（available）
+      if (!moduleStore.isActive(moduleName)) {
+        log.warn(`Module ${moduleName} is not active, redirecting to user dashboard`)
+        next('/dashboard')
+        return
+      }
+      next()
     } else {
       next()
     }
