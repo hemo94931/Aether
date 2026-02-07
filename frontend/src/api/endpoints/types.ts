@@ -81,12 +81,16 @@ export function sortApiFormats(formats: string[]): string[] {
 
 /**
  * 代理配置类型
+ * 支持两种模式：
+ * - 手动配置：设置 url/username/password
+ * - 代理节点：设置 node_id（与 url 互斥）
  */
 export interface ProxyConfig {
-  url: string
+  url?: string
   username?: string
   password?: string
-  enabled?: boolean  // 是否启用代理（false 时保留配置但不使用）
+  node_id?: string    // 代理节点 ID（aether-proxy 注册的节点，与 url 互斥）
+  enabled?: boolean   // 是否启用代理（false 时保留配置但不使用）
 }
 
 /**

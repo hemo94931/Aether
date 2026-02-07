@@ -408,8 +408,10 @@ class AnyrouterArchitecture(ProviderArchitecture):
         Returns:
             包含 acw_cookie 的配置
         """
-        # 从 config 获取代理配置
-        proxy = config.get("proxy")
+        # 从 config 获取代理配置（支持 proxy_node_id 和旧的 proxy URL）
+        from src.clients.http_client import resolve_ops_proxy
+
+        proxy = resolve_ops_proxy(config)
         acw_cookie = await _get_acw_cookie(base_url, proxy=proxy)
         if acw_cookie:
             return {"acw_cookie": acw_cookie}

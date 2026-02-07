@@ -165,8 +165,30 @@ export interface AuthTemplateRegistry {
 // ==================== 通用字段定义 ====================
 
 /**
- * 代理地址字段
+ * 代理节点 ID 字段
  */
+export const PROXY_NODE_FIELD: AuthTemplateField = {
+  key: 'proxy_node_id',
+  label: '代理节点',
+  type: 'select',
+  placeholder: '选择代理节点...',
+  required: false,
+}
+
+/**
+ * 通用代理配置字段组（可折叠，带启用开关）
+ * 由 ProviderAuthDialog 特殊渲染为代理节点选择器
+ */
+export const PROXY_FIELD_GROUP: AuthTemplateFieldGroup = {
+  title: '代理配置',
+  fields: [PROXY_NODE_FIELD],
+  collapsible: true,
+  defaultExpanded: false,
+  hasToggle: true,
+  toggleKey: 'proxy_enabled',
+}
+
+// 兼容旧代码的字段导出
 export const PROXY_URL_FIELD: AuthTemplateField = {
   key: 'proxy_url',
   label: '代理地址',
@@ -174,10 +196,6 @@ export const PROXY_URL_FIELD: AuthTemplateField = {
   placeholder: 'http://proxy:port 或 socks5://',
   required: false,
 }
-
-/**
- * 代理用户名字段
- */
 export const PROXY_USERNAME_FIELD: AuthTemplateField = {
   key: 'proxy_username',
   label: '用户名',
@@ -185,10 +203,6 @@ export const PROXY_USERNAME_FIELD: AuthTemplateField = {
   placeholder: '可选',
   required: false,
 }
-
-/**
- * 代理密码字段
- */
 export const PROXY_PASSWORD_FIELD: AuthTemplateField = {
   key: 'proxy_password',
   label: '密码',
@@ -199,96 +213,46 @@ export const PROXY_PASSWORD_FIELD: AuthTemplateField = {
 }
 
 /**
- * 通用代理配置字段组（可折叠，带启用开关）
- */
-export const PROXY_FIELD_GROUP: AuthTemplateFieldGroup = {
-  title: '代理配置',
-  fields: [PROXY_URL_FIELD, PROXY_USERNAME_FIELD, PROXY_PASSWORD_FIELD],
-  collapsible: true,
-  defaultExpanded: false,
-  hasToggle: true,
-  toggleKey: 'proxy_enabled',
-}
-
-/**
- * 构建代理 URL（包含认证信息）
+ * 构建代理配置（仅代理节点模式）
  *
  * @param formData 表单数据
- * @returns 完整的代理 URL，或 undefined
+ * @returns 代理配置对象，展开到 connector.config 中
  */
-export function buildProxyUrl(formData: Record<string, any>): string | undefined {
-  if (!formData.proxy_enabled || !formData.proxy_url) {
-    return undefined
+export function buildProxyConfig(formData: Record<string, any>): { proxy_node_id?: string } {
+  if (!formData.proxy_enabled || !formData.proxy_node_id) {
+    return {}
   }
-
-  const proxyUrl = formData.proxy_url.trim()
-  const username = formData.proxy_username?.trim()
-  const password = formData.proxy_password?.trim()
-
-  // 如果没有认证信息，直接返回 URL
-  if (!username) {
-    return proxyUrl
-  }
-
-  // 解析 URL 并添加认证信息
-  try {
-    const url = new URL(proxyUrl)
-    url.username = username
-    if (password) {
-      url.password = password
-    }
-    return url.toString()
-  } catch {
-    // URL 解析失败，尝试简单拼接
-    const protocol = proxyUrl.includes('://') ? proxyUrl.split('://')[0] : 'http'
-    const host = proxyUrl.includes('://') ? proxyUrl.split('://')[1] : proxyUrl
-    const auth = password ? `${username}:${password}` : username
-    return `${protocol}://${auth}@${host}`
-  }
+  return { proxy_node_id: formData.proxy_node_id }
 }
 
 /**
- * 从代理 URL 解析表单数据
+ * 解析代理配置
  *
- * @param proxyUrl 代理 URL
+ * @param config connector.config 对象
  * @returns 表单数据
  */
-export function parseProxyUrl(proxyUrl: string | undefined): Record<string, any> {
-  if (!proxyUrl) {
+export function parseProxyConfig(config: any): Record<string, any> {
+  // 代理节点模式
+  if (config?.proxy_node_id) {
     return {
-      proxy_enabled: false,
-      proxy_url: '',
-      proxy_username: '',
-      proxy_password: '',
+      proxy_enabled: true,
+      proxy_node_id: config.proxy_node_id,
     }
   }
 
-  try {
-    const url = new URL(proxyUrl)
-    const username = url.username || ''
-    const password = url.password || ''
-
-    // 移除认证信息后的 URL
-    url.username = ''
-    url.password = ''
-    const cleanUrl = url.toString()
-
+  // 兼容旧数据（手动 URL 模式）- 标记为启用但无节点
+  if (config?.proxy) {
     return {
       proxy_enabled: true,
-      proxy_url: cleanUrl,
-      proxy_username: username,
-      proxy_password: password,
+      proxy_node_id: '',
     }
-  } catch {
-    // 解析失败，直接使用原始 URL
-    return {
-      proxy_enabled: true,
-      proxy_url: proxyUrl,
-      proxy_username: '',
-      proxy_password: '',
-    }
+  }
+
+  return {
+    proxy_enabled: false,
+    proxy_node_id: '',
   }
 }
 
-// 兼容旧的导出（已废弃，请使用 PROXY_FIELD_GROUP）
+// 兼容旧的导出
 export const PROXY_FIELD: AuthTemplateField = PROXY_URL_FIELD

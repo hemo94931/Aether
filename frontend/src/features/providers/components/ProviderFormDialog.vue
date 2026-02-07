@@ -238,47 +238,20 @@
           <div class="flex items-center gap-2">
             <Switch
               :model-value="form.proxy_enabled"
-              @update:model-value="(v: boolean) => form.proxy_enabled = v"
+              @update:model-value="handleProxyToggle"
             />
             <span class="text-sm text-muted-foreground">启用代理</span>
           </div>
         </div>
         <div
           v-if="form.proxy_enabled"
-          class="grid grid-cols-2 gap-4 p-3 border rounded-lg bg-muted/50"
+          class="space-y-1.5 p-3 border rounded-lg bg-muted/50"
         >
-          <div class="space-y-1.5">
-            <Label class="text-xs">代理地址 *</Label>
-            <Input
-              v-model="form.proxy_url"
-              placeholder="http://proxy:port 或 socks5://proxy:port"
-            />
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="space-y-1.5">
-              <Label class="text-xs">用户名</Label>
-              <Input
-                v-model="form.proxy_username"
-                placeholder="可选"
-                autocomplete="off"
-                data-form-type="other"
-                data-lpignore="true"
-                data-1p-ignore="true"
-              />
-            </div>
-            <div class="space-y-1.5">
-              <Label class="text-xs">密码</Label>
-              <Input
-                v-model="form.proxy_password"
-                type="password"
-                placeholder="可选"
-                autocomplete="new-password"
-                data-form-type="other"
-                data-lpignore="true"
-                data-1p-ignore="true"
-              />
-            </div>
-          </div>
+          <Label class="text-xs">代理节点 *</Label>
+          <ProxyNodeSelect
+            ref="proxyNodeSelectRef"
+            v-model="form.proxy_node_id"
+          />
         </div>
       </div>
     </form>
@@ -322,6 +295,8 @@ import { useFormDialog } from '@/composables/useFormDialog'
 import { createProvider, updateProvider, type ProviderWithEndpointsSummary } from '@/api/endpoints'
 import { parseApiError } from '@/utils/errorParser'
 import { parseNumberInput } from '@/utils/form'
+import ProxyNodeSelect from './ProxyNodeSelect.vue'
+import { useProxyNodesStore } from '@/stores/proxy-nodes'
 
 const props = defineProps<{
   modelValue: boolean
@@ -337,6 +312,16 @@ const emit = defineEmits<{
 
 const { success, error: showError } = useToast()
 const loading = ref(false)
+const proxyNodeSelectRef = ref<InstanceType<typeof ProxyNodeSelect> | null>(null)
+const proxyNodesStore = useProxyNodesStore()
+
+/** 启用代理时懒加载节点列表 */
+function handleProxyToggle(v: boolean) {
+  form.value.proxy_enabled = v
+  if (v) {
+    proxyNodesStore.ensureLoaded()
+  }
+}
 
 // 内部状态
 const internalOpen = computed(() => props.modelValue)
@@ -372,11 +357,9 @@ const form = ref({
   // 超时配置（秒）
   stream_first_byte_timeout: undefined as number | undefined,
   request_timeout: undefined as number | undefined,
-  // 代理配置（扁平化便于表单绑定）
+  // 代理配置
   proxy_enabled: false,
-  proxy_url: '',
-  proxy_username: '',
-  proxy_password: '',
+  proxy_node_id: '',
 })
 
 // 重置表单
@@ -403,9 +386,7 @@ function resetForm() {
     request_timeout: undefined,
     // 代理配置
     proxy_enabled: false,
-    proxy_url: '',
-    proxy_username: '',
-    proxy_password: '',
+    proxy_node_id: '',
   }
 }
 
@@ -438,9 +419,12 @@ function loadProviderData() {
     request_timeout: props.provider.request_timeout ?? undefined,
     // 代理配置
     proxy_enabled: proxy?.enabled ?? false,
-    proxy_url: proxy?.url || '',
-    proxy_username: proxy?.username || '',
-    proxy_password: proxy?.password || '',
+    proxy_node_id: proxy?.node_id || '',
+  }
+
+  // 如果有代理配置，确保加载节点列表（直接调用 store，避免 ref 未挂载时静默失败）
+  if (proxy?.enabled) {
+    proxyNodesStore.ensureLoaded()
   }
 }
 
@@ -462,19 +446,17 @@ const handleSubmit = async () => {
     return
   }
 
-  // 启用代理时必须填写代理地址
-  if (form.value.proxy_enabled && !form.value.proxy_url) {
-    showError('启用代理时必须填写代理地址', '验证失败')
+  // 启用代理时的验证
+  if (form.value.proxy_enabled && !form.value.proxy_node_id) {
+    showError('请选择代理节点', '验证失败')
     return
   }
 
   loading.value = true
   try {
     // 构建代理配置
-    const proxy = form.value.proxy_enabled ? {
-      url: form.value.proxy_url,
-      username: form.value.proxy_username || undefined,
-      password: form.value.proxy_password || undefined,
+    const proxy = form.value.proxy_enabled && form.value.proxy_node_id ? {
+      node_id: form.value.proxy_node_id,
       enabled: true,
     } : null
 

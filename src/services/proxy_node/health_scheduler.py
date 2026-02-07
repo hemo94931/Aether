@@ -55,7 +55,15 @@ class ProxyNodeHealthScheduler:
         db = create_session()
         try:
             now = datetime.now(timezone.utc)
-            nodes = db.query(ProxyNode).filter(ProxyNode.status != ProxyNodeStatus.OFFLINE).all()
+            # 仅检查非手动节点（手动节点无心跳，始终保持 ONLINE）
+            nodes = (
+                db.query(ProxyNode)
+                .filter(
+                    ProxyNode.status != ProxyNodeStatus.OFFLINE,
+                    ProxyNode.is_manual == False,  # noqa: E712
+                )
+                .all()
+            )
             if not nodes:
                 return
 

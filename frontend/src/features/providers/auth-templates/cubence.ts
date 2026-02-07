@@ -9,7 +9,7 @@
 
 import type { AuthTemplate, AuthTemplateFieldGroup, BalanceExtraItem } from './types'
 import type { SaveConfigRequest } from '@/api/providerOps'
-import { PROXY_FIELD_GROUP, buildProxyUrl, parseProxyUrl } from './types'
+import { PROXY_FIELD_GROUP, buildProxyConfig, parseProxyConfig } from './types'
 
 /**
  * 格式化窗口限额显示（百分比格式）
@@ -92,7 +92,7 @@ export const cubenceTemplate: AuthTemplate = {
       connector: {
         auth_type: 'cookie',
         config: {
-          proxy: buildProxyUrl(formData),
+          ...buildProxyConfig(formData),
         },
         credentials: {
           token_cookie: formData.token_cookie,
@@ -104,7 +104,7 @@ export const cubenceTemplate: AuthTemplate = {
   },
 
   parseConfig(config: any): Record<string, any> {
-    const proxyData = parseProxyUrl(config?.connector?.config?.proxy)
+    const proxyData = parseProxyConfig(config?.connector?.config)
     return {
       base_url: config?.base_url || '',
       token_cookie: config?.connector?.credentials?.token_cookie || '',

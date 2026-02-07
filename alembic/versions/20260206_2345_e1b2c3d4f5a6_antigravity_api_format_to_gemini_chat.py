@@ -1,4 +1,4 @@
-"""Antigravity endpoint signature to gemini:chat & add proxy_nodes table
+"""Antigravity endpoint signature to gemini:chat & add proxy_nodes table (with manual fields)
 
 Revision ID: e1b2c3d4f5a6
 Revises: b5c6d7e8f9a0
@@ -83,7 +83,7 @@ def upgrade() -> None:
             """))
 
     # =========================================================================
-    # Part 2: Create proxy_nodes table (idempotent)
+    # Part 2: Create proxy_nodes table with manual proxy fields (idempotent)
     # =========================================================================
 
     # Create ENUM type (idempotent)
@@ -95,13 +95,40 @@ def upgrade() -> None:
     )
 
     if table_exists("proxy_nodes"):
+        # Table already exists — ensure manual proxy columns are present
+        inspector = inspect(conn)
+        existing_columns = {c["name"] for c in inspector.get_columns("proxy_nodes")}
+
+        # ip 列扩容：手动节点的 ip 存储 "socks5://hostname" 形式，45 字符可能不够
+        ip_col = next((c for c in inspector.get_columns("proxy_nodes") if c["name"] == "ip"), None)
+        if ip_col and hasattr(ip_col["type"], "length") and (ip_col["type"].length or 0) < 512:
+            op.alter_column("proxy_nodes", "ip", type_=sa.String(512), existing_nullable=False)
+
+        manual_columns = [
+            ("is_manual", sa.Boolean(), False, sa.text("false"), "是否为手动添加的代理节点"),
+            ("proxy_url", sa.String(500), True, None, "手动节点的完整代理 URL"),
+            ("proxy_username", sa.String(255), True, None, "手动节点的代理用户名"),
+            ("proxy_password", sa.String(500), True, None, "手动节点的代理密码"),
+        ]
+        for col_name, col_type, nullable, default, comment in manual_columns:
+            if col_name not in existing_columns:
+                op.add_column(
+                    "proxy_nodes",
+                    sa.Column(
+                        col_name,
+                        col_type,  # type: ignore[arg-type]
+                        nullable=nullable,
+                        server_default=default,
+                        comment=comment,
+                    ),
+                )
         return
 
     op.create_table(
         "proxy_nodes",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("name", sa.String(100), nullable=False),
-        sa.Column("ip", sa.String(45), nullable=False),
+        sa.Column("ip", sa.String(512), nullable=False),
         sa.Column("port", sa.Integer(), nullable=False),
         sa.Column("region", sa.String(100), nullable=True),
         sa.Column(
@@ -127,6 +154,32 @@ def upgrade() -> None:
         sa.Column("active_connections", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("total_requests", sa.BigInteger(), nullable=False, server_default=sa.text("0")),
         sa.Column("avg_latency_ms", sa.Float(), nullable=True),
+        # --- Manual proxy node fields ---
+        sa.Column(
+            "is_manual",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+            comment="是否为手动添加的代理节点",
+        ),
+        sa.Column(
+            "proxy_url",
+            sa.String(500),
+            nullable=True,
+            comment="手动节点的完整代理 URL",
+        ),
+        sa.Column(
+            "proxy_username",
+            sa.String(255),
+            nullable=True,
+            comment="手动节点的代理用户名",
+        ),
+        sa.Column(
+            "proxy_password",
+            sa.String(500),
+            nullable=True,
+            comment="手动节点的代理密码",
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -147,7 +200,7 @@ def downgrade() -> None:
     conn = op.get_bind()
 
     # =========================================================================
-    # Part 2 rollback: Drop proxy_nodes table
+    # Part 2 rollback: Drop proxy_nodes table (and manual columns if present)
     # =========================================================================
     if table_exists("proxy_nodes"):
         op.drop_table("proxy_nodes")

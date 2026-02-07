@@ -53,7 +53,7 @@
             v-for="(group, groupIndex) in fieldGroups"
             :key="groupIndex"
           >
-            <!-- 可折叠的分组（如代理配置） -->
+            <!-- 可折叠的分组（代理配置 - 代理节点选择） -->
             <div
               v-if="group.collapsible && group.hasToggle && group.toggleKey"
               class="space-y-2"
@@ -65,50 +65,22 @@
                   <span class="text-xs text-muted-foreground">启用代理</span>
                   <Switch
                     :model-value="formData[group.toggleKey] || false"
-                    @update:model-value="formData[group.toggleKey] = $event"
+                    @update:model-value="handleProxyToggle(group.toggleKey, $event)"
                   />
                 </div>
               </div>
 
-              <!-- 展开内容（卡片） -->
+              <!-- 展开内容（卡片）- 代理节点选择 -->
               <div
                 v-if="formData[group.toggleKey]"
                 class="rounded-lg border border-border bg-muted/30 px-4 py-3"
               >
-                <!-- 横向排列的字段：代理地址占更多空间 -->
-                <div class="flex gap-3">
-                  <div
-                    v-for="(field, fieldIndex) in group.fields"
-                    :key="field.key"
-                    class="space-y-1"
-                    :class="fieldIndex === 0 ? 'flex-[2]' : 'flex-1'"
-                  >
-                    <Label class="text-xs text-muted-foreground">
-                      {{ field.label }}
-                    </Label>
-
-                    <!-- 文本输入 -->
-                    <Input
-                      v-if="field.type === 'text'"
-                      v-model="formData[field.key]"
-                      :placeholder="field.sensitive ? (sensitivePlaceholders[field.key] || field.placeholder) : field.placeholder"
-                      :masked="field.sensitive"
-                      disable-autofill
-                      class="h-8 text-sm"
-                      @update:model-value="handleFieldChange(field.key, $event)"
-                    />
-
-                    <!-- 密码/敏感输入 -->
-                    <Input
-                      v-else-if="field.type === 'password'"
-                      v-model="formData[field.key]"
-                      :placeholder="sensitivePlaceholders[field.key] || field.placeholder"
-                      masked
-                      class="h-8 text-sm"
-                      @update:model-value="handleFieldChange(field.key, $event)"
-                    />
-                  </div>
-                </div>
+                <ProxyNodeSelect
+                  ref="proxyNodeSelectRef"
+                  :model-value="formData.proxy_node_id || ''"
+                  trigger-class="h-8"
+                  @update:model-value="(v: string) => { formData.proxy_node_id = v; handleFieldChange('proxy_node_id', v) }"
+                />
               </div>
             </div>
 
@@ -304,6 +276,8 @@ import {
   type AuthTemplate,
   type AuthTemplateFieldGroup,
 } from '../auth-templates'
+import ProxyNodeSelect from './ProxyNodeSelect.vue'
+import { useProxyNodesStore } from '@/stores/proxy-nodes'
 
 const props = defineProps<{
   open: boolean
@@ -322,6 +296,16 @@ const SENSITIVE_FIELDS = ['api_key', 'password', 'session_token', 'session_cooki
 
 const { success: showSuccess, error: showError } = useToast()
 const { confirmDanger } = useConfirm()
+const proxyNodeSelectRef = ref<InstanceType<typeof ProxyNodeSelect> | null>(null)
+const proxyNodesStore = useProxyNodesStore()
+
+/** 启用代理时加载节点列表（直接调用 store，避免 ref 未挂载时静默失败） */
+function handleProxyToggle(toggleKey: string, value: boolean) {
+  formData.value[toggleKey] = value
+  if (value) {
+    proxyNodesStore.ensureLoaded()
+  }
+}
 
 // State
 const isSaving = ref(false)

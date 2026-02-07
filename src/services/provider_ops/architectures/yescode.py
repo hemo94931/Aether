@@ -193,8 +193,10 @@ class YesCodeArchitecture(ProviderArchitecture):
 
         cookie_header = _build_cookie_header(cookie_input)
 
-        # 获取代理配置
-        proxy = config.get("proxy")
+        # 获取代理配置（支持 proxy_node_id 和旧的 proxy URL）
+        from src.clients.http_client import resolve_ops_proxy
+
+        proxy = resolve_ops_proxy(config)
 
         try:
             # 构建 client 参数

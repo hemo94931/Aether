@@ -10,7 +10,7 @@
 
 import type { AuthTemplate, AuthTemplateFieldGroup, BalanceExtraItem } from './types'
 import type { SaveConfigRequest } from '@/api/providerOps'
-import { PROXY_FIELD_GROUP, buildProxyUrl, parseProxyUrl } from './types'
+import { PROXY_FIELD_GROUP, buildProxyConfig, parseProxyConfig } from './types'
 
 /**
  * 格式化限额显示（百分比格式）
@@ -65,7 +65,7 @@ export const yescodeTemplate: AuthTemplate = {
       connector: {
         auth_type: 'cookie',
         config: {
-          proxy: buildProxyUrl(formData),
+          ...buildProxyConfig(formData),
         },
         credentials: {
           auth_cookie: formData.auth_cookie,
@@ -77,7 +77,7 @@ export const yescodeTemplate: AuthTemplate = {
   },
 
   parseConfig(config: any): Record<string, any> {
-    const proxyData = parseProxyUrl(config?.connector?.config?.proxy)
+    const proxyData = parseProxyConfig(config?.connector?.config)
     return {
       base_url: config?.base_url || '',
       auth_cookie: config?.connector?.credentials?.auth_cookie || '',

@@ -94,6 +94,50 @@
         </div>
       </CardSection>
 
+      <!-- 网络代理 -->
+      <CardSection
+        title="网络代理"
+        description="配置提供商出站请求的默认代理，仅影响大模型 API、余额查询、OAuth 等提供商请求"
+      >
+        <template #actions>
+          <Button
+            size="sm"
+            :disabled="proxyConfigLoading || !hasProxyConfigChanges"
+            @click="saveProxyConfig"
+          >
+            {{ proxyConfigLoading ? '保存中...' : '保存' }}
+          </Button>
+        </template>
+        <div class="max-w-md">
+          <Label class="block text-sm font-medium mb-1">
+            默认代理节点
+          </Label>
+          <Select
+            :model-value="systemConfig.system_proxy_node_id || '__direct__'"
+            @update:model-value="(v: string) => systemConfig.system_proxy_node_id = v === '__direct__' ? null : v"
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="直连（不使用代理）" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__direct__">
+                直连（不使用代理）
+              </SelectItem>
+              <SelectItem
+                v-for="node in proxyNodesStore.onlineNodes"
+                :key="node.id"
+                :value="node.id"
+              >
+                {{ node.name }}{{ node.region ? ` · ${node.region}` : '' }} ({{ node.ip }}:{{ node.port }})
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="mt-1 text-xs text-muted-foreground">
+            对未单独配置代理的提供商生效，覆盖大模型 API 请求、余额查询、OAuth 刷新等。不影响系统内部接口。
+          </p>
+        </div>
+      </CardSection>
+
       <!-- 基础配置 -->
       <CardSection
         title="基础配置"
@@ -1010,10 +1054,14 @@ import { PageHeader, PageContainer, CardSection } from '@/components/layout'
 import { useToast } from '@/composables/useToast'
 import { adminApi, type ConfigExportData, type ConfigImportResponse, type UsersExportData, type UsersImportResponse } from '@/api/admin'
 import { log } from '@/utils/logger'
+import { useProxyNodesStore } from '@/stores/proxy-nodes'
 
 const { success, error } = useToast()
+const proxyNodesStore = useProxyNodesStore()
 
 interface SystemConfig {
+  // 网络代理
+  system_proxy_node_id: string | null
   // 基础配置
   default_user_quota_usd: number
   rate_limit_per_minute: number
@@ -1044,6 +1092,7 @@ interface SystemConfig {
   enable_oauth_token_refresh: boolean
 }
 
+const proxyConfigLoading = ref(false)
 const basicConfigLoading = ref(false)
 const logConfigLoading = ref(false)
 const cleanupConfigLoading = ref(false)
@@ -1074,6 +1123,8 @@ const usersMergeModeSelectOpen = ref(false)
 const systemVersion = ref<string>('')
 
 const systemConfig = ref<SystemConfig>({
+  // 网络代理
+  system_proxy_node_id: null,
   // 基础配置
   default_user_quota_usd: 10.0,
   rate_limit_per_minute: 0,
@@ -1171,6 +1222,7 @@ onMounted(async () => {
   await Promise.all([
     loadSystemConfig(),
     loadSystemVersion(),
+    proxyNodesStore.ensureLoaded(),
   ])
 })
 
@@ -1186,6 +1238,8 @@ async function loadSystemVersion() {
 async function loadSystemConfig() {
   try {
     const configs = [
+      // 网络代理
+      'system_proxy_node_id',
       // 基础配置
       'default_user_quota_usd',
       'rate_limit_per_minute',
@@ -1236,6 +1290,31 @@ async function loadSystemConfig() {
   } catch (err) {
     error('加载系统配置失败')
     log.error('加载系统配置失败:', err)
+  }
+}
+
+const hasProxyConfigChanges = computed(() => {
+  if (!originalConfig.value) return false
+  return systemConfig.value.system_proxy_node_id !== originalConfig.value.system_proxy_node_id
+})
+
+async function saveProxyConfig() {
+  proxyConfigLoading.value = true
+  try {
+    await adminApi.updateSystemConfig(
+      'system_proxy_node_id',
+      systemConfig.value.system_proxy_node_id || null,
+      '系统默认代理节点 ID'
+    )
+    if (originalConfig.value) {
+      originalConfig.value.system_proxy_node_id = systemConfig.value.system_proxy_node_id
+    }
+    success('网络代理配置已保存')
+  } catch (err) {
+    error('保存代理配置失败')
+    log.error('保存代理配置失败:', err)
+  } finally {
+    proxyConfigLoading.value = false
   }
 }
 

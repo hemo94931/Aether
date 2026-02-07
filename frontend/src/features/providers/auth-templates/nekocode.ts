@@ -8,7 +8,7 @@
 
 import type { AuthTemplate, AuthTemplateFieldGroup, BalanceExtraItem } from './types'
 import type { SaveConfigRequest } from '@/api/providerOps'
-import { PROXY_FIELD_GROUP, buildProxyUrl, parseProxyUrl } from './types'
+import { PROXY_FIELD_GROUP, buildProxyConfig, parseProxyConfig } from './types'
 
 export const nekocodeTemplate: AuthTemplate = {
   id: 'nekocode',
@@ -51,7 +51,7 @@ export const nekocodeTemplate: AuthTemplate = {
       connector: {
         auth_type: 'cookie',
         config: {
-          proxy: buildProxyUrl(formData),
+          ...buildProxyConfig(formData),
         },
         credentials: {
           session_cookie: formData.session_cookie,
@@ -63,7 +63,7 @@ export const nekocodeTemplate: AuthTemplate = {
   },
 
   parseConfig(config: any): Record<string, any> {
-    const proxyData = parseProxyUrl(config?.connector?.config?.proxy)
+    const proxyData = parseProxyConfig(config?.connector?.config)
     return {
       base_url: config?.base_url || '',
       session_cookie: config?.connector?.credentials?.session_cookie || '',

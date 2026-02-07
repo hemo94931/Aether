@@ -801,15 +801,21 @@ class ProxyNodeStatus(PyEnum):
 
 
 class ProxyNode(Base):
-    """代理节点表（用于 aether-proxy 注册/心跳）"""
+    """代理节点表（aether-proxy 自动注册 + 手动添加）"""
 
     __tablename__ = "proxy_nodes"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     name = Column(String(100), nullable=False)  # 节点名
-    ip = Column(String(45), nullable=False)  # 公网 IP（IPv6 最长 39 + 冗余）
+    ip = Column(String(512), nullable=False)  # 公网 IP 或手动节点的主机名（含协议前缀）
     port = Column(Integer, nullable=False)  # 代理端口
     region = Column(String(100), nullable=True)  # 区域标签
+
+    # 手动节点专用字段
+    is_manual = Column(Boolean, default=False, nullable=False, comment="是否为手动添加的代理节点")
+    proxy_url = Column(String(500), nullable=True, comment="手动节点的完整代理 URL")
+    proxy_username = Column(String(255), nullable=True, comment="手动节点的代理用户名")
+    proxy_password = Column(String(500), nullable=True, comment="手动节点的代理密码")
 
     status = Column(
         Enum(

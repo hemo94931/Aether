@@ -87,7 +87,18 @@ class ClaudeCliMessageHandler(CliMessageHandlerBase):
         - content_block_delta: 文本增量
         - message_delta: 消息增量，包含最终 usage
         - message_stop: 消息结束
+
+        跨格式转换时（如 provider=openai:cli），原始事件数据是 Provider 格式而非 Claude 格式。
+        此时委托基类方法通过 Provider 格式解析器提取 usage。
         """
+        # 跨格式转换时：原始事件是 Provider 格式，
+        # 基类 _process_event_data 会自动选择正确的 Provider 解析器提取 usage/text
+        if ctx.provider_api_format and ctx.provider_api_format != ctx.client_api_format:
+            super()._process_event_data(ctx, event_type, data)
+            return
+
+        # 以下是同格式（claude:cli / claude:chat）的处理逻辑
+
         # 处理 message_start 事件
         if event_type == "message_start":
             message = data.get("message", {})

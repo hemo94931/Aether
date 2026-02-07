@@ -168,6 +168,11 @@ class SystemConfigService:
             "value": 30,
             "description": "审计日志保留天数，超过此天数的审计日志将被自动清理",
         },
+        # 系统代理
+        "system_proxy_node_id": {
+            "value": None,
+            "description": "系统默认代理节点 ID，为空时直连。仅影响提供商出站请求（大模型API/余额查询/OAuth），不影响系统内部接口",
+        },
         # SMTP 邮件配置
         "smtp_host": {
             "value": None,

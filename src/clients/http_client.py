@@ -40,7 +40,9 @@ def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
     读取 ProxyNode 信息（带内存 TTL 缓存）
 
     Returns:
-        {"ip": str, "port": int} 或 None（不存在/非在线）
+        aether-proxy 节点: {"ip": str, "port": int}
+        手动节点: {"is_manual": True, "proxy_url": str, "username": str|None, "password": str|None}
+        不存在/非在线: None
     """
     now = time.time()
     cached = _proxy_node_cache.get(node_id)
@@ -63,7 +65,16 @@ def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
             _proxy_node_cache[node_id] = (None, now + _PROXY_NODE_CACHE_TTL_SECONDS)
             return None
 
-        value = {"ip": node.ip, "port": node.port}
+        if node.is_manual:
+            value: dict[str, Any] = {
+                "is_manual": True,
+                "proxy_url": node.proxy_url,
+                "username": node.proxy_username,
+                "password": node.proxy_password,
+            }
+        else:
+            value = {"ip": node.ip, "port": node.port}
+
         _proxy_node_cache[node_id] = (value, now + _PROXY_NODE_CACHE_TTL_SECONDS)
         return value
     finally:
@@ -92,6 +103,90 @@ def _build_hmac_proxy_url(ip: str, port: int, node_id: str) -> str:
 
     host = f"[{ip}]" if ":" in ip else ip
     return f"http://hmac:{timestamp}.{signature}@{host}:{int(port)}"
+
+
+# 系统默认代理缓存
+_system_proxy_cache: tuple[dict[str, Any] | None, float] | None = None
+_SYSTEM_PROXY_CACHE_TTL = 60.0
+
+
+def invalidate_system_proxy_cache() -> None:
+    """手动失效系统代理缓存（在删除节点等操作后调用）"""
+    global _system_proxy_cache
+    _system_proxy_cache = None
+
+
+def get_system_proxy_config() -> dict[str, Any] | None:
+    """
+    获取系统默认代理配置（带 TTL 缓存）
+
+    从 system_configs 表中读取 system_proxy_node_id。
+    返回 {"node_id": "...", "enabled": True} 或 None。
+    """
+    global _system_proxy_cache
+    now = time.time()
+    if _system_proxy_cache:
+        value, expires_at = _system_proxy_cache
+        if now < expires_at:
+            return value
+
+    from src.database import create_session
+    from src.services.system.config import SystemConfigService
+
+    db = create_session()
+    try:
+        node_id = SystemConfigService.get_config(db, "system_proxy_node_id")
+        if node_id and isinstance(node_id, str) and node_id.strip():
+            result: dict[str, Any] | None = {"node_id": node_id.strip(), "enabled": True}
+        else:
+            result = None
+        _system_proxy_cache = (result, now + _SYSTEM_PROXY_CACHE_TTL)
+        return result
+    except Exception:
+        _system_proxy_cache = (None, now + _SYSTEM_PROXY_CACHE_TTL)
+        return None
+    finally:
+        db.close()
+
+
+def resolve_ops_proxy(connector_config: dict[str, Any] | None) -> str | None:
+    """
+    从 ops connector.config 中解析代理 URL（含系统默认回退）
+
+    优先级：
+    1. connector_config.proxy_node_id（新格式）
+    2. connector_config.proxy（旧格式 URL 字符串）
+    3. 系统默认代理节点
+
+    Args:
+        connector_config: connector 的 config 字典
+
+    Returns:
+        代理 URL 字符串，或 None
+    """
+    if connector_config:
+        # 新格式：proxy_node_id → 通过 build_proxy_url 解析
+        node_id = connector_config.get("proxy_node_id")
+        if isinstance(node_id, str) and node_id.strip():
+            try:
+                return build_proxy_url({"node_id": node_id.strip(), "enabled": True})
+            except Exception:
+                return None
+
+        # 旧格式：直接返回 proxy URL 字符串
+        proxy = connector_config.get("proxy")
+        if isinstance(proxy, str) and proxy.strip():
+            return proxy
+
+    # 回退：系统默认代理
+    system_proxy = get_system_proxy_config()
+    if system_proxy:
+        try:
+            return build_proxy_url(system_proxy)
+        except Exception:
+            return None
+
+    return None
 
 
 def _compute_proxy_cache_key(proxy_config: dict[str, Any] | None) -> str:
@@ -146,13 +241,43 @@ def build_proxy_url(proxy_config: dict[str, Any]) -> str | None:
     if not proxy_config.get("enabled", True):
         return None
 
-    # ProxyNode 模式（aether-proxy）
+    # ProxyNode 模式（aether-proxy 或手动节点）
     node_id = proxy_config.get("node_id")
     if isinstance(node_id, str) and node_id.strip():
         node_id = node_id.strip()
         node_info = _get_proxy_node_info(node_id)
         if not node_info:
             raise ProxyNodeUnavailableError(f"代理节点 {node_id} 不可用", node_id=node_id)
+
+        # 手动节点：直接使用存储的代理 URL（含认证信息）
+        if node_info.get("is_manual"):
+            manual_url = node_info.get("proxy_url")
+            if not manual_url:
+                raise ProxyNodeUnavailableError(
+                    f"手动代理节点 {node_id} 缺少 proxy_url", node_id=node_id
+                )
+            username = node_info.get("username")
+            password = node_info.get("password")
+            if username:
+                parsed = urlparse(manual_url)
+                encoded_username = quote(username, safe="")
+                encoded_password = quote(password, safe="") if password else ""
+                # 使用 hostname+port 而非 netloc，避免 URL 内嵌凭据导致双重认证
+                host_part = parsed.hostname or "localhost"
+                if parsed.port:
+                    host_part = f"{host_part}:{parsed.port}"
+                if encoded_password:
+                    auth_url = (
+                        f"{parsed.scheme}://{encoded_username}:{encoded_password}@{host_part}"
+                    )
+                else:
+                    auth_url = f"{parsed.scheme}://{encoded_username}@{host_part}"
+                if parsed.path:
+                    auth_url += parsed.path
+                return auth_url
+            return manual_url
+
+        # aether-proxy 节点：使用 HMAC 认证
         return _build_hmac_proxy_url(node_info["ip"], node_info["port"], node_id)
 
     proxy_url: str | None = proxy_config.get("url")
@@ -337,14 +462,19 @@ class HTTPClientPool:
         获取代理客户端（带缓存复用）
 
         相同代理配置会复用同一个客户端，大幅减少连接建立开销。
+        当 proxy_config 为 None 时，自动回退到系统默认代理节点。
         注意：返回的客户端使用默认超时配置，如需自定义超时请在请求时传递 timeout 参数。
 
         Args:
-            proxy_config: 代理配置字典，包含 url, username, password
+            proxy_config: 代理配置字典，为 None 时使用系统默认代理
 
         Returns:
             可复用的 httpx.AsyncClient 实例
         """
+        # 无特定代理时，回退到系统默认代理
+        if not proxy_config:
+            proxy_config = get_system_proxy_config()
+
         cache_key = _compute_proxy_cache_key(proxy_config)
 
         # 无代理时返回默认客户端

@@ -276,6 +276,73 @@ class StreamProcessor:
             if finish_reason is not None:
                 ctx.has_completion = True
 
+    def _extract_usage_from_converted_event(
+        self,
+        ctx: StreamContext,
+        evt: dict[str, Any],
+        event_type: str,
+    ) -> None:
+        """
+        从转换后的事件中提取 usage 信息（补充 Provider 事件解析）。
+
+        支持多种格式：
+        - Claude: message_delta.usage, message_start.message.usage
+        - OpenAI: chunk.usage / response.completed.response.usage
+        - Gemini: usageMetadata
+        """
+        usage: dict[str, Any] | None = None
+
+        # Claude 格式: message_delta 或 message_start
+        if event_type == "message_delta":
+            usage = evt.get("usage")
+        elif event_type == "message_start":
+            message = evt.get("message", {})
+            if isinstance(message, dict):
+                usage = message.get("usage")
+        # OpenAI Responses API 格式: response.completed 中 usage 嵌套在 response 对象内
+        elif event_type == "response.completed":
+            resp_obj = evt.get("response")
+            if isinstance(resp_obj, dict):
+                usage = resp_obj.get("usage")
+            # 兼容: 部分实现可能在顶层也有 usage
+            if not usage:
+                usage = evt.get("usage")
+        # OpenAI Chat 格式: 直接在 chunk 中
+        elif "usage" in evt:
+            usage = evt.get("usage")
+        # Gemini 格式: usageMetadata
+        elif "usageMetadata" in evt:
+            meta = evt.get("usageMetadata", {})
+            if isinstance(meta, dict):
+                usage = {
+                    "input_tokens": meta.get("promptTokenCount", 0),
+                    "output_tokens": meta.get("candidatesTokenCount", 0),
+                    "cache_read_tokens": meta.get("cachedContentTokenCount", 0),
+                    "cache_creation_tokens": 0,
+                }
+
+        if usage and isinstance(usage, dict):
+            new_input = usage.get("input_tokens", 0) or 0
+            new_output = usage.get("output_tokens", 0) or 0
+            new_cached = usage.get("cache_read_tokens") or usage.get("cache_read_input_tokens") or 0
+            new_cache_creation = (
+                usage.get("cache_creation_tokens") or usage.get("cache_creation_input_tokens") or 0
+            )
+
+            if new_input > ctx.input_tokens:
+                ctx.input_tokens = new_input
+                logger.debug("[{}] 从转换后事件更新 input_tokens: {}", self.request_id, new_input)
+            if new_output > ctx.output_tokens:
+                ctx.output_tokens = new_output
+                logger.debug("[{}] 从转换后事件更新 output_tokens: {}", self.request_id, new_output)
+            if new_cached > ctx.cached_tokens:
+                ctx.cached_tokens = new_cached
+            if new_cache_creation > ctx.cache_creation_tokens:
+                ctx.cache_creation_tokens = new_cache_creation
+
+            if any([new_input, new_output, new_cached, new_cache_creation]):
+                ctx.final_usage = usage
+
     async def prefetch_and_check_error(
         self,
         byte_iterator: Any,
@@ -748,6 +815,18 @@ class StreamProcessor:
                             ctx.data_count += 1
                             if ctx.record_parsed_chunks:
                                 ctx.parsed_chunks.append(evt)
+                            event_type = evt.get("type", "")
+                            if event_type in ("message_stop", "response.completed"):
+                                ctx.has_completion = True
+                            elif "choices" in evt:
+                                choices = evt.get("choices", [])
+                                for choice in choices:
+                                    if isinstance(choice, dict) and choice.get("finish_reason"):
+                                        ctx.has_completion = True
+                                        break
+
+                            # 从转换后的事件中补充 usage 信息
+                            self._extract_usage_from_converted_event(ctx, evt, event_type)
 
                         # 统一使用 SSE 格式输出（Gemini streamGenerateContent 也使用 SSE）
                         # 参考: https://ai.google.dev/api/generate-content

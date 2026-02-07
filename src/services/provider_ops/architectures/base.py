@@ -50,8 +50,10 @@ class ProviderConnector(ABC):
         self._expires_at: datetime | None = None
         self._last_error: str | None = None
 
-        # 代理配置
-        self._proxy: str | None = self.config.get("proxy")
+        # 代理配置（支持 proxy_node_id 和旧的 proxy URL）
+        from src.clients.http_client import resolve_ops_proxy
+
+        self._proxy: str | None = resolve_ops_proxy(self.config)
 
         # HTTP 客户端配置
         self._timeout = self.config.get("timeout", 30)

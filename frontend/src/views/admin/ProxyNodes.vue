@@ -9,10 +9,20 @@
             <h3 class="text-base font-semibold">
               代理节点
             </h3>
-            <RefreshButton
-              :loading="store.loading"
-              @click="refresh"
-            />
+            <div class="flex items-center gap-2">
+              <Button
+                size="sm"
+                class="h-7 text-xs"
+                @click="showAddDialog = true"
+              >
+                <Plus class="w-3 h-3 mr-1" />
+                添加
+              </Button>
+              <RefreshButton
+                :loading="store.loading"
+                @click="refresh"
+              />
+            </div>
           </div>
           <div class="flex items-center gap-2">
             <div class="relative flex-1">
@@ -66,6 +76,15 @@
               </SelectContent>
             </Select>
             <div class="h-4 w-px bg-border" />
+            <Button
+              size="sm"
+              class="h-8 text-xs"
+              @click="showAddDialog = true"
+            >
+              <Plus class="w-3.5 h-3.5 mr-1" />
+              手动添加
+            </Button>
+            <div class="h-4 w-px bg-border" />
             <RefreshButton
               :loading="store.loading"
               @click="refresh"
@@ -97,10 +116,19 @@
               class="border-b border-border/40 hover:bg-muted/30 transition-colors"
             >
               <TableCell class="py-4">
-                <span class="text-sm font-semibold">{{ node.name }}</span>
+                <div class="flex items-center gap-1.5">
+                  <span class="text-sm font-semibold">{{ node.name }}</span>
+                  <Badge
+                    v-if="node.is_manual"
+                    variant="outline"
+                    class="text-[10px] px-1.5 py-0"
+                  >
+                    手动
+                  </Badge>
+                </div>
               </TableCell>
               <TableCell class="py-4">
-                <code class="text-xs text-muted-foreground">{{ node.ip }}:{{ node.port }}</code>
+                <code class="text-xs text-muted-foreground">{{ node.is_manual ? (node.proxy_url || `${node.ip}:${node.port}`) : `${node.ip}:${node.port}` }}</code>
               </TableCell>
               <TableCell class="py-4">
                 <span class="text-sm text-muted-foreground">{{ node.region || '-' }}</span>
@@ -123,15 +151,27 @@
                 <span class="text-xs text-muted-foreground">{{ formatTime(node.last_heartbeat_at) }}</span>
               </TableCell>
               <TableCell class="py-4 text-center">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="h-8 w-8"
-                  title="删除"
-                  @click="handleDelete(node)"
-                >
-                  <Trash2 class="h-4 w-4" />
-                </Button>
+                <div class="flex items-center justify-center gap-0.5">
+                  <Button
+                    v-if="node.is_manual"
+                    variant="ghost"
+                    size="icon"
+                    class="h-8 w-8"
+                    title="编辑"
+                    @click="handleEdit(node)"
+                  >
+                    <SquarePen class="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="h-8 w-8"
+                    title="删除"
+                    @click="handleDelete(node)"
+                  >
+                    <Trash2 class="h-4 w-4" />
+                  </Button>
+                </div>
               </TableCell>
             </TableRow>
             <TableRow v-if="paginatedNodes.length === 0">
@@ -152,8 +192,17 @@
         >
           <div class="flex items-start justify-between mb-2">
             <div>
-              <div class="font-semibold text-sm">{{ node.name }}</div>
-              <code class="text-xs text-muted-foreground">{{ node.ip }}:{{ node.port }}</code>
+              <div class="flex items-center gap-1.5">
+                <span class="font-semibold text-sm">{{ node.name }}</span>
+                <Badge
+                  v-if="node.is_manual"
+                  variant="outline"
+                  class="text-[10px] px-1.5 py-0"
+                >
+                  手动
+                </Badge>
+              </div>
+              <code class="text-xs text-muted-foreground">{{ node.is_manual ? (node.proxy_url || `${node.ip}:${node.port}`) : `${node.ip}:${node.port}` }}</code>
             </div>
             <Badge :variant="statusVariant(node.status)" class="text-xs">
               {{ statusLabel(node.status) }}
@@ -175,15 +224,27 @@
           </div>
           <div class="flex items-center justify-between">
             <span class="text-xs text-muted-foreground">{{ formatTime(node.last_heartbeat_at) }}</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              class="h-7 px-2 text-xs"
-              @click="handleDelete(node)"
-            >
-              <Trash2 class="h-3 w-3 mr-1" />
-              删除
-            </Button>
+            <div class="flex items-center gap-1">
+              <Button
+                v-if="node.is_manual"
+                variant="ghost"
+                size="sm"
+                class="h-7 px-2 text-xs"
+                @click="handleEdit(node)"
+              >
+                <SquarePen class="h-3 w-3 mr-1" />
+                编辑
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="h-7 px-2 text-xs"
+                @click="handleDelete(node)"
+              >
+                <Trash2 class="h-3 w-3 mr-1" />
+                删除
+              </Button>
+            </div>
           </div>
         </div>
         <div v-if="paginatedNodes.length === 0" class="p-8 text-center text-muted-foreground text-sm">
@@ -201,6 +262,82 @@
         @update:page-size="pageSize = $event"
       />
     </Card>
+    <!-- 手动添加/编辑代理节点对话框 -->
+    <Dialog
+      :model-value="showAddDialog"
+      :title="editingNode ? '编辑代理节点' : '手动添加代理节点'"
+      :description="editingNode ? '修改手动代理节点的配置' : '手动配置的代理节点，用于无法部署 aether-proxy 的场景'"
+      :icon="editingNode ? SquarePen : Plus"
+      size="md"
+      @update:model-value="handleDialogClose"
+    >
+      <form
+        class="space-y-4"
+        @submit.prevent="handleAddManualNode"
+      >
+        <div class="space-y-1.5">
+          <Label>名称 *</Label>
+          <Input
+            v-model="addForm.name"
+            placeholder="例如: 美西 VPN 代理"
+          />
+        </div>
+        <div class="space-y-1.5">
+          <Label>代理地址 *</Label>
+          <Input
+            v-model="addForm.proxy_url"
+            placeholder="http://proxy:port 或 socks5://proxy:port"
+          />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="space-y-1.5">
+            <Label>用户名</Label>
+            <Input
+              v-model="addForm.username"
+              placeholder="可选"
+              autocomplete="off"
+              data-form-type="other"
+              data-lpignore="true"
+              data-1p-ignore="true"
+            />
+          </div>
+          <div class="space-y-1.5">
+            <Label>密码</Label>
+            <Input
+              v-model="addForm.password"
+              type="password"
+              placeholder="可选"
+              autocomplete="new-password"
+              data-form-type="other"
+              data-lpignore="true"
+              data-1p-ignore="true"
+            />
+          </div>
+        </div>
+        <div class="space-y-1.5">
+          <Label>区域</Label>
+          <Input
+            v-model="addForm.region"
+            placeholder="可选，例如: US-West"
+          />
+        </div>
+      </form>
+
+      <template #footer>
+        <Button
+          variant="outline"
+          @click="handleDialogClose(false)"
+        >
+          取消
+        </Button>
+        <Button
+          :disabled="addingNode || !addForm.name || !addForm.proxy_url"
+          @click="editingNode ? handleUpdateManualNode() : handleAddManualNode()"
+        >
+          {{ addingNode ? (editingNode ? '保存中...' : '添加中...') : (editingNode ? '保存' : '添加') }}
+        </Button>
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -209,13 +346,14 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
-import type { ProxyNode } from '@/api/proxy-nodes'
+import { proxyNodesApi, type ProxyNode } from '@/api/proxy-nodes'
 
 import {
   Card,
   Button,
   Badge,
   Input,
+  Label,
   Select,
   SelectTrigger,
   SelectValue,
@@ -229,9 +367,10 @@ import {
   TableCell,
   Pagination,
   RefreshButton,
+  Dialog,
 } from '@/components/ui'
 
-import { Search, Trash2 } from 'lucide-vue-next'
+import { Search, Trash2, Plus, SquarePen } from 'lucide-vue-next'
 
 const { success, error: toastError } = useToast()
 const { confirmDanger } = useConfirm()
@@ -241,6 +380,18 @@ const searchQuery = ref('')
 const filterStatus = ref('all')
 const currentPage = ref(1)
 const pageSize = ref(20)
+
+// 手动添加/编辑对话框
+const showAddDialog = ref(false)
+const addingNode = ref(false)
+const editingNode = ref<ProxyNode | null>(null)
+const addForm = ref({
+  name: '',
+  proxy_url: '',
+  username: '',
+  password: '',
+  region: '',
+})
 
 const filteredNodes = computed(() => {
   let filtered = [...store.nodes]
@@ -277,6 +428,70 @@ async function refresh() {
   await store.fetchNodes()
 }
 
+function handleEdit(node: ProxyNode) {
+  editingNode.value = node
+  addForm.value = {
+    name: node.name,
+    proxy_url: node.proxy_url || '',
+    username: node.proxy_username || '',
+    password: '', // 不回填密码（已脱敏）
+    region: node.region || '',
+  }
+  showAddDialog.value = true
+}
+
+function handleDialogClose(open: boolean) {
+  if (!open) {
+    showAddDialog.value = false
+    editingNode.value = null
+    addForm.value = { name: '', proxy_url: '', username: '', password: '', region: '' }
+  }
+}
+
+async function handleUpdateManualNode() {
+  if (!editingNode.value || !addForm.value.name || !addForm.value.proxy_url) return
+
+  addingNode.value = true
+  try {
+    await proxyNodesApi.updateManualNode(editingNode.value.id, {
+      name: addForm.value.name,
+      proxy_url: addForm.value.proxy_url,
+      username: addForm.value.username || undefined,
+      // 空密码不发送（保留原值）
+      password: addForm.value.password || undefined,
+      region: addForm.value.region || undefined,
+    })
+    success('代理节点已更新')
+    handleDialogClose(false)
+    await store.fetchNodes()
+  } catch (err: any) {
+    toastError(err.response?.data?.error?.message || err.response?.data?.detail || '更新失败')
+  } finally {
+    addingNode.value = false
+  }
+}
+
+async function handleAddManualNode() {
+  if (!addForm.value.name || !addForm.value.proxy_url) return
+
+  addingNode.value = true
+  try {
+    await store.createManualNode({
+      name: addForm.value.name,
+      proxy_url: addForm.value.proxy_url,
+      username: addForm.value.username || undefined,
+      password: addForm.value.password || undefined,
+      region: addForm.value.region || undefined,
+    })
+    success('代理节点已添加')
+    handleDialogClose(false)
+  } catch (err: any) {
+    toastError(err.response?.data?.error?.message || err.response?.data?.detail || '添加失败')
+  } finally {
+    addingNode.value = false
+  }
+}
+
 async function handleDelete(node: ProxyNode) {
   const confirmed = await confirmDanger(
     `确定要删除代理节点 "${node.name}" (${node.ip}:${node.port}) 吗？`,
@@ -285,8 +500,14 @@ async function handleDelete(node: ProxyNode) {
   if (!confirmed) return
 
   try {
-    await store.deleteNode(node.id)
-    success('代理节点已删除')
+    const result = await proxyNodesApi.deleteProxyNode(node.id)
+    // 同步更新 store 本地状态
+    store.nodes = store.nodes.filter(n => n.id !== node.id)
+    if (result.cleared_system_proxy) {
+      success('代理节点已删除，系统默认代理已自动清除')
+    } else {
+      success('代理节点已删除')
+    }
   } catch (err: any) {
     toastError(err.response?.data?.error?.message || '删除失败')
   }

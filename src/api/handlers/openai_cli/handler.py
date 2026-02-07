@@ -84,7 +84,18 @@ class OpenAICliMessageHandler(CliMessageHandlerBase):
         事件类型：
         - response.output_text.delta: 文本增量
         - response.completed: 响应完成（包含 usage）
+
+        跨格式转换时（如 provider=claude:chat），原始事件数据是 Provider 格式而非 OpenAI CLI 格式。
+        此时先调用基类方法通过 Provider 格式解析器提取 usage，再执行 OpenAI CLI 特定的处理逻辑。
         """
+        # 跨格式转换时：原始事件是 Provider 格式（如 Claude），
+        # 基类 _process_event_data 会自动选择正确的 Provider 解析器提取 usage/text
+        if ctx.provider_api_format and ctx.provider_api_format != ctx.client_api_format:
+            super()._process_event_data(ctx, event_type, data)
+            return
+
+        # 以下是同格式（openai:cli）的处理逻辑
+
         # 提取 response_id
         if not ctx.response_id:
             response_obj = data.get("response")

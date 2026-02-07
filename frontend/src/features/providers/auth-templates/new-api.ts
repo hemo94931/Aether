@@ -9,7 +9,7 @@
 
 import type { AuthTemplate, AuthTemplateFieldGroup } from './types'
 import type { SaveConfigRequest } from '@/api/providerOps'
-import { PROXY_FIELD_GROUP, buildProxyUrl, parseProxyUrl } from './types'
+import { PROXY_FIELD_GROUP, buildProxyConfig, parseProxyConfig } from './types'
 
 export const newApiTemplate: AuthTemplate = {
   id: 'new_api',
@@ -80,7 +80,7 @@ export const newApiTemplate: AuthTemplate = {
         auth_type: 'api_key',
         config: {
           auth_method: 'bearer',
-          proxy: buildProxyUrl(formData),
+          ...buildProxyConfig(formData),
         },
         credentials: {
           // 敏感字段始终发送（空字符串会触发后端合并已保存的值）
@@ -95,7 +95,7 @@ export const newApiTemplate: AuthTemplate = {
   },
 
   parseConfig(config: any): Record<string, any> {
-    const proxyData = parseProxyUrl(config?.connector?.config?.proxy)
+    const proxyData = parseProxyConfig(config?.connector?.config)
     return {
       base_url: config?.base_url || '',
       api_key: config?.connector?.credentials?.api_key || '',
