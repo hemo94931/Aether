@@ -233,7 +233,7 @@
                         </div>
                         <div class="flex flex-col min-w-0">
                           <div class="flex items-center gap-1.5">
-                            <span class="text-sm font-medium truncate">{{ getKeyDisplayName(key) }}</span>
+                            <span class="text-sm font-medium truncate">{{ key.name || '未命名密钥' }}</span>
                             <!-- OAuth 订阅类型标签 (Codex) -->
                             <Badge
                               v-if="key.oauth_plan_type"
@@ -1480,18 +1480,6 @@ function formatKiroSubscription(title: string | undefined): string {
   if (upper.includes('PRO')) return 'Pro'
   if (upper.includes('FREE')) return 'Free'
   return title
-}
-
-// 获取 Key 的显示名称（Kiro 优先显示邮箱）
-function getKeyDisplayName(key: EndpointAPIKey): string {
-  // Kiro 类型优先显示邮箱（从 upstream_metadata.kiro.email 获取）
-  if (provider.value?.provider_type === 'kiro') {
-    const kiroEmail = key.upstream_metadata?.kiro?.email
-    if (kiroEmail) {
-      return kiroEmail
-    }
-  }
-  return key.name || '未命名密钥'
 }
 
 function shouldAutoRefreshCodexQuota(): boolean {
