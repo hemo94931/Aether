@@ -111,7 +111,7 @@ fn is_systemd_available() -> bool {
         .unwrap_or(false)
 }
 
-fn is_root() -> bool {
+pub(crate) fn is_root() -> bool {
     #[cfg(unix)]
     {
         unsafe { libc::geteuid() == 0 }
@@ -241,7 +241,7 @@ pub fn cmd_uninstall() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_cmd(program: &str, args: &[&str]) -> anyhow::Result<()> {
+pub(crate) fn run_cmd(program: &str, args: &[&str]) -> anyhow::Result<()> {
     let display = format!("{} {}", program, args.join(" "));
     eprintln!("  > {}", display);
 

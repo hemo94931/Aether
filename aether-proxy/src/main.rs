@@ -38,6 +38,10 @@ async fn main() -> anyhow::Result<()> {
             "restart" => return setup::service::cmd_restart(),
             "stop" => return setup::service::cmd_stop(),
             "uninstall" => return setup::service::cmd_uninstall(),
+            "upgrade" => {
+                let version = args.get(2).cloned();
+                return setup::upgrade::cmd_upgrade(version).await;
+            }
             _ => {} // fall through to clap (--help, --version, config args)
         }
     }

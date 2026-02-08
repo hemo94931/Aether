@@ -35,6 +35,8 @@ crossterm = "0.28"
 url = "2"
 sysinfo = "0.32"
 libc = "0.2"
+flate2 = "1"
+tar = "0.4"
 
 [profile.release]
 lto = true
