@@ -268,25 +268,27 @@ def _create_oauth_key(
     return new_key
 
 
-def _generate_kiro_key_name(cfg: Any) -> str:
-    """根据 KiroAuthConfig 生成 Key 名称。"""
-    from src.services.provider.adapters.kiro.constants import DEFAULT_REGION
+async def _fetch_kiro_email(
+    auth_config: dict[str, Any],
+    proxy_config: dict[str, Any] | None = None,
+) -> str | None:
+    """通过 getUsageLimits API 获取 Kiro 用户邮箱。"""
+    from src.services.provider.adapters.kiro.usage import (
+        fetch_kiro_usage_limits,
+        parse_kiro_usage_response,
+    )
 
-    region = (getattr(cfg, "region", None) or "").strip() or DEFAULT_REGION
-    auth_method = getattr(cfg, "auth_method", None) or "social"
+    try:
+        result = await fetch_kiro_usage_limits(auth_config, proxy_config=proxy_config)
+        usage_data = result.get("usage_data")
+        if usage_data:
+            parsed = parse_kiro_usage_response(usage_data)
+            if parsed and parsed.get("email"):
+                return parsed["email"]
+    except Exception as e:
+        logger.warning("[KIRO] 获取用户邮箱失败: {}", e)
 
-    email = getattr(cfg, "email", None)
-    profile_arn = getattr(cfg, "profile_arn", None)
-
-    if email:
-        suffix = email
-    elif isinstance(profile_arn, str) and profile_arn.strip():
-        suffix = profile_arn.rsplit("/", 1)[-1]
-    else:
-        suffix = str(int(time.time()))
-
-    name = f"Kiro_{auth_method}_{region}_{suffix}"
-    return name[:100]
+    return None
 
 
 def _check_duplicate_oauth_account(
@@ -1234,7 +1236,12 @@ async def import_refresh_token(
         # 检查是否存在重复的 Kiro 账号
         _check_duplicate_oauth_account(db, provider_id, new_cfg.to_dict())
 
-        name = (payload.name or "").strip() or _generate_kiro_key_name(new_cfg)
+        # Kiro 确定账号名称（与 Codex/Antigravity 保持一致，使用 email）
+        name = (payload.name or "").strip()
+        email: str | None = None
+        if not name:
+            email = await _fetch_kiro_email(new_cfg.to_dict(), proxy_config=proxy_config)
+            name = email or f"账号_{int(time.time())}"
 
         new_key = _create_oauth_key(
             db,
@@ -1251,7 +1258,7 @@ async def import_refresh_token(
             provider_type=provider_type,
             expires_at=new_cfg.expires_at or None,
             has_refresh_token=bool(new_cfg.refresh_token),
-            email=None,
+            email=email,
         )
 
     try:
@@ -1728,8 +1735,9 @@ async def _batch_import_kiro_internal(
                 failed_count += 1
                 continue
 
-            # 生成名称
-            name = _generate_kiro_key_name(new_cfg)
+            # Kiro 确定账号名称（与 Codex/Antigravity 保持一致，使用 email）
+            email = await _fetch_kiro_email(new_cfg.to_dict(), proxy_config=proxy_config)
+            name = email or f"账号_{int(time.time())}"
 
             new_key = _create_oauth_key(
                 db,
