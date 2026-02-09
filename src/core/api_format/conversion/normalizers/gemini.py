@@ -34,6 +34,7 @@ from src.core.api_format.conversion.internal import (
     Role,
     StopReason,
     TextBlock,
+    ThinkingBlock,
     ToolChoice,
     ToolChoiceType,
     ToolDefinition,
@@ -564,8 +565,10 @@ class GeminiNormalizer(FormatNormalizer):
             state.message_id = state.message_id or "gemini"
             ss["message_started"] = True
             ss.setdefault("text_block_started", False)
+            ss.setdefault("thinking_block_started", False)
             ss.setdefault("accumulated_text", "")
-            ss.setdefault("next_block_index", 1)  # 0 预留给文本
+            ss.setdefault("accumulated_thinking", "")
+            ss.setdefault("next_block_index", 2)  # 0 预留给 thinking, 1 预留给 text
             events.append(MessageStartEvent(message_id=state.message_id, model=model))
 
         candidates = chunk.get("candidates") or []
@@ -586,23 +589,68 @@ class GeminiNormalizer(FormatNormalizer):
                     continue
 
                 # text（兼容：delta 或累积）
+                # 对齐 AM：检查 thought 标记，分流 thinking 和 regular text
                 text = part.get("text")
                 if isinstance(text, str) and text:
-                    prev = str(ss.get("accumulated_text") or "")
-                    if text.startswith(prev):
-                        delta = text[len(prev) :]
-                        ss["accumulated_text"] = text
-                    else:
-                        delta = text
-                        ss["accumulated_text"] = prev + delta
+                    is_thought = part.get("thought") is True
 
-                    if delta:
-                        if not ss.get("text_block_started"):
-                            ss["text_block_started"] = True
-                            events.append(
-                                ContentBlockStartEvent(block_index=0, block_type=ContentType.TEXT)
+                    if is_thought:
+                        # Thinking content → block_index=0
+                        prev = str(ss.get("accumulated_thinking") or "")
+                        if text.startswith(prev):
+                            delta = text[len(prev) :]
+                            ss["accumulated_thinking"] = text
+                        else:
+                            delta = text
+                            ss["accumulated_thinking"] = prev + delta
+
+                        if delta:
+                            if not ss.get("thinking_block_started"):
+                                ss["thinking_block_started"] = True
+                                events.append(
+                                    ContentBlockStartEvent(
+                                        block_index=0, block_type=ContentType.THINKING
+                                    )
+                                )
+                            events.append(ContentDeltaEvent(block_index=0, text_delta=delta))
+                    else:
+                        # Regular text → block_index=1
+                        prev = str(ss.get("accumulated_text") or "")
+                        if text.startswith(prev):
+                            delta = text[len(prev) :]
+                            ss["accumulated_text"] = text
+                        else:
+                            delta = text
+                            ss["accumulated_text"] = prev + delta
+
+                        if delta:
+                            # 切换：先关闭 thinking block（Claude 协议要求顺序 stop/start）
+                            if ss.get("thinking_block_started") and not ss.get(
+                                "thinking_block_stopped"
+                            ):
+                                ss["thinking_block_stopped"] = True
+                                events.append(ContentBlockStopEvent(block_index=0))
+
+                            if not ss.get("text_block_started"):
+                                ss["text_block_started"] = True
+                                events.append(
+                                    ContentBlockStartEvent(
+                                        block_index=1, block_type=ContentType.TEXT
+                                    )
+                                )
+                            events.append(ContentDeltaEvent(block_index=1, text_delta=delta))
+
+                    # 提取 thoughtSignature（对齐 AM：缓存到 session）
+                    sig = part.get("thoughtSignature") or part.get("thought_signature")
+                    if isinstance(sig, str) and sig and ss.get("thinking_block_started"):
+                        # 仅在 thinking block 已开启时发射 signature delta
+                        events.append(
+                            ContentDeltaEvent(
+                                block_index=0,
+                                text_delta="",
+                                extra={"thought_signature": sig},
                             )
-                        events.append(ContentDeltaEvent(block_index=0, text_delta=delta))
+                        )
                     continue
 
                 # functionCall（stream response 常见 camelCase）
@@ -611,12 +659,20 @@ class GeminiNormalizer(FormatNormalizer):
                     func_call = part.get("function_call")
 
                 if isinstance(func_call, dict):
+                    # 关闭前面的 thinking/text block（如果还开着）
+                    if ss.get("thinking_block_started") and not ss.get("thinking_block_stopped"):
+                        ss["thinking_block_stopped"] = True
+                        events.append(ContentBlockStopEvent(block_index=0))
+                    if ss.get("text_block_started") and not ss.get("text_block_stopped"):
+                        ss["text_block_stopped"] = True
+                        events.append(ContentBlockStopEvent(block_index=1))
+
                     name = str(func_call.get("name") or "")
                     args = func_call.get("args")
                     if not isinstance(args, dict):
                         args = {}
 
-                    block_index = int(ss.get("next_block_index") or 1)
+                    block_index = int(ss.get("next_block_index") or 2)
                     ss["next_block_index"] = block_index + 1
 
                     events.append(
@@ -673,10 +729,13 @@ class GeminiNormalizer(FormatNormalizer):
         if finish_reason is not None:
             stop_reason = self._FINISH_REASON_TO_STOP.get(str(finish_reason), StopReason.UNKNOWN)
             usage_info = self._usage_metadata_to_internal(chunk.get("usageMetadata"))
-            # 先补齐 content_block_stop（仅 text block），再发送 MessageStop
+            # 先补齐 content_block_stop（所有已开启的 block），再发送 MessageStop
+            if ss.get("thinking_block_started") and not ss.get("thinking_block_stopped"):
+                ss["thinking_block_stopped"] = True
+                events.append(ContentBlockStopEvent(block_index=0))
             if ss.get("text_block_started") and not ss.get("text_block_stopped"):
                 ss["text_block_stopped"] = True
-                events.append(ContentBlockStopEvent(block_index=0))
+                events.append(ContentBlockStopEvent(block_index=1))
             events.append(MessageStopEvent(stop_reason=stop_reason, usage=usage_info))
 
         if "error" in chunk:
@@ -711,9 +770,26 @@ class GeminiNormalizer(FormatNormalizer):
             ss.setdefault("tool_blocks", {})
             return out
 
+        if isinstance(event, ContentBlockStartEvent):
+            # 记录 block_index → block_type 映射
+            ss[f"block_type_{event.block_index}"] = event.block_type.value
+            if event.block_type == ContentType.THINKING:
+                ss["thinking_output_started"] = True
+                return out
+
         if isinstance(event, ContentDeltaEvent):
             if event.text_delta:
-                out.append(base_chunk([{"text": event.text_delta}]))
+                # 检查 block_index → block_type 映射，区分 thinking 和 text
+                block_type = ss.get(f"block_type_{event.block_index}")
+                if block_type == ContentType.THINKING.value:
+                    part: dict[str, Any] = {"text": event.text_delta, "thought": True}
+                    out.append(base_chunk([part]))
+                else:
+                    out.append(base_chunk([{"text": event.text_delta}]))
+            # thoughtSignature（来自 Gemini upstream 或 其他格式转换）
+            sig = (event.extra or {}).get("thought_signature")
+            if isinstance(sig, str) and sig:
+                out.append(base_chunk([{"text": "", "thought": True, "thoughtSignature": sig}]))
             return out
 
         if isinstance(event, ContentBlockStartEvent) and event.block_type == ContentType.TOOL_USE:
@@ -1166,7 +1242,23 @@ class GeminiNormalizer(FormatNormalizer):
             if "text" in part:
                 text = part.get("text")
                 if isinstance(text, str) and text:
-                    blocks.append(TextBlock(text=text, extra=self._extract_extra(part, {"text"})))
+                    is_thought = part.get("thought") is True
+                    if is_thought:
+                        sig = part.get("thoughtSignature") or part.get("thought_signature")
+                        blocks.append(
+                            ThinkingBlock(
+                                thinking=text,
+                                signature=sig if isinstance(sig, str) else None,
+                                extra=self._extract_extra(
+                                    part,
+                                    {"text", "thought", "thoughtSignature", "thought_signature"},
+                                ),
+                            )
+                        )
+                    else:
+                        blocks.append(
+                            TextBlock(text=text, extra=self._extract_extra(part, {"text"}))
+                        )
                 continue
 
             inline = part.get("inline_data")
@@ -1257,6 +1349,14 @@ class GeminiNormalizer(FormatNormalizer):
                     part = self._unknown_block_to_antigravity_part(b, model=str(model or ""))
                     if part is not None:
                         parts.append(part)
+                continue
+
+            if isinstance(b, ThinkingBlock):
+                if b.thinking:
+                    thought_part: dict[str, Any] = {"text": b.thinking, "thought": True}
+                    if b.signature:
+                        thought_part["thoughtSignature"] = b.signature
+                    parts.append(thought_part)
                 continue
 
             if isinstance(b, TextBlock):

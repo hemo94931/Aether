@@ -30,6 +30,7 @@ from src.core.api_format.conversion.internal import (
     Role,
     StopReason,
     TextBlock,
+    ThinkingBlock,
     ToolChoice,
     ToolChoiceType,
     ToolDefinition,
@@ -330,7 +331,16 @@ class OpenAINormalizer(FormatNormalizer):
 
         message: dict[str, Any] = {"role": "assistant"}
 
-        content_blocks, tool_blocks = self._split_blocks(internal.content)
+        thinking_blocks, content_blocks, tool_blocks = self._split_blocks(internal.content)
+
+        # 对齐 AM：ThinkingBlock → reasoning_content
+        if thinking_blocks:
+            reasoning_text = "".join(
+                b.thinking for b in thinking_blocks if isinstance(b, ThinkingBlock) and b.thinking
+            )
+            if reasoning_text:
+                message["reasoning_content"] = reasoning_text
+
         content_value = self._blocks_to_openai_content(content_blocks)
         if content_value is not None:
             message["content"] = content_value
@@ -391,9 +401,10 @@ class OpenAINormalizer(FormatNormalizer):
             if not state.model:
                 state.model = model
             ss["message_started"] = True
+            ss.setdefault("thinking_block_started", False)
             ss.setdefault("text_block_started", False)
             ss.setdefault("tool_id_to_block_index", {})
-            ss.setdefault("next_block_index", 1)  # 0 预留给 text block
+            ss.setdefault("next_block_index", 2)  # 0=thinking, 1=text, 2+=tools
             events.append(MessageStartEvent(message_id=msg_id, model=model))
 
         choices = chunk.get("choices") or []
@@ -418,13 +429,27 @@ class OpenAINormalizer(FormatNormalizer):
         if not isinstance(delta, dict):
             delta = {}
 
+        # reasoning_content delta (thinking)
+        reasoning_delta = delta.get("reasoning_content")
+        if isinstance(reasoning_delta, str) and reasoning_delta:
+            if not ss.get("thinking_block_started"):
+                ss["thinking_block_started"] = True
+                events.append(
+                    ContentBlockStartEvent(block_index=0, block_type=ContentType.THINKING)
+                )
+            events.append(ContentDeltaEvent(block_index=0, text_delta=reasoning_delta))
+
         # content delta
         content_delta = delta.get("content")
         if isinstance(content_delta, str) and content_delta:
+            # 从 thinking 过渡到 text 时，先关闭 thinking block
+            if ss.get("thinking_block_started") and not ss.get("thinking_block_stopped"):
+                ss["thinking_block_stopped"] = True
+                events.append(ContentBlockStopEvent(block_index=0))
             if not ss.get("text_block_started"):
                 ss["text_block_started"] = True
-                events.append(ContentBlockStartEvent(block_index=0, block_type=ContentType.TEXT))
-            events.append(ContentDeltaEvent(block_index=0, text_delta=content_delta))
+                events.append(ContentBlockStartEvent(block_index=1, block_type=ContentType.TEXT))
+            events.append(ContentDeltaEvent(block_index=1, text_delta=content_delta))
 
         # tool_calls delta
         tool_calls = delta.get("tool_calls")
@@ -469,10 +494,13 @@ class OpenAINormalizer(FormatNormalizer):
         finish_reason = c0.get("finish_reason")
         if finish_reason is not None:
             stop_reason = self._FINISH_REASON_TO_STOP.get(str(finish_reason), StopReason.UNKNOWN)
-            # 先补齐 content_block_stop（仅 text block），再发送 MessageStop
+            # 先补齐 content_block_stop（thinking + text），再发送 MessageStop
+            if ss.get("thinking_block_started") and not ss.get("thinking_block_stopped"):
+                ss["thinking_block_stopped"] = True
+                events.append(ContentBlockStopEvent(block_index=0))
             if ss.get("text_block_started") and not ss.get("text_block_stopped"):
                 ss["text_block_stopped"] = True
-                events.append(ContentBlockStopEvent(block_index=0))
+                events.append(ContentBlockStopEvent(block_index=1))
             # 解析 usage（需要请求时设置 stream_options.include_usage: true）
             usage_info = self._openai_usage_to_internal(chunk.get("usage"))
             events.append(MessageStopEvent(stop_reason=stop_reason, usage=usage_info))
@@ -511,9 +539,23 @@ class OpenAINormalizer(FormatNormalizer):
             out.append(base_chunk({"role": "assistant"}))
             return out
 
+        # 记录 block_index → block_type 的映射（用于 ContentDeltaEvent 区分 thinking vs text）
+        if isinstance(event, ContentBlockStartEvent):
+            ss[f"block_type_{event.block_index}"] = event.block_type.value
+
+        if isinstance(event, ContentBlockStartEvent) and event.block_type == ContentType.THINKING:
+            # Thinking block 开始：OpenAI 格式无需显式开始事件
+            return out
+
         if isinstance(event, ContentDeltaEvent):
             if event.text_delta:
-                out.append(base_chunk({"content": event.text_delta}))
+                # 检查 block_index 对应的 block_type（thinking vs text）
+                block_type = ss.get(f"block_type_{event.block_index}")
+                if block_type == ContentType.THINKING.value:
+                    # 对齐 AM：thinking 内容输出为 reasoning_content
+                    out.append(base_chunk({"reasoning_content": event.text_delta, "content": None}))
+                else:
+                    out.append(base_chunk({"content": event.text_delta}))
             return out
 
         if isinstance(event, ContentBlockStartEvent) and event.block_type == ContentType.TOOL_USE:
@@ -891,8 +933,22 @@ class OpenAINormalizer(FormatNormalizer):
                 dropped,
             )
 
+        # 对齐 AM：解析 reasoning_content → ThinkingBlock（放在 content blocks 前面）
+        reasoning_content = msg.get("reasoning_content")
+        reasoning_blocks: list[ContentBlock] = []
+        if (
+            isinstance(reasoning_content, str)
+            and reasoning_content
+            and reasoning_content != "[undefined]"
+        ):
+            reasoning_blocks.append(ThinkingBlock(thinking=reasoning_content))
+
         blocks, content_dropped = self._openai_content_to_blocks(msg.get("content"))
         self._merge_dropped(dropped, content_dropped)
+
+        # 合并：thinking blocks 放在前面（对齐 AM/Claude 的 thinking-first 约定）
+        if reasoning_blocks:
+            blocks = reasoning_blocks + blocks
 
         # assistant tool_calls
         if role_raw == "assistant":
@@ -1248,10 +1304,14 @@ class OpenAINormalizer(FormatNormalizer):
 
     def _split_blocks(
         self, blocks: list[ContentBlock]
-    ) -> tuple[list[ContentBlock], list[ToolUseBlock]]:
+    ) -> tuple[list[ThinkingBlock], list[ContentBlock], list[ToolUseBlock]]:
+        thinking_blocks: list[ThinkingBlock] = []
         content_blocks: list[ContentBlock] = []
         tool_blocks: list[ToolUseBlock] = []
         for b in blocks:
+            if isinstance(b, ThinkingBlock):
+                thinking_blocks.append(b)
+                continue
             if isinstance(b, ToolUseBlock):
                 tool_blocks.append(b)
                 continue
@@ -1261,7 +1321,7 @@ class OpenAINormalizer(FormatNormalizer):
             if isinstance(b, UnknownBlock):
                 continue
             content_blocks.append(b)
-        return content_blocks, tool_blocks
+        return thinking_blocks, content_blocks, tool_blocks
 
     def _internal_message_to_openai_messages(self, msg: InternalMessage) -> list[dict[str, Any]]:
         if msg.role == Role.USER:
@@ -1315,10 +1375,15 @@ class OpenAINormalizer(FormatNormalizer):
         return out
 
     def _assistant_message_to_openai(self, msg: InternalMessage) -> dict[str, Any]:
+        thinking_texts: list[str] = []
         content_blocks: list[ContentBlock] = []
         tool_blocks: list[ToolUseBlock] = []
 
         for b in msg.content:
+            if isinstance(b, ThinkingBlock):
+                if b.thinking:
+                    thinking_texts.append(b.thinking)
+                continue
             if isinstance(b, ToolUseBlock):
                 tool_blocks.append(b)
                 continue
@@ -1329,6 +1394,11 @@ class OpenAINormalizer(FormatNormalizer):
             content_blocks.append(b)
 
         out: dict[str, Any] = {"role": "assistant"}
+
+        # 对齐 AM：ThinkingBlock → reasoning_content
+        if thinking_texts:
+            out["reasoning_content"] = "".join(thinking_texts)
+
         content_value = self._blocks_to_openai_content(content_blocks)
         out["content"] = content_value if content_value is not None else ""
 

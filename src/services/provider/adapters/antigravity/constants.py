@@ -73,9 +73,85 @@ MIN_SIGNATURE_LENGTH = 50  # 与 Antigravity-Manager 对齐
 
 # ============== Thinking Budget ==============
 THINKING_BUDGET_AUTO_CAP = 24576
-THINKING_BUDGET_DEFAULT_INJECT = 16000
+THINKING_BUDGET_DEFAULT_INJECT = 24576  # 对齐 AM wrapper.rs (was 16000)
 # 包含这些关键字的模型会自动注入 thinkingConfig（如果缺失）
 THINKING_MODELS_AUTO_INJECT_KEYWORDS = ("thinking", "gemini-2.0-pro", "gemini-3-pro")
+
+# ============== Model Alias Mapping ==============
+# 对齐 AM common_utils.rs: 将预览/别名映射回上游物理模型名
+MODEL_ALIAS_MAP: dict[str, str] = {
+    "gemini-3-pro-preview": "gemini-3-pro-high",
+    "gemini-3-pro-image-preview": "gemini-3-pro-image",
+    "gemini-3-flash-preview": "gemini-3-flash",
+}
+
+# ============== Google Search (Grounding) ==============
+# 对齐 AM common_utils.rs: 仅 gemini-2.5-flash 支持 googleSearch tool
+WEB_SEARCH_MODEL = "gemini-2.5-flash"
+# 联网工具检测关键字（对齐 AM detects_networking_tool）
+NETWORKING_TOOL_KEYWORDS = frozenset(
+    {
+        "web_search",
+        "google_search",
+        "web_search_20250305",
+        "google_search_retrieval",
+    }
+)
+
+# ============== Image Generation ==============
+# 上游图像生成模型的固定名称
+IMAGE_GEN_UPSTREAM_MODEL = "gemini-3-pro-image"
+# 模型后缀 → 宽高比映射
+IMAGE_ASPECT_RATIO_SUFFIXES: dict[str, str] = {
+    "-21x9": "21:9",
+    "-21-9": "21:9",
+    "-16x9": "16:9",
+    "-16-9": "16:9",
+    "-9x16": "9:16",
+    "-9-16": "9:16",
+    "-4x3": "4:3",
+    "-4-3": "4:3",
+    "-3x4": "3:4",
+    "-3-4": "3:4",
+    "-3x2": "3:2",
+    "-3-2": "3:2",
+    "-2x3": "2:3",
+    "-2-3": "2:3",
+    "-5x4": "5:4",
+    "-5-4": "5:4",
+    "-4x5": "4:5",
+    "-4-5": "4:5",
+    "-1x1": "1:1",
+    "-1-1": "1:1",
+}
+# 标准宽高比字符串（用于直接匹配 size 参数）
+STANDARD_ASPECT_RATIOS = frozenset(
+    {
+        "21:9",
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "3:2",
+        "2:3",
+        "5:4",
+        "4:5",
+        "1:1",
+    }
+)
+# 宽高比容差匹配表：(ratio, label)
+ASPECT_RATIO_TABLE: tuple[tuple[float, str], ...] = (
+    (21.0 / 9.0, "21:9"),
+    (16.0 / 9.0, "16:9"),
+    (4.0 / 3.0, "4:3"),
+    (3.0 / 4.0, "3:4"),
+    (9.0 / 16.0, "9:16"),
+    (3.0 / 2.0, "3:2"),
+    (2.0 / 3.0, "2:3"),
+    (5.0 / 4.0, "5:4"),
+    (4.0 / 5.0, "4:5"),
+    (1.0, "1:1"),
+)
 
 # ============== Retry ==============
 RETRY_429_BASE_SECONDS = 5.0
@@ -107,10 +183,15 @@ ANTIGRAVITY_SYSTEM_INSTRUCTION = (
 
 __all__ = [
     "ANTIGRAVITY_SYSTEM_INSTRUCTION",
+    "ASPECT_RATIO_TABLE",
     "DAILY_BASE_URL",
     "DUMMY_THOUGHT_SIGNATURE",
     "HTTP_USER_AGENT",
+    "IMAGE_ASPECT_RATIO_SUFFIXES",
+    "IMAGE_GEN_UPSTREAM_MODEL",
     "MIN_SIGNATURE_LENGTH",
+    "MODEL_ALIAS_MAP",
+    "NETWORKING_TOOL_KEYWORDS",
     "PROD_BASE_URL",
     "REQUEST_USER_AGENT",
     "RETRY_429_BASE_SECONDS",
@@ -119,12 +200,14 @@ __all__ = [
     "RETRY_503_MAX_SECONDS",
     "SANDBOX_BASE_URL",
     "SIGNATURE_ERROR_KEYWORDS",
+    "STANDARD_ASPECT_RATIOS",
     "THINKING_BUDGET_AUTO_CAP",
     "THINKING_BUDGET_DEFAULT_INJECT",
     "THINKING_MODELS_AUTO_INJECT_KEYWORDS",
     "URL_UNAVAILABLE_TTL_SECONDS",
     "V1INTERNAL_PATH_TEMPLATE",
     "VERSION_FETCH_URL",
+    "WEB_SEARCH_MODEL",
     "get_http_user_agent",
     "parse_version_string",
     "update_user_agent_version",

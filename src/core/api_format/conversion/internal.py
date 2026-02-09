@@ -26,6 +26,7 @@ class Role(str, Enum):
 
 class ContentType(str, Enum):
     TEXT = "text"
+    THINKING = "thinking"
     IMAGE = "image"
     TOOL_USE = "tool_use"
     TOOL_RESULT = "tool_result"
@@ -63,6 +64,16 @@ class TextBlock:
 
     type: ContentType = field(default=ContentType.TEXT, init=False)
     text: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ThinkingBlock:
+    """思考过程内容块（对齐 Gemini thought:true / Claude thinking / OpenAI reasoning_content）"""
+
+    type: ContentType = field(default=ContentType.THINKING, init=False)
+    thinking: str = ""
+    signature: str | None = None  # Gemini thoughtSignature / Claude signature
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -113,7 +124,9 @@ class UnknownBlock:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-ContentBlock = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | UnknownBlock
+ContentBlock = (
+    TextBlock | ThinkingBlock | ImageBlock | ToolUseBlock | ToolResultBlock | UnknownBlock
+)
 
 
 @dataclass
@@ -277,6 +290,7 @@ __all__ = [
     "ErrorType",
     "ToolChoiceType",
     "TextBlock",
+    "ThinkingBlock",
     "ImageBlock",
     "ToolUseBlock",
     "ToolResultBlock",

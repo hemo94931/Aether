@@ -13,6 +13,10 @@ wire format:
 - JSON Schema 禁止字段清洗
 - Antigravity System Instruction 注入
 - Signature 错误检测
+- Model alias mapping（preview → physical）
+- Google Search (grounding) 注入
+- thoughtSignature 注入到 functionCall parts
+- Image generation config 注入（aspectRatio / imageSize）
 """
 
 from __future__ import annotations
@@ -22,19 +26,84 @@ from typing import Any
 
 from src.services.provider.adapters.antigravity.constants import (
     ANTIGRAVITY_SYSTEM_INSTRUCTION,
+    ASPECT_RATIO_TABLE,
+    IMAGE_ASPECT_RATIO_SUFFIXES,
+    IMAGE_GEN_UPSTREAM_MODEL,
+    MODEL_ALIAS_MAP,
+    NETWORKING_TOOL_KEYWORDS,
 )
 from src.services.provider.adapters.antigravity.constants import (
     REQUEST_USER_AGENT as ANTIGRAVITY_REQUEST_USER_AGENT,
 )
 from src.services.provider.adapters.antigravity.constants import (
     SIGNATURE_ERROR_KEYWORDS,
+    STANDARD_ASPECT_RATIOS,
     THINKING_BUDGET_AUTO_CAP,
     THINKING_BUDGET_DEFAULT_INJECT,
     THINKING_MODELS_AUTO_INJECT_KEYWORDS,
+    WEB_SEARCH_MODEL,
     get_http_user_agent,
 )
 from src.services.provider.adapters.antigravity.url_availability import url_availability
 from src.services.provider.request_context import get_selected_base_url
+
+# ---------------------------------------------------------------------------
+# Key normalization: snake_case → camelCase
+# ---------------------------------------------------------------------------
+
+# The Gemini normalizer (gemini.py) outputs snake_case keys that mirror protobuf
+# field names (e.g. "generation_config", "function_declarations").  However, the
+# Antigravity v1internal JSON protocol (like the REST Gemini API) uses camelCase
+# for all field names.  A mismatch causes downstream processing functions in this
+# module to silently skip keys or create duplicate entries.
+#
+# We normalise once at the entry point of wrap_v1internal_request so that every
+# subsequent helper can safely assume camelCase.
+
+_TOP_LEVEL_KEY_RENAMES: dict[str, str] = {
+    "system_instruction": "systemInstruction",
+    "generation_config": "generationConfig",
+    "tool_config": "toolConfig",
+    # safety_settings 在 wrap_v1internal_request 入口处已 pop，无需映射
+}
+
+_GENERATION_CONFIG_KEY_RENAMES: dict[str, str] = {
+    "max_output_tokens": "maxOutputTokens",
+    "stop_sequences": "stopSequences",
+    "top_p": "topP",
+    "top_k": "topK",
+    "thinking_config": "thinkingConfig",
+    "response_modalities": "responseModalities",
+    "response_mime_type": "responseMimeType",
+}
+
+
+def _normalize_to_camel_case(body: dict[str, Any]) -> None:
+    """In-place normalise known Gemini snake_case keys to their camelCase form.
+
+    This must be called **before** any other processing so that all helpers
+    in this module can consistently use camelCase lookups.
+    """
+    # 1. Top-level keys
+    for snake, camel in _TOP_LEVEL_KEY_RENAMES.items():
+        if snake in body and camel not in body:
+            body[camel] = body.pop(snake)
+
+    # 2. Inside tools: function_declarations → functionDeclarations
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, dict):
+                if "function_declarations" in tool and "functionDeclarations" not in tool:
+                    tool["functionDeclarations"] = tool.pop("function_declarations")
+
+    # 3. Inside generationConfig: normalise sub-keys
+    gc = body.get("generationConfig")
+    if isinstance(gc, dict):
+        for snake, camel in _GENERATION_CONFIG_KEY_RENAMES.items():
+            if snake in gc and camel not in gc:
+                gc[camel] = gc.pop(snake)
+
 
 # ---------------------------------------------------------------------------
 # Request body 预处理工具函数（对齐 AM wrapper.rs / common_utils.rs）
@@ -164,18 +233,26 @@ def _clean_tool_declarations(inner_request: dict[str, Any]) -> None:
     for tool in tools:
         if not isinstance(tool, dict):
             continue
-        decls = tool.get("functionDeclarations")
+        # 支持 camelCase + snake_case
+        decls_key = (
+            "functionDeclarations"
+            if "functionDeclarations" in tool
+            else "function_declarations" if "function_declarations" in tool else None
+        )
+        if decls_key is None:
+            continue
+        decls = tool.get(decls_key)
         if not isinstance(decls, list):
             continue
 
-        # 1. 过滤搜索关键字函数
+        # 1. 过滤搜索关键字函数（对齐 NETWORKING_TOOL_KEYWORDS）
         decls[:] = [
             d
             for d in decls
             if not (
                 isinstance(d, dict)
                 and isinstance(d.get("name"), str)
-                and d["name"] in ("web_search", "google_search")
+                and d["name"] in NETWORKING_TOOL_KEYWORDS
             )
         ]
 
@@ -201,6 +278,296 @@ def _clean_json_schema(schema: dict[str, Any]) -> None:
     from src.core.api_format.schema_utils import clean_gemini_schema
 
     clean_gemini_schema(schema)
+
+
+# ---------------------------------------------------------------------------
+# Model alias mapping（对齐 AM common_utils.rs）
+# ---------------------------------------------------------------------------
+
+
+def _resolve_model_alias(model: str) -> str:
+    """将预览/别名模型名映射回上游物理模型名。
+
+    对齐 AM common_utils.rs resolve_request_config：
+    - gemini-3-pro-preview → gemini-3-pro-high
+    - gemini-3-pro-image-preview → gemini-3-pro-image
+    - gemini-3-flash-preview → gemini-3-flash
+    - 同时剥离 -online 后缀
+    """
+    resolved = model.rstrip()
+    # 剥离 -online 后缀（联网意图由 tools 检测，不依赖后缀传递到上游）
+    resolved = resolved.removesuffix("-online")
+    return MODEL_ALIAS_MAP.get(resolved, resolved)
+
+
+# ---------------------------------------------------------------------------
+# Google Search (Grounding) 检测与注入（对齐 AM common_utils.rs）
+# ---------------------------------------------------------------------------
+
+
+def _detect_networking_tools(inner_request: dict[str, Any]) -> bool:
+    """检测请求中是否包含联网/搜索工具声明。
+
+    对齐 AM common_utils.rs detects_networking_tool，支持多种声明风格：
+    1. Claude/Anthropic 直发风格: {"name": "web_search"} / {"type": "web_search_20250305"}
+    2. OpenAI 嵌套风格: {"type": "function", "function": {"name": "web_search"}}
+    3. Gemini 原生风格: {"functionDeclarations": [{"name": "web_search"}]}
+    4. Gemini googleSearch 声明: {"googleSearch": {}}
+    """
+    tools = inner_request.get("tools")
+    if not isinstance(tools, list):
+        return False
+
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+
+        # 1. 直发风格: name / type 字段
+        name = tool.get("name")
+        if isinstance(name, str) and name in NETWORKING_TOOL_KEYWORDS:
+            return True
+        type_ = tool.get("type")
+        if isinstance(type_, str) and type_ in NETWORKING_TOOL_KEYWORDS:
+            return True
+
+        # 2. OpenAI 嵌套风格
+        func = tool.get("function")
+        if isinstance(func, dict):
+            fn_name = func.get("name")
+            if isinstance(fn_name, str) and fn_name in NETWORKING_TOOL_KEYWORDS:
+                return True
+
+        # 3. Gemini functionDeclarations 风格（支持 camelCase + snake_case）
+        decls = tool.get("functionDeclarations")
+        if decls is None:
+            decls = tool.get("function_declarations")
+        if isinstance(decls, list):
+            for decl in decls:
+                if isinstance(decl, dict):
+                    decl_name = decl.get("name")
+                    if isinstance(decl_name, str) and decl_name in NETWORKING_TOOL_KEYWORDS:
+                        return True
+
+        # 4. Gemini googleSearch / googleSearchRetrieval 声明
+        if tool.get("googleSearch") is not None or tool.get("googleSearchRetrieval") is not None:
+            return True
+
+    return False
+
+
+def _detect_online_suffix(model: str) -> bool:
+    """检测模型名是否含 -online 后缀（联网意图）。"""
+    return model.rstrip().endswith("-online")
+
+
+def _inject_google_search_tool(inner_request: dict[str, Any]) -> None:
+    """注入 googleSearch tool 到请求中。
+
+    对齐 AM common_utils.rs inject_google_search_tool：
+    - 如果已有 functionDeclarations，跳过（v1internal 不支持混用）
+    - 先清理已有的 googleSearch / googleSearchRetrieval
+    - 注入 {"googleSearch": {}}
+    """
+    tools = inner_request.setdefault("tools", [])
+    if not isinstance(tools, list):
+        inner_request["tools"] = [{"googleSearch": {}}]
+        return
+
+    # 如果已有 functionDeclarations，不注入（v1internal 不支持混用 search 和 functions）
+    has_functions = any(
+        isinstance(t, dict) and ("functionDeclarations" in t or "function_declarations" in t)
+        for t in tools
+    )
+    if has_functions:
+        return
+
+    # 清理已存在的 googleSearch / googleSearchRetrieval（避免重复）
+    tools[:] = [
+        t
+        for t in tools
+        if not (isinstance(t, dict) and ("googleSearch" in t or "googleSearchRetrieval" in t))
+    ]
+
+    # 注入
+    tools.append({"googleSearch": {}})
+
+
+# ---------------------------------------------------------------------------
+# thoughtSignature 注入到 functionCall parts（对齐 AM wrapper.rs）
+# ---------------------------------------------------------------------------
+
+
+def _inject_thought_signatures(inner_request: dict[str, Any], session_id: str | None) -> None:
+    """为 functionCall parts 注入 thoughtSignature（从 session signature cache）。
+
+    对齐 AM wrapper.rs：当 functionCall part 缺少 thoughtSignature 时，
+    从 session cache 中恢复签名，确保 thinking 模型的多轮 tool call 连续性。
+    """
+    if not session_id:
+        return
+
+    try:
+        from src.services.provider.adapters.antigravity.signature_cache import signature_cache
+    except Exception:
+        return
+
+    cached_sig = signature_cache.get_session_signature(session_id)
+    if not cached_sig:
+        return
+
+    contents = inner_request.get("contents")
+    if not isinstance(contents, list):
+        return
+
+    for content in contents:
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            # 只处理有 functionCall 且缺少 thoughtSignature 的 part
+            if "functionCall" in part and part.get("thoughtSignature") is None:
+                part["thoughtSignature"] = cached_sig
+
+
+# ---------------------------------------------------------------------------
+# Image Generation Config（对齐 AM common_utils.rs parse_image_config_with_params）
+# ---------------------------------------------------------------------------
+
+
+def _calculate_aspect_ratio(size: str) -> str:
+    """从 "WIDTHxHEIGHT" 或 "W:H" 字符串计算宽高比。
+
+    对齐 AM common_utils.rs calculate_aspect_ratio_from_size：
+    1. 先检查是否已是标准比例字符串 (如 "16:9")
+    2. 解析 WIDTHxHEIGHT 并容差匹配
+    3. 默认返回 "1:1"
+    """
+    if size in STANDARD_ASPECT_RATIOS:
+        return size
+
+    if "x" in size:
+        try:
+            w_str, h_str = size.split("x", 1)
+            width, height = float(w_str), float(h_str)
+            if width > 0 and height > 0:
+                ratio = width / height
+                for target_ratio, label in ASPECT_RATIO_TABLE:
+                    if abs(ratio - target_ratio) < 0.05:
+                        return label
+        except (ValueError, ZeroDivisionError):
+            pass
+
+    return "1:1"
+
+
+def _parse_image_config(
+    model: str,
+    inner_request: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """解析图像生成配置，返回 (imageConfig, clean_model_name)。
+
+    对齐 AM common_utils.rs parse_image_config_with_params + resolve_request_config：
+    1. 从请求体中提取 OpenAI 风格 size / quality 参数（优先）
+    2. 回退到模型后缀解析 (如 -16x9, -4k)
+    3. 合并请求体中的 generationConfig.imageConfig（如果存在）
+    4. 上游模型固定为 "gemini-3-pro-image"
+    """
+    # 提取 OpenAI 风格参数（可能由跨格式转换层注入到请求根部）
+    size = inner_request.pop("size", None)
+    quality = inner_request.pop("quality", None)
+    if not isinstance(size, str):
+        size = None
+    if not isinstance(quality, str):
+        quality = None
+
+    # --- 解析 aspectRatio ---
+    aspect_ratio = "1:1"
+    if size:
+        aspect_ratio = _calculate_aspect_ratio(size)
+    else:
+        lower_model = model.lower()
+        for suffix, ratio in IMAGE_ASPECT_RATIO_SUFFIXES.items():
+            if suffix in lower_model:
+                aspect_ratio = ratio
+                break
+
+    config: dict[str, Any] = {"aspectRatio": aspect_ratio}
+
+    # --- 解析 imageSize ---
+    if quality:
+        q_lower = quality.lower()
+        if q_lower in ("hd", "4k"):
+            config["imageSize"] = "4K"
+        elif q_lower in ("medium", "2k"):
+            config["imageSize"] = "2K"
+        elif q_lower in ("standard", "1k"):
+            config["imageSize"] = "1K"
+    else:
+        lower_model = model.lower()
+        if "-4k" in lower_model or "-hd" in lower_model:
+            config["imageSize"] = "4K"
+        elif "-2k" in lower_model:
+            config["imageSize"] = "2K"
+
+    # --- 合并请求体中已有的 imageConfig（body 可以覆盖除 imageSize 降级外的字段） ---
+    gen_config = inner_request.get("generationConfig")
+    if isinstance(gen_config, dict):
+        body_image_config = gen_config.get("imageConfig")
+        if isinstance(body_image_config, dict):
+            for key, value in body_image_config.items():
+                # 防止 body 降级 inferred imageSize（对齐 AM 的 shield 逻辑）
+                if (
+                    key == "imageSize"
+                    and (value == "1K" or value is None)
+                    and "imageSize" in config
+                ):
+                    continue
+                config[key] = value
+
+    return config, IMAGE_GEN_UPSTREAM_MODEL
+
+
+def _apply_image_gen_config(inner_request: dict[str, Any], image_config: dict[str, Any]) -> None:
+    """将 imageConfig 应用到请求的 generationConfig 中。
+
+    对齐 AM wrapper.rs 的图像生成处理：
+    - 移除 tools / systemInstruction
+    - 确保 contents 中每个 content 有 role 字段
+    - 清理 generationConfig 中与图像生成冲突的字段
+    - 注入 imageConfig
+    - 处理图像思维模式（默认 disabled）
+    """
+    # 移除不兼容字段（_normalize_to_camel_case 已统一 key，仅需 camelCase）
+    for key in ("tools", "toolConfig", "systemInstruction"):
+        inner_request.pop(key, None)
+
+    # 确保 contents 中每个 content 有 role 字段
+    contents = inner_request.get("contents")
+    if isinstance(contents, list):
+        for content in contents:
+            if isinstance(content, dict) and "role" not in content:
+                content["role"] = "user"
+
+    # 清理 generationConfig
+    gen_config = inner_request.setdefault("generationConfig", {})
+    if not isinstance(gen_config, dict):
+        gen_config = {}
+        inner_request["generationConfig"] = gen_config
+
+    # 移除与图像生成冲突的字段（_normalize_to_camel_case 已统一 key）
+    for key in ("responseMimeType", "responseModalities"):
+        gen_config.pop(key, None)
+
+    # 注入 imageConfig
+    gen_config["imageConfig"] = image_config
+
+    # 图像思维模式：默认 disabled（对齐 AM wrapper.rs image_thinking_mode）
+    gen_config["thinkingConfig"] = {"includeThoughts": False}
 
 
 def _compact_contents(inner_request: dict[str, Any]) -> None:
@@ -345,57 +712,89 @@ def wrap_v1internal_request(
 ) -> dict[str, Any]:
     """Wrap a GeminiRequest into Antigravity V1InternalRequest.
 
-    处理流程（对齐 AM wrapper.rs）：
-    1. 移除 model（移到顶层）
-    2. 移除 safetySettings（v1internal 不支持）
-    3. 深度清理 [undefined] 字符串
-    4. Claude model tool ID 注入（图像生成模型跳过）
-    5. Thinking budget 处理
-    6. 工具声明清洗（图像生成模型跳过）
-    7. System Instruction 注入（图像生成模型跳过）
-    8. 清理空 parts 的 contents 并合并连续同角色条目
-    9. 注入 sessionId（对齐 CLIProxyAPI）
-    10. 构建 v1internal 信封
+    处理流程（对齐 AM wrapper.rs + common_utils.rs）：
+    1. 移除 model / safetySettings
+    2. 深度清理 [undefined] 字符串
+    3. 模型别名映射（preview → physical）
+    4. 联网检测 + -online 后缀检测
+    5. 图像生成检测 + imageConfig 解析
+    6. Claude model tool ID 注入
+    7. thoughtSignature 注入到 functionCall parts
+    8. Thinking budget 处理
+    9. 工具声明清洗
+    10. Google Search 注入（联网请求）
+    11. System Instruction 注入
+    12. 清理空 parts 的 contents 并合并连续同角色条目
+    13. 注入 sessionId
+    14. 构建 v1internal 信封
     """
     from src.api.handlers.gemini.image_gen import is_image_gen_model
 
     inner_request = dict(gemini_request)
     inner_request.pop("model", None)
     inner_request.pop("safetySettings", None)
+    inner_request.pop("safety_settings", None)
 
-    is_image_gen = is_image_gen_model(model)
+    # 0. 统一 snake_case → camelCase（Gemini normalizer 输出 snake_case，但
+    #    v1internal 以及本模块所有 helper 均使用 camelCase）
+    _normalize_to_camel_case(inner_request)
 
     # 1. 深度清理 [undefined]
     _deep_clean_undefined(inner_request)
 
-    if not is_image_gen:
-        # 2. Claude tool ID 注入
-        _inject_claude_tool_ids_request(inner_request, model)
+    # 2. 模型别名映射（对齐 AM common_utils.rs）
+    has_online_suffix = _detect_online_suffix(model)
+    final_model = _resolve_model_alias(model)
 
-    # 3. Thinking budget 处理
-    _process_thinking_budget(inner_request, model)
+    # 3. 联网检测（对齐 AM：-online 后缀或客户端声明了联网工具）
+    has_networking = has_online_suffix or _detect_networking_tools(inner_request)
+
+    # 4. 图像生成检测 + imageConfig 解析
+    is_image_gen = is_image_gen_model(final_model)
+
+    if is_image_gen:
+        # 解析 imageConfig 并确定上游模型名
+        image_config, final_model = _parse_image_config(final_model, inner_request)
+        _apply_image_gen_config(inner_request, image_config)
+        request_type = "image_gen"
+        # 图像生成不需要联网
+        has_networking = False
+    else:
+        # 5. Claude tool ID 注入
+        _inject_claude_tool_ids_request(inner_request, final_model)
+
+        # 6. thoughtSignature 注入到 functionCall parts（对齐 AM wrapper.rs）
+        session_id = inner_request.get("sessionId")
+        if not isinstance(session_id, str):
+            # 提前生成 sessionId 用于 signature 查找
+            session_id = _generate_stable_session_id(inner_request)
+            inner_request["sessionId"] = session_id
+        _inject_thought_signatures(inner_request, session_id)
+
+    # 7. Thinking budget 处理（图像生成和普通请求都需要）
+    _process_thinking_budget(inner_request, final_model)
 
     if not is_image_gen:
-        # 4. 工具声明清洗
+        # 8. 工具声明清洗
         _clean_tool_declarations(inner_request)
 
-        # 5. System Instruction 注入
-        _inject_system_instruction(inner_request)
-    else:
-        # 图像生成模型：对齐 AM wrapper.rs，移除不兼容字段
-        inner_request.pop("tools", None)
-        inner_request.pop("toolConfig", None)
-        inner_request.pop("tool_config", None)
-        inner_request.pop("systemInstruction", None)
-        inner_request.pop("system_instruction", None)
-        request_type = "image_gen"
+        # 9. Google Search 注入（对齐 AM common_utils.rs）
+        if has_networking:
+            # 仅 gemini-2.5-flash 支持 googleSearch（对齐 AM：其他模型降级到 2.5-flash）
+            if final_model != WEB_SEARCH_MODEL:
+                final_model = WEB_SEARCH_MODEL
+            _inject_google_search_tool(inner_request)
+            request_type = "web_search"
 
-    # 6. 清理空 parts 的 contents 并合并连续同角色条目
-    #    跨格式转换（如 Responses API reasoning 块）可能产生空 parts 的 content，
-    #    Gemini API 要求每个 content 至少有一个有效 part，并且严格交替 user/model 角色。
+        # 10. System Instruction 注入
+        _inject_system_instruction(inner_request)
+
+    # 11. 清理空 parts 的 contents 并合并连续同角色条目
+    #     跨格式转换（如 Responses API reasoning 块）可能产生空 parts 的 content，
+    #     Gemini API 要求每个 content 至少有一个有效 part，并且严格交替 user/model 角色。
     _compact_contents(inner_request)
 
-    # 7. 注入 sessionId（对齐 CLIProxyAPI/sub2api）
+    # 12. 注入 sessionId（如果还没有的话）
     if "sessionId" not in inner_request:
         inner_request["sessionId"] = _generate_stable_session_id(inner_request)
 
@@ -403,7 +802,7 @@ def wrap_v1internal_request(
         "project": project_id,
         "requestId": f"agent-{uuid.uuid4()}",
         "request": inner_request,
-        "model": model,
+        "model": final_model,
         "userAgent": ANTIGRAVITY_REQUEST_USER_AGENT,
         "requestType": request_type,
     }

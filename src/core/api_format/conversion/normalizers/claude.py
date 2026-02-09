@@ -30,6 +30,7 @@ from src.core.api_format.conversion.internal import (
     Role,
     StopReason,
     TextBlock,
+    ThinkingBlock,
     ToolChoice,
     ToolChoiceType,
     ToolDefinition,
@@ -258,6 +259,16 @@ class ClaudeNormalizer(FormatNormalizer):
 
         content: list[dict[str, Any]] = []
         for b in internal.content:
+            if isinstance(b, ThinkingBlock):
+                if b.thinking:
+                    thinking_block: dict[str, Any] = {
+                        "type": "thinking",
+                        "thinking": b.thinking,
+                    }
+                    if b.signature:
+                        thinking_block["signature"] = b.signature
+                    content.append(thinking_block)
+                continue
             if isinstance(b, TextBlock):
                 if b.text:
                     content.append({"type": "text", "text": b.text})
@@ -360,6 +371,12 @@ class ClaudeNormalizer(FormatNormalizer):
             block: dict[str, Any] = block_raw if isinstance(block_raw, dict) else {}
             btype = str(block.get("type") or "unknown")
 
+            if btype == "thinking":
+                events.append(
+                    ContentBlockStartEvent(block_index=index, block_type=ContentType.THINKING)
+                )
+                return events
+
             if btype == "text":
                 events.append(
                     ContentBlockStartEvent(block_index=index, block_type=ContentType.TEXT)
@@ -396,6 +413,25 @@ class ClaudeNormalizer(FormatNormalizer):
             delta_raw = chunk.get("delta")
             delta: dict[str, Any] = delta_raw if isinstance(delta_raw, dict) else {}
             dtype = str(delta.get("type") or "unknown")
+
+            if dtype == "thinking_delta":
+                thinking = delta.get("thinking")
+                if thinking is None:
+                    return events
+                events.append(ContentDeltaEvent(block_index=index, text_delta=str(thinking)))
+                return events
+
+            if dtype == "signature_delta":
+                sig = delta.get("signature")
+                if isinstance(sig, str) and sig:
+                    events.append(
+                        ContentDeltaEvent(
+                            block_index=index,
+                            text_delta="",
+                            extra={"thought_signature": sig},
+                        )
+                    )
+                return events
 
             if dtype == "text_delta":
                 text = delta.get("text")
@@ -484,6 +520,20 @@ class ClaudeNormalizer(FormatNormalizer):
             return out
 
         if isinstance(event, ContentBlockStartEvent):
+            # 记录 block_index → block_type 映射（用于 ContentDeltaEvent 区分类型）
+            ss[f"block_type_{event.block_index}"] = event.block_type.value
+
+            if event.block_type == ContentType.THINKING:
+                # 对齐 AM Claude streaming.rs：thinking content block
+                out.append(
+                    {
+                        "type": "content_block_start",
+                        "index": int(event.block_index),
+                        "content_block": {"type": "thinking", "thinking": ""},
+                    }
+                )
+                return out
+
             if event.block_type == ContentType.TEXT:
                 out.append(
                     {
@@ -513,11 +563,32 @@ class ClaudeNormalizer(FormatNormalizer):
 
         if isinstance(event, ContentDeltaEvent):
             if event.text_delta:
+                block_type = ss.get(f"block_type_{event.block_index}")
+                if block_type == ContentType.THINKING.value:
+                    # 对齐 AM：thinking_delta
+                    out.append(
+                        {
+                            "type": "content_block_delta",
+                            "index": int(event.block_index),
+                            "delta": {"type": "thinking_delta", "thinking": event.text_delta},
+                        }
+                    )
+                else:
+                    out.append(
+                        {
+                            "type": "content_block_delta",
+                            "index": int(event.block_index),
+                            "delta": {"type": "text_delta", "text": event.text_delta},
+                        }
+                    )
+            # 对齐 AM：signature_delta（如果 extra 中有签名信息）
+            sig = event.extra.get("thought_signature") if event.extra else None
+            if isinstance(sig, str) and sig:
                 out.append(
                     {
                         "type": "content_block_delta",
                         "index": int(event.block_index),
-                        "delta": {"type": "text_delta", "text": event.text_delta},
+                        "delta": {"type": "signature_delta", "signature": sig},
                     }
                 )
             return out
@@ -648,6 +719,18 @@ class ClaudeNormalizer(FormatNormalizer):
                 continue
 
             btype = str(block.get("type") or "unknown")
+            if btype == "thinking":
+                thinking = str(block.get("thinking") or "")
+                signature = block.get("signature")
+                if thinking:
+                    blocks.append(
+                        ThinkingBlock(
+                            thinking=thinking,
+                            signature=str(signature) if signature else None,
+                        )
+                    )
+                continue
+
             if btype == "text":
                 text = str(block.get("text") or "")
                 if text:

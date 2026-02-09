@@ -32,6 +32,7 @@ from src.core.api_format.conversion.internal import (
     Role,
     StopReason,
     TextBlock,
+    ThinkingBlock,
     ToolChoice,
     ToolChoiceType,
     ToolDefinition,
@@ -544,6 +545,16 @@ class OpenAICliNormalizer(FormatNormalizer):
         self, event: ContentBlockStartEvent, state: StreamState, ss: dict[str, Any]
     ) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
+
+        # 记录 block_index → block_type 映射
+        ss[f"block_type_{event.block_index}"] = event.block_type.value
+
+        # Thinking block：Responses API 目前无 reasoning stream 事件
+        if event.block_type == ContentType.THINKING:
+            # thinking 内容静默收集，不输出（Responses API 无标准 reasoning 字段）
+            ss.setdefault("thinking_text", "")
+            return out
+
         # 工具调用块：输出 function_call 添加事件
         if event.block_type == ContentType.TOOL_USE:
             tool_id = event.tool_id or ""
@@ -626,6 +637,57 @@ class OpenAICliNormalizer(FormatNormalizer):
     ) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         if event.text_delta:
+            # Thinking delta：Responses API reasoning summary 事件
+            block_type = ss.get(f"block_type_{event.block_index}")
+            if block_type == ContentType.THINKING.value:
+                # 首次 thinking delta -> 添加 reasoning output item
+                if not ss.get("reasoning_output_started"):
+                    reasoning_output_index = int(ss.get("next_output_index") or 0)
+                    ss["next_output_index"] = reasoning_output_index + 1
+                    ss["reasoning_output_index"] = reasoning_output_index
+                    ss["reasoning_output_started"] = True
+                    reasoning_id = f"rs_{state.message_id or 'stream'}"
+                    ss["reasoning_id"] = reasoning_id
+                    ss.setdefault("output_order", []).append(
+                        {
+                            "kind": "reasoning",
+                            "id": reasoning_id,
+                            "output_index": reasoning_output_index,
+                        }
+                    )
+                    out.append(
+                        {
+                            "type": "response.output_item.added",
+                            "output_index": reasoning_output_index,
+                            "item": {
+                                "type": "reasoning",
+                                "id": reasoning_id,
+                                "summary": [],
+                            },
+                        }
+                    )
+                    # summary part 开始
+                    out.append(
+                        {
+                            "type": "response.reasoning_summary_part.added",
+                            "item_id": reasoning_id,
+                            "output_index": reasoning_output_index,
+                            "summary_index": 0,
+                            "part": {"type": "summary_text", "text": ""},
+                        }
+                    )
+                ss["thinking_text"] = str(ss.get("thinking_text") or "") + event.text_delta
+                out.append(
+                    {
+                        "type": "response.reasoning_summary_text.delta",
+                        "item_id": ss.get("reasoning_id", ""),
+                        "output_index": ss.get("reasoning_output_index", 0),
+                        "summary_index": 0,
+                        "delta": event.text_delta,
+                    }
+                )
+                return out
+
             if not ss.get("message_output_started"):
                 output_index = int(ss.get("next_output_index") or 0)
                 ss["next_output_index"] = output_index + 1
@@ -658,6 +720,42 @@ class OpenAICliNormalizer(FormatNormalizer):
     ) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         final_text = str(ss.get("collected_text") or "")
+        final_thinking = str(ss.get("thinking_text") or "")
+
+        # 先关闭 reasoning summary（如有）
+        if ss.get("reasoning_output_started"):
+            reasoning_id = ss.get("reasoning_id", "")
+            reasoning_output_index = ss.get("reasoning_output_index", 0)
+            out.append(
+                {
+                    "type": "response.reasoning_summary_text.done",
+                    "item_id": reasoning_id,
+                    "output_index": reasoning_output_index,
+                    "summary_index": 0,
+                    "text": final_thinking,
+                }
+            )
+            out.append(
+                {
+                    "type": "response.reasoning_summary_part.done",
+                    "item_id": reasoning_id,
+                    "output_index": reasoning_output_index,
+                    "summary_index": 0,
+                    "part": {"type": "summary_text", "text": final_thinking},
+                }
+            )
+            out.append(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": reasoning_output_index,
+                    "item": {
+                        "type": "reasoning",
+                        "id": reasoning_id,
+                        "summary": [{"type": "summary_text", "text": final_thinking}],
+                    },
+                }
+            )
+
         message_id = f"msg_{state.message_id or 'stream'}"
         message_item = {
             "type": "message",
@@ -677,11 +775,19 @@ class OpenAICliNormalizer(FormatNormalizer):
                     "item": message_item,
                 }
             )
+
+        # 构建最终 content（包含 thinking）
+        final_content: list[ContentBlock] = []
+        if final_thinking:
+            final_content.append(ThinkingBlock(thinking=final_thinking))
+        if final_text:
+            final_content.append(TextBlock(text=final_text))
+
         response_obj = self.response_from_internal(
             InternalResponse(
                 id=state.message_id or "resp",
                 model=state.model or "",
-                content=[TextBlock(text=final_text)] if final_text else [],
+                content=final_content,
                 stop_reason=event.stop_reason or StopReason.END_TURN,
                 usage=event.usage or UsageInfo(),
             )
@@ -704,7 +810,17 @@ class OpenAICliNormalizer(FormatNormalizer):
             for entry in output_order:
                 if not isinstance(entry, dict):
                     continue
-                if entry.get("kind") == "message":
+                if entry.get("kind") == "reasoning":
+                    thinking_text = str(ss.get("thinking_text") or "")
+                    if thinking_text:
+                        output_items.append(
+                            {
+                                "type": "reasoning",
+                                "id": entry.get("id", ""),
+                                "summary": [{"type": "summary_text", "text": thinking_text}],
+                            }
+                        )
+                elif entry.get("kind") == "message":
                     if message_item.get("content"):
                         output_items.append(message_item)
                 elif entry.get("kind") == "tool":
