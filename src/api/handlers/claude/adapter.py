@@ -160,8 +160,12 @@ class ClaudeChatAdapter(ChatAdapterBase):
         api_key: str,
         extra_headers: dict[str, str] | None = None,
     ) -> tuple[list, str | None]:
-        """查询 Claude API 支持的模型列表（使用 x-api-key 认证）"""
+        """查询 Claude API 支持的模型列表（兼容 x-api-key 和 Bearer 认证）"""
         headers = cls.build_headers_with_extra(api_key, extra_headers)
+        # 兼容第三方提供商：同时发送 Authorization: Bearer 认证头
+        # 官方 Claude API 使用 x-api-key，第三方代理可能使用 Bearer Token
+        if "authorization" not in {k.lower() for k in headers}:
+            headers["Authorization"] = f"Bearer {api_key}"
         return await cls._fetch_models_paginated(client, base_url, headers, cls.FORMAT_ID)
 
     @staticmethod
