@@ -503,6 +503,42 @@ def _extract_path(
     return path
 
 
+_ORIGINAL_PLACEHOLDER = "{{$original}}"
+
+
+def _contains_original_placeholder(value: Any) -> bool:
+    """递归检查 value 中是否包含 {{$original}} 占位符"""
+    if isinstance(value, str):
+        return _ORIGINAL_PLACEHOLDER in value
+    if isinstance(value, dict):
+        return any(_contains_original_placeholder(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_original_placeholder(item) for item in value)
+    return False
+
+
+def _resolve_original_placeholder(template: Any, original: Any) -> Any:
+    """递归解析模板中的 {{$original}} 占位符。
+
+    - 字符串完全匹配 {{$original}} → 直接返回原值（保留原始类型）
+    - 字符串部分包含 {{$original}} → str(original) 插值
+    - dict → 递归处理每个 value
+    - list → 递归处理每个元素
+    - 其他 → 原样返回
+    """
+    if isinstance(template, str):
+        if template == _ORIGINAL_PLACEHOLDER:
+            return original
+        if _ORIGINAL_PLACEHOLDER in template:
+            return template.replace(_ORIGINAL_PLACEHOLDER, str(original))
+        return template
+    if isinstance(template, dict):
+        return {k: _resolve_original_placeholder(v, original) for k, v in template.items()}
+    if isinstance(template, list):
+        return [_resolve_original_placeholder(item, original) for item in template]
+    return template
+
+
 def apply_body_rules(
     body: dict[str, Any],
     rules: list[dict[str, Any]],
@@ -521,6 +557,7 @@ def apply_body_rules(
 
     支持的规则类型：
     - set: 设置/覆盖字段 {"action": "set", "path": "metadata.user_id", "value": 123}
+        value 中的字符串 {{$original}} 会被替换为该路径的原值（完全匹配时保留类型）
     - drop: 删除字段 {"action": "drop", "path": "unwanted_field"}
     - rename: 重命名字段 {"action": "rename", "from": "old.key", "to": "new.key"}
     - append: 向数组追加元素 {"action": "append", "path": "messages", "value": {...}}
@@ -557,7 +594,11 @@ def apply_body_rules(
             path = _extract_path(rule, protected_lower)
             if not path:
                 continue
-            _set_nested_value(result, path, rule.get("value"))
+            value = rule.get("value")
+            if _contains_original_placeholder(value):
+                found, original = _get_nested_value(result, path)
+                value = _resolve_original_placeholder(value, original if found else None)
+            _set_nested_value(result, path, value)
 
         elif action == "drop":
             path = _extract_path(rule, protected_lower)

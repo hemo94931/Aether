@@ -1,3 +1,5 @@
+from typing import Any
+
 from src.api.handlers.base.request_builder import apply_body_rules
 
 
@@ -93,3 +95,126 @@ class TestApplyBodyRulesNestedPaths:
         result = apply_body_rules(body, [{"action": "set", "path": "a.c", "value": 2}])
         assert result == {"a": {"b": 1, "c": 2}}
         assert body == {"a": {"b": 1}}
+
+
+class TestSetWithOriginalPlaceholder:
+    """set 操作中 {{$original}} 占位符的测试"""
+
+    def test_wrap_string_in_object(self) -> None:
+        """核心用例：字符串值包裹成对象结构"""
+        body = {"para": "text"}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "para", "value": [{"text": "{{$original}}"}]}],
+        )
+        assert result == {"para": [{"text": "text"}]}
+
+    def test_exact_placeholder_preserves_number(self) -> None:
+        """完全匹配占位符时保留原始类型: number"""
+        body = {"count": 42}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "count", "value": {"num": "{{$original}}"}}],
+        )
+        assert result == {"count": {"num": 42}}
+        assert isinstance(result["count"]["num"], int)
+
+    def test_exact_placeholder_preserves_dict(self) -> None:
+        """完全匹配占位符时保留原始类型: dict"""
+        body = {"data": {"key": "val"}}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "data", "value": {"wrapped": "{{$original}}"}}],
+        )
+        assert result == {"data": {"wrapped": {"key": "val"}}}
+
+    def test_exact_placeholder_preserves_list(self) -> None:
+        """完全匹配占位符时保留原始类型: list"""
+        body = {"items": [1, 2, 3]}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "items", "value": {"arr": "{{$original}}"}}],
+        )
+        assert result == {"items": {"arr": [1, 2, 3]}}
+
+    def test_partial_placeholder_converts_to_string(self) -> None:
+        """部分匹配时将原值转为 str 拼接"""
+        body = {"name": "world"}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "name", "value": "hello_{{$original}}_suffix"}],
+        )
+        assert result == {"name": "hello_world_suffix"}
+
+    def test_partial_placeholder_with_number(self) -> None:
+        """部分匹配 + 非字符串原值: 数字转 str"""
+        body = {"ver": 3}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "ver", "value": "version_{{$original}}"}],
+        )
+        assert result == {"ver": "version_3"}
+
+    def test_no_placeholder_acts_like_plain_set(self) -> None:
+        """不含占位符时行为与原 set 完全一致"""
+        body = {"a": 1}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "a", "value": {"new": "val"}}],
+        )
+        assert result == {"a": {"new": "val"}}
+
+    def test_missing_path_uses_none(self) -> None:
+        """路径不存在时 original 为 None"""
+        body: dict[str, Any] = {}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "missing", "value": {"was": "{{$original}}"}}],
+        )
+        assert result == {"missing": {"was": None}}
+
+    def test_nested_path(self) -> None:
+        """嵌套路径"""
+        body = {"a": {"b": "original"}}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "a.b", "value": [{"content": "{{$original}}"}]}],
+        )
+        assert result == {"a": {"b": [{"content": "original"}]}}
+
+    def test_protected_field_ignored(self) -> None:
+        """受保护字段（model, stream）跳过"""
+        body = {"model": "gpt-4", "other": "val"}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "model", "value": "{{$original}}_modified"}],
+        )
+        assert result["model"] == "gpt-4"
+
+    def test_does_not_mutate_original(self) -> None:
+        """不修改原始 body"""
+        body = {"x": "original"}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "x", "value": {"wrapped": "{{$original}}"}}],
+        )
+        assert result == {"x": {"wrapped": "original"}}
+        assert body == {"x": "original"}
+
+    def test_multiple_placeholders_in_one_string(self) -> None:
+        """一个字符串中多个占位符"""
+        body = {"val": "X"}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "val", "value": "{{$original}}-{{$original}}"}],
+        )
+        assert result == {"val": "X-X"}
+
+    def test_deeply_nested_template(self) -> None:
+        """深层嵌套模板"""
+        body = {"data": "hello"}
+        result = apply_body_rules(
+            body,
+            [{"action": "set", "path": "data", "value": {"a": {"b": [{"c": "{{$original}}"}]}}}],
+        )
+        assert result == {"data": {"a": {"b": [{"c": "hello"}]}}}

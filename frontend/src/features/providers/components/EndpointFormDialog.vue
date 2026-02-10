@@ -347,7 +347,7 @@
                         <span class="text-muted-foreground text-xs">=</span>
                         <Input
                           :model-value="rule.value"
-                          placeholder="123 / &quot;text&quot; / [1,2]"
+                          placeholder="123 / &quot;text&quot; / {{$original}}"
                           size="sm"
                           class="flex-1 min-w-0 h-7 text-xs"
                           @update:model-value="(v) => updateEndpointBodyRuleField(endpoint.id, index, 'value', v)"
@@ -740,6 +740,65 @@ const RESERVED_BODY_FIELDS = new Set([
   'model',
   'stream',
 ])
+
+// {{$original}} 占位符处理
+const ORIGINAL_PLACEHOLDER = '{{$original}}'
+const ORIGINAL_SENTINEL = '__AETHER_ORIGINAL__'
+
+// 将 {{$original}} 替换为合法 JSON 以便 JSON.parse 校验
+// 处理三种写法：裸占位符 {{$original}}、带引号 "{{$original}}"、引号内拼接 "prefix_{{$original}}_suffix"
+function prepareValueForJsonParse(raw: string): string {
+  // Step 1: 纯文本替换占位符为 sentinel
+  const result = raw.replaceAll(ORIGINAL_PLACEHOLDER, ORIGINAL_SENTINEL)
+
+  // Step 2: 尝试直接 parse（占位符在引号内时已经是合法 JSON）
+  try { JSON.parse(result); return result } catch { /* sentinel not in valid JSON position */ }
+
+  // Step 3: 有裸 sentinel 不在引号内，需要扫描并补引号
+  let out = ''
+  let inStr = false
+  let i = 0
+  while (i < result.length) {
+    if (result[i] === '\\' && inStr) {
+      out += result[i] + (result[i + 1] || '')
+      i += 2
+      continue
+    }
+    if (result[i] === '"') {
+      inStr = !inStr
+      out += result[i]
+      i++
+      continue
+    }
+    if (!inStr && result.startsWith(ORIGINAL_SENTINEL, i)) {
+      out += '"' + ORIGINAL_SENTINEL + '"'
+      i += ORIGINAL_SENTINEL.length
+      continue
+    }
+    out += result[i]
+    i++
+  }
+  return out
+}
+
+// 递归还原: 将 sentinel 字符串还原为 {{$original}}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function restoreOriginalPlaceholder(value: any): any {
+  if (typeof value === 'string') {
+    if (value === ORIGINAL_SENTINEL) return ORIGINAL_PLACEHOLDER
+    if (value.includes(ORIGINAL_SENTINEL)) {
+      return value.replaceAll(ORIGINAL_SENTINEL, ORIGINAL_PLACEHOLDER)
+    }
+    return value
+  }
+  if (Array.isArray(value)) return value.map(restoreOriginalPlaceholder)
+  if (value !== null && typeof value === 'object') {
+    const result: Record<string, any> = {}
+    for (const [k, v] of Object.entries(value)) result[k] = restoreOriginalPlaceholder(v)
+    return result
+  }
+  return value
+}
 
 function parseBodyRulePathParts(path: string): string[] | null {
   const raw = path.trim()
@@ -1205,7 +1264,7 @@ function validateBodySetValue(rule: EditableBodyRule): string | null {
   const raw = rule.value.trim()
   if (!raw) return '值不能为空'
   try {
-    JSON.parse(raw)
+    JSON.parse(prepareValueForJsonParse(raw))
   } catch (err: any) {
     const msg = err instanceof Error ? err.message : String(err)
     return `JSON 格式错误：${msg}`
@@ -1219,7 +1278,7 @@ function getBodySetValueValidation(rule: EditableBodyRule): boolean | null {
   const raw = rule.value.trim()
   if (!raw) return null
   try {
-    JSON.parse(raw)
+    JSON.parse(prepareValueForJsonParse(raw))
     return true
   } catch {
     return false
@@ -1266,12 +1325,12 @@ function getBodySetValueValidationTip(rule: EditableBodyRule): string {
   const validation = getBodySetValueValidation(rule)
   if (validation === null) return '点击验证 JSON'
   if (validation === true) {
-    const parsed = JSON.parse(rule.value.trim())
+    const parsed = restoreOriginalPlaceholder(JSON.parse(prepareValueForJsonParse(rule.value.trim())))
     const type = Array.isArray(parsed) ? '数组' : typeof parsed === 'object' && parsed !== null ? '对象' : typeof parsed === 'string' ? '字符串' : typeof parsed === 'number' ? '数字' : typeof parsed === 'boolean' ? '布尔' : 'null'
     return `有效的 JSON (${type})`
   }
   try {
-    JSON.parse(rule.value.trim())
+    JSON.parse(prepareValueForJsonParse(rule.value.trim()))
     return ''
   } catch (err: any) {
     return err instanceof Error ? err.message : String(err)
@@ -1399,7 +1458,7 @@ function rulesToBodyRules(rules: EditableBodyRule[]): BodyRule[] | null {
   for (const rule of rules) {
     if (rule.action === 'set' && rule.path.trim()) {
       let value: any = rule.value
-      try { value = JSON.parse(rule.value.trim()) } catch { value = rule.value }
+      try { value = restoreOriginalPlaceholder(JSON.parse(prepareValueForJsonParse(rule.value.trim()))) } catch { value = rule.value }
       result.push({ action: 'set', path: rule.path.trim(), value })
     } else if (rule.action === 'drop' && rule.path.trim()) {
       result.push({ action: 'drop', path: rule.path.trim() })
@@ -1407,7 +1466,7 @@ function rulesToBodyRules(rules: EditableBodyRule[]): BodyRule[] | null {
       result.push({ action: 'rename', from: rule.from.trim(), to: rule.to.trim() })
     } else if ((rule.action === 'insert' || rule.action === 'append') && rule.path.trim()) {
       let value: any = rule.value
-      try { value = JSON.parse(rule.value.trim()) } catch { value = rule.value }
+      try { value = restoreOriginalPlaceholder(JSON.parse(prepareValueForJsonParse(rule.value.trim()))) } catch { value = rule.value }
       const indexStr = rule.index.trim()
       if (indexStr === '') {
         // 索引留空 → append 到末尾

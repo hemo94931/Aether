@@ -24,6 +24,7 @@ HeaderRule = dict[str, Any]
 # ========== Body Rule 类型定义 ==========
 # 请求体规则支持六种操作：
 # - set: 设置/覆盖字段 {"action": "set", "path": "metadata", "value": {"custom": "val"}}
+#     value 中的字符串 {{$original}} 会被替换为该路径的原值（完全匹配时保留类型）
 # - drop: 删除字段 {"action": "drop", "path": "unwanted_field"}
 # - rename: 重命名字段 {"action": "rename", "from": "old_key", "to": "new_key"}
 # - append: 向数组追加元素 {"action": "append", "path": "messages", "value": {...}}
