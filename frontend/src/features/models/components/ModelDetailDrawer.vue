@@ -560,9 +560,7 @@ function refreshRoutingData() {
 // 处理模型映射更新
 function handleMappingsUpdate(_mappings: string[]) {
   // 映射已在 ModelMappingsTab 内部保存到服务器
-  // 刷新路由数据以反映可能的候选变化
-  refreshRoutingData()
-  // 通知父组件刷新模型数据
+  // 路由数据刷新由 @refresh 事件处理，这里只需通知父组件刷新模型数据
   emit('refreshModel')
 }
 

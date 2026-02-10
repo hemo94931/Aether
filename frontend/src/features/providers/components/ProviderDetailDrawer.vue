@@ -872,7 +872,6 @@
               <!-- 模型查看 -->
               <ModelsTab
                 v-if="provider"
-                ref="modelsTabRef"
                 :key="`models-${provider.id}`"
                 :provider="provider"
                 :endpoints="endpoints"
@@ -1132,7 +1131,6 @@ const revealedKeys = ref<Map<string, string>>(new Map())
 const modelFormDialogOpen = ref(false)
 const editingModel = ref<Model | null>(null)
 const batchAssignDialogOpen = ref(false)
-const modelsTabRef = ref<InstanceType<typeof ModelsTab> | null>(null)
 const modelMappingTabRef = ref<InstanceType<typeof ModelMappingTab> | null>(null)
 
 // 密钥列表拖拽排序状态
@@ -1466,12 +1464,8 @@ async function confirmDeleteKey() {
   try {
     await deleteEndpointKey(keyId)
     showSuccess('密钥已删除')
-    // 并行刷新：端点列表、模型列表、模型映射（删除 Key 触发自动解除模型关联）
-    await Promise.all([
-      loadEndpoints(),
-      modelsTabRef.value?.reload(),
-      modelMappingTabRef.value?.reload()
-    ])
+    // 刷新端点列表及模型数据（删除 Key 触发自动解除模型关联）
+    await loadEndpoints()
     emit('refresh')
   } catch (err: any) {
     showError(err.response?.data?.detail || '删除密钥失败', '错误')
@@ -1799,11 +1793,6 @@ async function openAntigravityQuotaDialog(key: EndpointAPIKey) {
 
 async function handleKeyChanged() {
   await loadEndpoints()
-  // 并行刷新模型列表和模型映射（因为模型权限会影响正则映射预览）
-  await Promise.all([
-    modelsTabRef.value?.reload(),
-    modelMappingTabRef.value?.reload()
-  ])
   emit('refresh')
   // 添加/修改 key 后自动获取 Antigravity 配额（新 key 的 upstream_metadata 为空）
   void autoRefreshQuotaInBackground()
@@ -1892,19 +1881,20 @@ function handleBatchAssign() {
 
 // 处理批量关联完成
 async function handleBatchAssignChanged() {
-  await loadProvider()
+  await loadEndpoints()
   emit('refresh')
 }
 
 // 处理模型映射变更
 async function handleModelMappingChanged() {
+  await loadEndpoints()
   emit('refresh')
 }
 
 // 处理模型保存完成
 async function handleModelSaved() {
   editingModel.value = null
-  await loadProvider()
+  await loadEndpoints()
   emit('refresh')
 }
 

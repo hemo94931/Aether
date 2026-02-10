@@ -511,6 +511,7 @@ async function handleSave() {
   if (!hasChanges.value || saving.value) return
 
   saving.value = true
+  let hasAnyOperation = false
   try {
     let totalSuccess = 0
     const allErrors: string[] = []
@@ -519,6 +520,7 @@ async function handleSave() {
     for (const globalModelId of globalModelsToRemove.value) {
       const existingModel = existingModels.value.find(m => m.global_model_id === globalModelId)
       if (existingModel) {
+        hasAnyOperation = true
         try {
           await deleteModel(props.providerId, existingModel.id)
           totalSuccess++
@@ -535,6 +537,7 @@ async function handleSave() {
         m.provider_model_mappings?.some(mapping => mapping.name === modelId)
       )
       if (existingModel) {
+        hasAnyOperation = true
         try {
           await deleteModel(props.providerId, existingModel.id)
           totalSuccess++
@@ -546,19 +549,29 @@ async function handleSave() {
 
     // 添加全局模型
     if (globalModelsToAdd.value.length > 0) {
-      const result = await batchAssignModelsToProvider(props.providerId, globalModelsToAdd.value)
-      totalSuccess += result.success.length
-      if (result.errors.length > 0) {
-        allErrors.push(...result.errors.map(e => e.error))
+      hasAnyOperation = true
+      try {
+        const result = await batchAssignModelsToProvider(props.providerId, globalModelsToAdd.value)
+        totalSuccess += result.success.length
+        if (result.errors.length > 0) {
+          allErrors.push(...result.errors.map(e => e.error))
+        }
+      } catch (err: any) {
+        allErrors.push(parseApiError(err, '批量添加全局模型失败'))
       }
     }
 
     // 添加上游模型
     if (upstreamModelsToAdd.value.length > 0) {
-      const result = await importModelsFromUpstream(props.providerId, upstreamModelsToAdd.value)
-      totalSuccess += result.success.length
-      if (result.errors.length > 0) {
-        allErrors.push(...result.errors.map(e => e.error))
+      hasAnyOperation = true
+      try {
+        const result = await importModelsFromUpstream(props.providerId, upstreamModelsToAdd.value)
+        totalSuccess += result.success.length
+        if (result.errors.length > 0) {
+          allErrors.push(...result.errors.map(e => e.error))
+        }
+      } catch (err: any) {
+        allErrors.push(parseApiError(err, '导入上游模型失败'))
       }
     }
 
@@ -574,6 +587,10 @@ async function handleSave() {
     emit('update:open', false)
   } catch (err: any) {
     showError(parseApiError(err, '保存失败'), '错误')
+    // 即使出错，如果已执行过操作，也通知父组件刷新数据
+    if (hasAnyOperation) {
+      emit('changed')
+    }
   } finally {
     saving.value = false
   }

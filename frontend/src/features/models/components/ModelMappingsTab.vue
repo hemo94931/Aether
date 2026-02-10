@@ -531,12 +531,14 @@ async function saveMappings() {
     // 自动关联未关联的提供商
     if (unlinkedProviderIds.length > 0) {
       toastSuccess(`映射规则已保存，正在关联 ${unlinkedProviderIds.length} 个提供商...`)
-      // linkProviders 处理完成后会由父组件统一刷新数据，无需再 emit update
       emit('linkProviders', unlinkedProviderIds)
     } else {
       toastSuccess('映射规则已保存')
-      emit('update', cleanedMappings)
     }
+
+    // 保存成功后刷新数据
+    emit('update', cleanedMappings)
+    emit('refresh')
   } catch (err) {
     log.error('保存映射规则失败:', err)
     toastError('保存失败，请重试')
