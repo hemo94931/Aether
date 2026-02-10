@@ -8,7 +8,7 @@ WORKDIR /app
 COPY frontend/ ./frontend/
 RUN cd frontend && npm run build
 # ==================== 运行时镜像 ====================
-FROM python:3.14-slim
+FROM python:3.13-slim
 WORKDIR /app
 # 运行时依赖（无 gcc/nodejs/npm，使用 BuildKit 缓存加速）
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -19,7 +19,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libpq5 \
     curl
 # 从 base 镜像复制 Python 包
-COPY --from=builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 # 只复制需要的 Python 可执行文件
 COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/
 COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/
