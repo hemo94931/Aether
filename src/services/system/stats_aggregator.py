@@ -12,6 +12,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import Float, and_, case, cast, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.core.logger import logger
@@ -879,15 +880,23 @@ class StatsAggregatorService:
     @staticmethod
     def aggregate_hourly_stats_bundle(db: Session, hour_utc: datetime) -> StatsHourly:
         """聚合单小时所有统计（原子提交）"""
-        stats = StatsAggregatorService.aggregate_hourly_stats(db, hour_utc, commit=False)
-        StatsAggregatorService.aggregate_hourly_user_stats(db, hour_utc, commit=False)
-        StatsAggregatorService.aggregate_hourly_model_stats(db, hour_utc, commit=False)
-        StatsAggregatorService.aggregate_hourly_provider_stats(db, hour_utc, commit=False)
 
-        stats.is_complete = True
-        stats.aggregated_at = datetime.now(timezone.utc)
-        db.commit()
-        return stats
+        def _do_aggregate() -> StatsHourly:
+            stats = StatsAggregatorService.aggregate_hourly_stats(db, hour_utc, commit=False)
+            StatsAggregatorService.aggregate_hourly_user_stats(db, hour_utc, commit=False)
+            StatsAggregatorService.aggregate_hourly_model_stats(db, hour_utc, commit=False)
+            StatsAggregatorService.aggregate_hourly_provider_stats(db, hour_utc, commit=False)
+            stats.is_complete = True
+            stats.aggregated_at = datetime.now(timezone.utc)
+            db.commit()
+            return stats
+
+        try:
+            return _do_aggregate()
+        except IntegrityError:
+            db.rollback()
+            logger.warning("小时统计聚合冲突，重试更新: {}", hour_utc)
+            return _do_aggregate()
 
     @staticmethod
     def update_summary(db: Session) -> StatsSummary:

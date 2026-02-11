@@ -96,14 +96,24 @@
             </Select>
             <div class="h-4 w-px bg-border" />
             <Button
-              size="sm"
-              class="h-8 text-xs"
-              @click="showAddDialog = true"
+              variant="ghost"
+              size="icon"
+              class="h-8 w-8"
+              title="复制 HMAC Key"
+              @click="copyHmacKey"
             >
-              <Plus class="w-3.5 h-3.5 mr-1" />
-              手动添加
+              <Copy class="w-3.5 h-3.5" />
             </Button>
             <div class="h-4 w-px bg-border" />
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-8 w-8"
+              title="手动添加"
+              @click="showAddDialog = true"
+            >
+              <Plus class="w-3.5 h-3.5" />
+            </Button>
             <RefreshButton
               :loading="store.loading"
               @click="refresh"
@@ -429,18 +439,29 @@
       </form>
 
       <template #footer>
-        <Button
-          variant="outline"
-          @click="handleDialogClose(false)"
-        >
-          取消
-        </Button>
-        <Button
-          :disabled="addingNode || !addForm.name || !addForm.proxy_url"
-          @click="editingNode ? handleUpdateManualNode() : handleAddManualNode()"
-        >
-          {{ addingNode ? (editingNode ? '保存中...' : '添加中...') : (editingNode ? '保存' : '添加') }}
-        </Button>
+        <div class="flex items-center justify-between w-full">
+          <Button
+            variant="outline"
+            :disabled="testingUrl || !addForm.proxy_url"
+            @click="handleTestUrl"
+          >
+            {{ testingUrl ? '测试中...' : '测试' }}
+          </Button>
+          <div class="flex items-center gap-2">
+            <Button
+              variant="outline"
+              @click="handleDialogClose(false)"
+            >
+              取消
+            </Button>
+            <Button
+              :disabled="addingNode || !addForm.name || !addForm.proxy_url"
+              @click="editingNode ? handleUpdateManualNode() : handleAddManualNode()"
+            >
+              {{ addingNode ? (editingNode ? '保存中...' : '添加中...') : (editingNode ? '保存' : '添加') }}
+            </Button>
+          </div>
+        </div>
       </template>
     </Dialog>
 
@@ -539,6 +560,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
 import { useToast } from '@/composables/useToast'
+import { useClipboard } from '@/composables/useClipboard'
 import { useConfirm } from '@/composables/useConfirm'
 import { proxyNodesApi, type ProxyNode, type ProxyNodeRemoteConfig } from '@/api/proxy-nodes'
 
@@ -564,11 +586,12 @@ import {
   Dialog,
 } from '@/components/ui'
 
-import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings } from 'lucide-vue-next'
+import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings, Copy } from 'lucide-vue-next'
 import { formatRegion } from '@/utils/region'
 import HardwareTooltip from './components/HardwareTooltip.vue'
 
 const { success, error: toastError } = useToast()
+const { copyToClipboard } = useClipboard()
 const { confirmDanger } = useConfirm()
 const store = useProxyNodesStore()
 
@@ -602,6 +625,7 @@ const configForm = ref({
 
 // 测试连通性
 const testingNodes = ref(new Set<string>())
+const testingUrl = ref(false)
 
 const filteredNodes = computed(() => {
   let filtered = [...store.nodes]
@@ -636,6 +660,38 @@ onMounted(async () => {
 
 async function refresh() {
   await store.fetchNodes()
+}
+
+async function handleTestUrl() {
+  if (!addForm.value.proxy_url || testingUrl.value) return
+  testingUrl.value = true
+  try {
+    const result = await proxyNodesApi.testProxyUrl({
+      proxy_url: addForm.value.proxy_url,
+      username: addForm.value.username || undefined,
+      password: addForm.value.password || undefined,
+    })
+    if (result.success) {
+      const parts = [`延迟: ${result.latency_ms}ms`]
+      if (result.exit_ip) parts.push(`出口IP: ${result.exit_ip}`)
+      success(`连通性测试通过，${parts.join('，')}`)
+    } else {
+      toastError(`连通性测试失败: ${result.error || '未知错误'}`)
+    }
+  } catch (err: any) {
+    toastError(err.response?.data?.error?.message || '测试请求失败')
+  } finally {
+    testingUrl.value = false
+  }
+}
+
+async function copyHmacKey() {
+  try {
+    const { proxy_hmac_key } = await proxyNodesApi.getHmacKey()
+    await copyToClipboard(proxy_hmac_key)
+  } catch (err: any) {
+    toastError(err.response?.data?.error?.message || err.response?.data?.detail || '获取 HMAC Key 失败')
+  }
 }
 
 function handleEdit(node: ProxyNode) {

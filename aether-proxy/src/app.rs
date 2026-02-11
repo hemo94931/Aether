@@ -97,26 +97,7 @@ pub async fn run(mut config: Config) -> anyhow::Result<()> {
     let dynamic = Arc::new(RwLock::new(DynamicConfig::from_config(&config)));
 
     // Build delegate HTTP client (for proxy-initiated upstream requests).
-    // No overall timeout — SSE streams can last indefinitely.
-    // Connect timeout limits connection establishment; Aether controls
-    // first-byte / idle timeouts on its own side.
-    let mut delegate_builder = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(config.delegate_connect_timeout_secs))
-        .pool_max_idle_per_host(config.delegate_pool_max_idle_per_host)
-        .pool_idle_timeout(Duration::from_secs(config.delegate_pool_idle_timeout_secs))
-        .tcp_nodelay(config.delegate_tcp_nodelay);
-
-    if config.delegate_tcp_keepalive_secs > 0 {
-        delegate_builder = delegate_builder.tcp_keepalive(Some(Duration::from_secs(
-            config.delegate_tcp_keepalive_secs,
-        )));
-    } else {
-        delegate_builder = delegate_builder.tcp_keepalive(None);
-    }
-
-    let delegate_client = delegate_builder
-        .build()
-        .expect("failed to create delegate HTTP client");
+    let delegate_client = proxy::delegate_client::build_delegate_client(&config);
 
     // Build shared application state
     let state = Arc::new(AppState {

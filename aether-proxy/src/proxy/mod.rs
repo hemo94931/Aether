@@ -1,5 +1,6 @@
 pub mod connect;
 pub mod delegate;
+pub mod delegate_client;
 pub mod server;
 pub mod target_filter;
 pub mod tls;

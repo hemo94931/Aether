@@ -205,7 +205,10 @@ class CandidateResolver:
                         "status": "skipped",
                         "skip_reason": candidate.skip_reason,
                         "is_cached": candidate.is_cached,
-                        "extra_data": {},
+                        "extra_data": {
+                            "needs_conversion": candidate.needs_conversion,
+                            "provider_api_format": candidate.provider_api_format or None,
+                        },
                         "required_capabilities": active_capabilities,
                         "created_at": datetime.now(timezone.utc),
                     }
@@ -235,7 +238,10 @@ class CandidateResolver:
                             "key_id": key.id,
                             "status": "available",
                             "is_cached": candidate.is_cached,
-                            "extra_data": {},
+                            "extra_data": {
+                                "needs_conversion": candidate.needs_conversion,
+                                "provider_api_format": candidate.provider_api_format or None,
+                            },
                             "required_capabilities": active_capabilities,
                             "created_at": datetime.now(timezone.utc),
                         }

@@ -216,6 +216,18 @@ async def test_proxy_node(node_id: str, request: Request, db: Session = Depends(
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
+@router.get("/hmac-key")
+async def get_proxy_hmac_key(request: Request, db: Session = Depends(get_db)) -> Any:
+    adapter = AdminGetProxyHmacKeyAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+@router.post("/test-url")
+async def test_proxy_url(request: Request, db: Session = Depends(get_db)) -> Any:
+    adapter = AdminTestProxyUrlAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
 @router.put("/{node_id}/config")
 async def update_proxy_node_config(
     node_id: str, request: Request, db: Session = Depends(get_db)
@@ -485,3 +497,46 @@ class AdminUpdateProxyNodeConfigAdapter(AdminApiAdapter):
             "remote_config": node.remote_config,
             "node": node_to_dict(node),
         }
+
+
+@dataclass
+class AdminGetProxyHmacKeyAdapter(AdminApiAdapter):
+    """获取 proxy_hmac_key 供管理员复制到 aether-proxy 部署"""
+
+    name: str = "admin_get_proxy_hmac_key"
+
+    async def handle(self, context: ApiRequestContext) -> Any:
+        from src.config.settings import config
+
+        key = config.proxy_hmac_key
+        if not key:
+            raise InvalidRequestException(
+                "PROXY_HMAC_KEY 未配置（也未设置 ENCRYPTION_KEY 用于自动派生）"
+            )
+        return {"proxy_hmac_key": key}
+
+
+class TestProxyUrlRequest(BaseModel):
+    proxy_url: str = Field(..., min_length=1, max_length=500)
+    username: str | None = Field(None, max_length=255)
+    password: str | None = Field(None, max_length=500)
+
+
+@dataclass
+class AdminTestProxyUrlAdapter(AdminApiAdapter):
+    """通过 proxy_url 直接测试代理连通性（无需已注册节点）"""
+
+    name: str = "admin_test_proxy_url"
+
+    async def handle(self, context: ApiRequestContext) -> Any:
+        payload = context.ensure_json_body()
+        try:
+            req = TestProxyUrlRequest.model_validate(payload)
+        except ValidationError as exc:
+            raise InvalidRequestException("输入验证失败: " + _format_validation_error(exc))
+
+        return await ProxyNodeService.test_proxy_url(
+            proxy_url=req.proxy_url,
+            username=req.username,
+            password=req.password,
+        )

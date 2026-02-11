@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { ProxyNode } from '@/api/proxy-nodes'
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from '@/components/ui'
 import { Cpu } from 'lucide-vue-next'
 import { computed } from 'vue'
@@ -76,36 +77,37 @@ function formatNumber(n: number) {
 </script>
 
 <template>
-  <Popover v-if="showHardwareInfo">
-    <PopoverTrigger as-child>
-      <button
-        type="button"
-        title="Hardware info"
-        aria-label="Hardware info"
-        class="inline-flex items-center justify-center rounded-sm p-0.5 hover:bg-muted/60 transition-colors"
-      >
-        <Cpu class="h-3.5 w-3.5 text-muted-foreground" />
-      </button>
-    </PopoverTrigger>
-    <PopoverContent
-      side="right"
-      :side-offset="8"
-      class="w-auto p-3 text-xs space-y-1"
-    >
-      <div
-        v-if="hardwareRows.length === 0"
-        class="text-muted-foreground"
-      >
-        No hardware info reported.
-      </div>
-      <template v-else>
-        <div
-          v-for="row in hardwareRows"
-          :key="row.label"
+  <TooltipProvider v-if="showHardwareInfo">
+    <Tooltip>
+      <TooltipTrigger as-child>
+        <button
+          type="button"
+          aria-label="硬件信息"
+          class="inline-flex items-center justify-center rounded-sm p-0.5 hover:bg-muted/60 transition-colors"
         >
-          {{ row.label }}: {{ row.value }}
+          <Cpu class="h-3.5 w-3.5 text-muted-foreground" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        side="right"
+        :side-offset="8"
+        class="w-auto px-3 py-2 text-xs space-y-1"
+      >
+        <div
+          v-if="hardwareRows.length === 0"
+          class="text-muted-foreground"
+        >
+          No hardware info reported.
         </div>
-      </template>
-    </PopoverContent>
-  </Popover>
+        <template v-else>
+          <div
+            v-for="row in hardwareRows"
+            :key="row.label"
+          >
+            {{ row.label }}: {{ row.value }}
+          </div>
+        </template>
+      </TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
 </template>

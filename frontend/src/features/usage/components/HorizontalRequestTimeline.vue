@@ -92,11 +92,30 @@
                 </div>
               </div>
 
+              <!-- 格式转换标记（节点下方） -->
+              <div
+                v-if="group.hasConversion"
+                class="conversion-indicator"
+              >
+                {{ group.primary.extra_data?.provider_api_format || '转换' }}
+              </div>
+
               <!-- 连接线 -->
               <div
                 v-if="groupIndex < groupedTimeline.length - 1"
-                class="node-line"
-              />
+                class="node-line-wrapper"
+              >
+                <div
+                  class="node-line"
+                  :class="{ 'conversion-boundary': groupIndex + 1 === conversionBoundaryIndex }"
+                />
+                <span
+                  v-if="groupIndex + 1 === conversionBoundaryIndex"
+                  class="boundary-label"
+                >
+                  格式转换
+                </span>
+              </div>
             </div>
           </div>
 
@@ -181,6 +200,19 @@
                   >
                     <span class="info-label">首字 (TTFB)</span>
                     <span class="info-value mono">{{ formatLatency(currentAttempt.extra_data.first_byte_time_ms) }}</span>
+                  </div>
+                  <div
+                    v-if="currentAttempt.extra_data?.needs_conversion"
+                    class="info-item"
+                  >
+                    <span class="info-label">格式</span>
+                    <span class="info-value">
+                      <span class="conversion-badge">格式转换</span>
+                      <code
+                        v-if="currentAttempt.extra_data?.provider_api_format"
+                        class="ml-1.5 text-xs"
+                      >{{ currentAttempt.extra_data.provider_api_format }}</code>
+                    </span>
                   </div>
                   <div
                     v-if="currentAttempt.key_name || currentAttempt.key_id"
@@ -353,6 +385,7 @@ interface NodeGroup {
   totalLatency: number  // 所有尝试的总延迟
   startIndex: number
   endIndex: number
+  hasConversion: boolean  // 组内是否有格式转换候选
 }
 
 // 用量数据类型
@@ -478,8 +511,28 @@ const proxyTimingBreakdown = (proxy: Record<string, any>): string => {
     parts.push(label)
   }
 
-  parts.push(`DNS ${formatLatency(t.dns_ms)}`)
-  parts.push(`上游 ${formatLatency(t.upstream_ms)}`)
+  const ttfbMs = t.ttfb_ms ?? t.upstream_ms
+  const processingMs = t.upstream_processing_ms ?? (
+    ttfbMs != null && t.connect_ms != null && t.tls_ms != null
+      ? Math.max(0, ttfbMs - t.connect_ms - t.tls_ms)
+      : null
+  )
+
+  if (t.dns_ms != null && t.dns_ms > 0) {
+    parts.push(`DNS ${formatLatency(t.dns_ms)}`)
+  }
+  if (t.connect_ms != null && t.connect_ms > 0) {
+    parts.push(`连接 ${formatLatency(t.connect_ms)}`)
+  }
+  if (t.tls_ms != null && t.tls_ms > 0) {
+    parts.push(`TLS ${formatLatency(t.tls_ms)}`)
+  }
+  if (ttfbMs != null && ttfbMs > 0) {
+    parts.push(`TTFB ${formatLatency(ttfbMs)}`)
+  }
+  if (processingMs != null && processingMs > 0) {
+    parts.push(`上游处理 ${formatLatency(Math.round(processingMs))}`)
+  }
 
   // 计算 Aether→代理 之间无法解释的耗时差
   if (proxy.ttfb_ms != null && t.total_ms != null) {
@@ -535,6 +588,9 @@ const groupedTimeline = computed<NodeGroup[]>(() => {
       currentGroup.retryCount++
       currentGroup.endIndex = index
       currentGroup.totalLatency += candidate.latency_ms || 0
+      if (candidate.extra_data?.needs_conversion) {
+        currentGroup.hasConversion = true
+      }
       // 按优先级提升组状态：success > streaming/pending > failed/cancelled/stream_interrupted > skipped > available/unused
       const statusPriority: Record<string, number> = {
         available: 0, unused: 0, skipped: 1,
@@ -557,13 +613,24 @@ const groupedTimeline = computed<NodeGroup[]>(() => {
         retryCount: 0,
         totalLatency: candidate.latency_ms || 0,
         startIndex: index,
-        endIndex: index
+        endIndex: index,
+        hasConversion: candidate.extra_data?.needs_conversion === true,
       }
       groups.push(currentGroup)
     }
   })
 
   return groups
+})
+
+// 格式转换分界点索引（首个 hasConversion=true 的 group index）
+const conversionBoundaryIndex = computed(() => {
+  const groups = groupedTimeline.value
+  if (!groups || groups.length === 0) return -1
+  const idx = groups.findIndex(g => g.hasConversion)
+  // 只有当分界点不在最开头时才有意义（前面有 exact 候选）
+  if (idx <= 0) return -1
+  return idx
 })
 
 // 计算链路总耗时（使用成功候选的 latency_ms 字段）
@@ -1076,15 +1143,69 @@ const getStatusColorClass = (status: string) => {
 .node-dot.status-skipped { color: hsl(var(--primary)); }
 .node-dot.status-available { color: #d1d5db; }
 
-.node-line {
+/* 格式转换标记（节点下方） */
+.conversion-indicator {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.55rem;
+  color: hsl(var(--muted-foreground) / 0.7);
+  white-space: nowrap;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 1px 4px;
+  border: 1px dashed hsl(var(--border));
+  border-radius: 3px;
+  background: hsl(var(--muted) / 0.3);
+}
+
+/* 连接线容器 */
+.node-line-wrapper {
   position: absolute;
   right: -64px;
   top: 50%;
   transform: translateY(-50%);
   width: 64px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.node-line {
+  width: 100%;
   height: 2px;
   background: hsl(var(--border));
-  z-index: 1;
+}
+
+/* 格式转换分界线 */
+.node-line.conversion-boundary {
+  background: none;
+  height: 0;
+  border-top: 2px dashed hsl(var(--muted-foreground) / 0.4);
+}
+
+.boundary-label {
+  position: absolute;
+  top: -14px;
+  font-size: 0.55rem;
+  color: hsl(var(--muted-foreground) / 0.6);
+  white-space: nowrap;
+}
+
+/* 详情面板中的格式转换标签 */
+.conversion-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted) / 0.5);
+  border: 1px dashed hsl(var(--border));
+  border-radius: 4px;
 }
 
 /* 详情面板 */

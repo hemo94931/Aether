@@ -343,9 +343,15 @@ pub async fn cmd_upgrade(version: Option<String>) -> anyhow::Result<()> {
 
     // Restart systemd service if running
     if super::service::is_service_active() {
-        eprintln!("  Restarting systemd service...");
-        super::service::run_cmd("systemctl", &["restart", "aether-proxy"])?;
-        eprintln!("  Service restarted.");
+        if super::service::is_root() {
+            eprintln!("  Restarting systemd service...");
+            super::service::run_cmd("systemctl", &["restart", "aether-proxy"])?;
+            eprintln!("  Service restarted.");
+        } else {
+            eprintln!("  Systemd service is active, but restart requires root.");
+            eprintln!("  Run: sudo aether-proxy restart");
+            eprintln!("  Skipping restart.");
+        }
     } else {
         eprintln!("  No active systemd service detected, skipping restart.");
     }

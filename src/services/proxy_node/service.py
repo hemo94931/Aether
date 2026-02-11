@@ -91,6 +91,69 @@ def _sanitize_proxy_error(err: Exception) -> str:
     return re.sub(r"://[^@/]+@", "://***@", str(err))
 
 
+async def _test_proxy_connectivity(proxy_url: str) -> dict[str, Any]:
+    """通过代理 URL 测试连通性，返回标准化结果 dict"""
+    import time as _time
+
+    test_url = "https://1.1.1.1/cdn-cgi/trace"
+    start = _time.monotonic()
+    proxy_param = make_proxy_param(proxy_url)
+
+    try:
+        async with httpx.AsyncClient(
+            proxy=proxy_param,
+            timeout=httpx.Timeout(15.0, connect=10.0),
+        ) as client:
+            response = await client.get(test_url)
+            elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
+
+            exit_ip = None
+            if response.status_code == 200:
+                for line in response.text.splitlines():
+                    if line.startswith("ip="):
+                        exit_ip = line.split("=", 1)[1].strip()
+                        break
+
+            return {
+                "success": True,
+                "latency_ms": elapsed_ms,
+                "exit_ip": exit_ip,
+                "error": None,
+            }
+    except httpx.ProxyError as exc:
+        elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
+        return {
+            "success": False,
+            "latency_ms": elapsed_ms,
+            "exit_ip": None,
+            "error": f"代理连接失败: {_sanitize_proxy_error(exc)}",
+        }
+    except httpx.ConnectError as exc:
+        elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
+        return {
+            "success": False,
+            "latency_ms": elapsed_ms,
+            "exit_ip": None,
+            "error": f"连接失败: {_sanitize_proxy_error(exc)}",
+        }
+    except httpx.TimeoutException:
+        elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
+        return {
+            "success": False,
+            "latency_ms": elapsed_ms,
+            "exit_ip": None,
+            "error": "连接超时（15秒）",
+        }
+    except Exception as exc:
+        elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
+        return {
+            "success": False,
+            "latency_ms": elapsed_ms,
+            "exit_ip": None,
+            "error": _sanitize_proxy_error(exc),
+        }
+
+
 def _build_test_proxy_url(node: ProxyNode) -> str:
     """为测试连通性构建代理 URL（无需节点在线）"""
     if node.is_manual:
@@ -377,76 +440,25 @@ class ProxyNodeService:
     @staticmethod
     async def test_node(db: Session, *, node_id: str) -> dict[str, Any]:
         """测试代理节点连通性和延迟"""
-        import time as _time
-
         node = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
         if not node:
             raise NotFoundException(f"ProxyNode {node_id} 不存在", "proxy_node")
 
-        # 构建代理 URL
         try:
             proxy_url = _build_test_proxy_url(node)
         except Exception as exc:
             return {"success": False, "latency_ms": None, "exit_ip": None, "error": str(exc)}
 
-        test_url = "https://1.1.1.1/cdn-cgi/trace"
-        start = _time.monotonic()
+        return await _test_proxy_connectivity(proxy_url)
 
-        proxy_param = make_proxy_param(proxy_url)
-
-        try:
-            async with httpx.AsyncClient(
-                proxy=proxy_param,
-                timeout=httpx.Timeout(15.0, connect=10.0),
-            ) as client:
-                response = await client.get(test_url)
-                elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-
-                exit_ip = None
-                if response.status_code == 200:
-                    for line in response.text.splitlines():
-                        if line.startswith("ip="):
-                            exit_ip = line.split("=", 1)[1].strip()
-                            break
-
-                return {
-                    "success": True,
-                    "latency_ms": elapsed_ms,
-                    "exit_ip": exit_ip,
-                    "error": None,
-                }
-        except httpx.ProxyError as exc:
-            elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-            return {
-                "success": False,
-                "latency_ms": elapsed_ms,
-                "exit_ip": None,
-                "error": f"代理连接失败: {_sanitize_proxy_error(exc)}",
-            }
-        except httpx.ConnectError as exc:
-            elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-            return {
-                "success": False,
-                "latency_ms": elapsed_ms,
-                "exit_ip": None,
-                "error": f"连接失败: {_sanitize_proxy_error(exc)}",
-            }
-        except httpx.TimeoutException:
-            elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-            return {
-                "success": False,
-                "latency_ms": elapsed_ms,
-                "exit_ip": None,
-                "error": "连接超时（15秒）",
-            }
-        except Exception as exc:
-            elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-            return {
-                "success": False,
-                "latency_ms": elapsed_ms,
-                "exit_ip": None,
-                "error": _sanitize_proxy_error(exc),
-            }
+    @staticmethod
+    async def test_proxy_url(
+        *, proxy_url: str, username: str | None = None, password: str | None = None
+    ) -> dict[str, Any]:
+        """直接通过 proxy_url 测试代理连通性（无需已注册节点）"""
+        if username:
+            proxy_url = inject_auth_into_proxy_url(proxy_url, username, password)
+        return await _test_proxy_connectivity(proxy_url)
 
     @staticmethod
     def update_node_config(

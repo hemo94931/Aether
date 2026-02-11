@@ -7,7 +7,8 @@ description = "Forward proxy for Aether with HMAC authentication"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["http1", "server"] }
-hyper-util = { version = "0.1", features = ["tokio", "http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "http1", "http2", "server", "client-legacy"] }
+tower-service = "0.3"
 http-body-util = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "http2"] }
 futures-util = "0.3"
@@ -26,6 +27,7 @@ hex = "0.4"
 anyhow = "1"
 toml = "0.8"
 tokio-rustls = "0.26"
+webpki-roots = "1"
 rustls = { version = "0.23", features = ["ring"] }
 rustls-pki-types = "1"
 rustls-pemfile = "2"

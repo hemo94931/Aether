@@ -96,4 +96,14 @@ export const proxyNodesApi = {
     const response = await apiClient.put<{ node_id: string; config_version: number; remote_config: ProxyNodeRemoteConfig; node: ProxyNode }>(`/api/admin/proxy-nodes/${nodeId}/config`, data)
     return response.data
   },
+
+  async testProxyUrl(data: { proxy_url: string; username?: string; password?: string }): Promise<ProxyNodeTestResult> {
+    const response = await apiClient.post<ProxyNodeTestResult>('/api/admin/proxy-nodes/test-url', data)
+    return response.data
+  },
+
+  async getHmacKey(): Promise<{ proxy_hmac_key: string }> {
+    const response = await apiClient.get<{ proxy_hmac_key: string }>('/api/admin/proxy-nodes/hmac-key')
+    return response.data
+  },
 }

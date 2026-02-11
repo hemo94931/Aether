@@ -12,6 +12,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::config::Config;
 use crate::hardware::HardwareInfo;
+use crate::proxy::delegate_client::DelegateClient;
 use crate::proxy::target_filter::DnsCache;
 use crate::registration::client::AetherClient;
 use crate::runtime::SharedDynamicConfig;
@@ -26,8 +27,8 @@ pub struct AppState {
     pub public_ip: String,
     pub tls_fingerprint: Option<String>,
     pub tls_acceptor: Option<TlsAcceptor>,
-    /// Shared reqwest client for delegate mode (proxy issues upstream requests directly).
-    pub delegate_client: reqwest::Client,
+    /// Shared delegate client for proxy-initiated upstream requests.
+    pub delegate_client: DelegateClient,
     /// Active connection count for metrics reporting.
     pub active_connections: Arc<AtomicU64>,
     /// Connection concurrency limiter.
