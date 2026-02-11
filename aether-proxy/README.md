@@ -6,8 +6,7 @@ Aether 正向代理节点，部署在海外 VPS 上，为墙内的 Aether 实例
 
 ### 下载预编译二进制
 
-在 [GitHub Releases](../../releases) 页面下载对应平台的预编译文件，无需安装 Rust 环境。
-
+在 [GitHub Releases](https://github.com/fawney19/Aether/releases) 页面下载对应平台的预编译文件，无需安装 Rust 环境。
 
 ## 快速开始
 
@@ -29,7 +28,8 @@ sudo aether-proxy setup
 # 4. 彻底卸载
 sudo aether-proxy uninstall
 ```
-保存后配置写入 `aether-proxy.toml`，如果启用了 Install Service，将自动注册并启动 systemd 服务。
+
+完成向导后, 配置自动保存到 `aether-proxy.toml`，如果启用了 Install Service，将自动注册并启动 systemd 服务。
 
 ### 直接运行
 
