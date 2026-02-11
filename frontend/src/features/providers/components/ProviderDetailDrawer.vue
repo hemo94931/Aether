@@ -208,6 +208,7 @@
                   v-if="allKeys.length > 0"
                   ref="keysListRef"
                   class="divide-y divide-border/40"
+                  :class="shouldPaginateKeys && 'flex flex-col'"
                   :style="keysFixedHeight ? { minHeight: keysFixedHeight + 'px' } : undefined"
                 >
                   <div
@@ -826,7 +827,7 @@
                   <!-- 分页控制 -->
                   <div
                     v-if="shouldPaginateKeys"
-                    class="px-4 py-2 flex items-center justify-between text-xs text-muted-foreground"
+                    class="px-4 py-2 flex items-center justify-between text-xs text-muted-foreground mt-auto"
                   >
                     <span>共 {{ allKeys.length }} 个{{ provider.provider_type === 'custom' ? '密钥' : '账号' }}</span>
                     <div class="flex items-center gap-1.5">
