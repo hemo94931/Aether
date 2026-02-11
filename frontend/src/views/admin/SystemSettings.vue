@@ -1795,9 +1795,9 @@ function handleConfigFileSelect(event: Event) {
       const content = e.target?.result as string
       const data = JSON.parse(content) as ConfigExportData
 
-      // 验证版本（支持 2.0 和 2.1）
-      if (!['2.0', '2.1'].includes(data.version)) {
-        error(`不支持的配置版本: ${data.version}`)
+      // 基本格式验证：确保有版本字段
+      if (!data.version) {
+        error('无效的配置文件：缺少版本信息')
         return
       }
 

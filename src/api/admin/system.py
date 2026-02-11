@@ -1067,7 +1067,7 @@ class AdminExportConfigAdapter(AdminApiAdapter):
             )
 
         return {
-            "version": "2.2",
+            "version": CONFIG_EXPORT_VERSION,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "global_models": global_models_data,
             "providers": providers_data,
@@ -1077,6 +1077,8 @@ class AdminExportConfigAdapter(AdminApiAdapter):
         }
 
 
+CONFIG_EXPORT_VERSION = "2.2"
+CONFIG_SUPPORTED_VERSIONS = ("2.0", "2.1", "2.2")
 MAX_IMPORT_SIZE = 10 * 1024 * 1024  # 10MB
 
 
@@ -1133,10 +1135,10 @@ class AdminImportConfigAdapter(AdminApiAdapter):
         db = context.db
         payload = context.ensure_json_body()
 
-        # 验证配置版本（支持 2.0、2.1 和 2.2）
+        # 验证配置版本
         version = payload.get("version")
-        if version not in ("2.0", "2.1", "2.2"):
-            raise InvalidRequestException(f"不支持的配置版本: {version}")
+        if version not in CONFIG_SUPPORTED_VERSIONS:
+            raise InvalidRequestException(f"不支持的配置版本: {version}，支持的版本: {', '.join(CONFIG_SUPPORTED_VERSIONS)}")
 
         # 获取导入选项
         merge_mode = payload.get("merge_mode", "skip")  # skip, overwrite, error
