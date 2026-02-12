@@ -71,7 +71,7 @@ def _iter_ast_nodes(node: ast.AST) -> Iterable[ast.AST]:
         yield from _iter_ast_nodes(child)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=256)
 def _validate_expression_cached(expression: str) -> ast.Expression:
     """
     Parse + validate an expression and cache the resulting AST.

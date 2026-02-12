@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import deque
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -108,8 +109,13 @@ class StreamUsageTracker:
             "stop_sequence": None,
             "usage": {},
         }
-        self.response_chunks = []  # 保存所有原始响应块
-        self.raw_chunks = []  # 保存所有原始字节流（用于错误诊断）
+        self.response_chunks = []  # 保存解析后的响应块
+        self.response_chunks_count = 0  # 响应块总计数（含被丢弃的）
+        self.response_chunks_size = 0  # 响应块累计序列化大小（字节）
+        self._response_chunks_max_size = 4 * 1024 * 1024  # 4MB，留余量给 truncate_body 的 5MB 上限
+        self.raw_chunks: deque[str | bytes] = deque(
+            maxlen=50
+        )  # 仅保留最后50个原始chunk（用于错误诊断）
 
         # 时间跟踪
         self.start_time = None
@@ -132,6 +138,15 @@ class StreamUsageTracker:
         self.status_code = 200  # 默认成功状态码
         self.error_message = None  # 错误消息(如果有)
         self.attempt_id = attempt_id
+
+    def _append_response_chunk(self, data: dict[str, Any]) -> None:
+        """追加响应块，超过大小限制后只计数不存储"""
+        self.response_chunks_count += 1
+        if self.response_chunks_size < self._response_chunks_max_size:
+            chunk_size = len(json.dumps(data, ensure_ascii=False))
+            self.response_chunks_size += chunk_size
+            if self.response_chunks_size <= self._response_chunks_max_size:
+                self.response_chunks.append(data)
 
     def set_error_status(self, status_code: int, error_message: str) -> None:
         """
@@ -275,7 +290,7 @@ class StreamUsageTracker:
             data = json.loads(data_str)
 
             if isinstance(data, dict):
-                self.response_chunks.append(data)
+                self._append_response_chunk(data)
                 try:
                     self._update_complete_response(data)
                 except Exception as update_error:
@@ -357,7 +372,7 @@ class StreamUsageTracker:
 
         # 更新完整响应（如果有数据）
         if chunk.data:
-            self.response_chunks.append(chunk.data)
+            self._append_response_chunk(chunk.data)
             try:
                 self._update_complete_response(chunk.data)
             except Exception as update_error:
@@ -635,14 +650,21 @@ class StreamUsageTracker:
             # 否则使用原始字节流（用于错误诊断，如403 HTML响应）
             if self.response_chunks:
                 # 正常情况：成功解析的SSE JSON响应
+                stored_chunks = len(self.response_chunks)
+                total_chunks = self.response_chunks_count
+                metadata = {
+                    "stream": True,
+                    "total_chunks": total_chunks,
+                    "stored_chunks": stored_chunks,
+                    "content_length": len(self.accumulated_content),
+                    "response_time_ms": response_time_ms,
+                }
+                if stored_chunks < total_chunks:
+                    metadata["truncated"] = True
+                    metadata["dropped_chunks"] = total_chunks - stored_chunks
                 response_body = {
                     "chunks": self.response_chunks,
-                    "metadata": {
-                        "stream": True,
-                        "total_chunks": len(self.response_chunks),
-                        "content_length": len(self.accumulated_content),
-                        "response_time_ms": response_time_ms,
-                    },
+                    "metadata": metadata,
                 }
             else:
                 # 错误情况：无法解析为JSON（如HTML错误页面）

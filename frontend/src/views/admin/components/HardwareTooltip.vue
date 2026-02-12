@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import type { ProxyNode } from '@/api/proxy-nodes'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Cpu } from 'lucide-vue-next'
 import { computed } from 'vue'
 
@@ -77,7 +72,10 @@ function formatNumber(n: number) {
 </script>
 
 <template>
-  <TooltipProvider v-if="showHardwareInfo">
+  <TooltipProvider
+    v-if="showHardwareInfo"
+    :delay-duration="0"
+  >
     <Tooltip>
       <TooltipTrigger as-child>
         <button
@@ -97,7 +95,7 @@ function formatNumber(n: number) {
           v-if="hardwareRows.length === 0"
           class="text-muted-foreground"
         >
-          No hardware info reported.
+          暂无硬件信息上报
         </div>
         <template v-else>
           <div

@@ -236,7 +236,7 @@ def validate_and_extract_model_mappings(
     return True, None, mappings
 
 
-@lru_cache(maxsize=2000)
+@lru_cache(maxsize=512)
 def _compile_pattern_cached(pattern: str) -> regex.Pattern | None:
     """
     编译正则模式（带 LRU 缓存）

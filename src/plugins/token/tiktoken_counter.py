@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover
     tiktoken = None
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=32)
 def _get_encoder_cached(model: str) -> Any:
     """全局编码器缓存。
 
