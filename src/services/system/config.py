@@ -34,7 +34,13 @@ _CONFIG_CACHE_TTL = 60  # 1 分钟
 _SCHEDULING_CONFIG_CACHE_TTL = 5  # 5 秒
 
 # 需要跨 Worker 快速同步的调度相关配置 key
-SCHEDULING_CONFIG_KEYS = frozenset({"scheduling_mode", "provider_priority_mode"})
+SCHEDULING_CONFIG_KEYS = frozenset(
+    {
+        "scheduling_mode",
+        "provider_priority_mode",
+        "load_balance_exact_format_first",
+    }
+)
 
 # 进程内缓存存储: {key: (value, expire_time)}
 _config_cache: dict[str, tuple[Any, float]] = {}
@@ -183,6 +189,10 @@ class SystemConfigService:
         "keep_priority_on_conversion": {
             "value": False,
             "description": "格式转换时保持优先级：开启时需要转换的候选保持原优先级；关闭时降级到不需要转换的候选之后",
+        },
+        "load_balance_exact_format_first": {
+            "value": False,
+            "description": "负载均衡模式下同优先级是否优先同格式候选：开启后先随机同格式候选，再随机跨格式候选",
         },
         "audit_log_retention_days": {
             "value": 30,
@@ -534,6 +544,11 @@ class SystemConfigService:
     def is_keep_priority_on_conversion(cls, db: Session) -> bool:
         """检查格式转换时是否保持优先级"""
         return bool(cls.get_config(db, "keep_priority_on_conversion", False))
+
+    @classmethod
+    def is_load_balance_exact_format_first(cls, db: Session) -> bool:
+        """检查负载均衡模式下是否优先同格式候选"""
+        return bool(cls.get_config(db, "load_balance_exact_format_first", False))
 
     @classmethod
     def mask_sensitive_headers(cls, db: Session, headers: dict[str, Any]) -> dict[str, Any]:

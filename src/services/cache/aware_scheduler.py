@@ -832,7 +832,13 @@ class CacheAwareScheduler:
                     global_model_id=global_model_id,
                 )
         elif self.scheduling_mode == self.SCHEDULING_MODE_LOAD_BALANCE:
-            candidates = self._apply_load_balance(candidates, api_format)
+            # 负载均衡模式：忽略缓存，同优先级内随机轮换
+            exact_first = SystemConfigService.is_load_balance_exact_format_first(db)
+            candidates = self._apply_load_balance(
+                candidates,
+                api_format,
+                exact_first=exact_first,
+            )
             for candidate in candidates:
                 candidate.is_cached = False
         else:
@@ -1668,15 +1674,20 @@ class CacheAwareScheduler:
         return result
 
     def _apply_load_balance(
-        self, candidates: list[ProviderCandidate], api_format: str | None = None
+        self,
+        candidates: list[ProviderCandidate],
+        api_format: str | None = None,
+        *,
+        exact_first: bool = False,
     ) -> list[ProviderCandidate]:
         """
         负载均衡模式：同优先级内随机轮换
 
         排序逻辑：
         1. 按优先级分组（provider_priority, internal_priority 或 global_priority_by_format）
-        2. 同优先级组内随机打乱
-        3. 不考虑缓存亲和性
+        2. (可选) 同优先级内按格式分组：同格式在前、跨格式在后
+        3. 各分组内随机打乱
+        4. 不考虑缓存亲和性
         """
         if not candidates:
             return candidates
@@ -1707,13 +1718,28 @@ class CacheAwareScheduler:
         result: list[ProviderCandidate] = []
         for priority in sorted(priority_groups.keys()):
             group = priority_groups[priority]
-            if len(group) > 1:
-                # 同优先级内随机打乱
-                shuffled = list(group)
-                random.shuffle(shuffled)
-                result.extend(shuffled)
-            else:
-                result.extend(group)
+
+            if not exact_first:
+                if len(group) > 1:
+                    # 同优先级内随机打乱
+                    shuffled = list(group)
+                    random.shuffle(shuffled)
+                    result.extend(shuffled)
+                else:
+                    result.extend(group)
+                continue
+
+            exact_candidates = [c for c in group if not c.needs_conversion]
+            convertible_candidates = [c for c in group if c.needs_conversion]
+
+            if len(exact_candidates) > 1:
+                random.shuffle(exact_candidates)
+            if len(convertible_candidates) > 1:
+                random.shuffle(convertible_candidates)
+
+            # 在同一优先级内，先同格式，再跨格式
+            result.extend(exact_candidates)
+            result.extend(convertible_candidates)
 
         return result
 

@@ -305,6 +305,31 @@
               </div>
             </div>
           </div>
+
+          <div class="flex items-center h-full">
+            <div class="flex items-center space-x-2">
+              <Checkbox
+                id="load-balance-exact-format-first"
+                v-model:checked="systemConfig.load_balance_exact_format_first"
+                :disabled="!isLoadBalanceSchedulingMode"
+              />
+              <div>
+                <Label
+                  for="load-balance-exact-format-first"
+                  :class="[
+                    'cursor-pointer',
+                    !isLoadBalanceSchedulingMode && 'text-muted-foreground'
+                  ]"
+                >
+                  负载均衡同格式优先
+                </Label>
+                <p class="text-xs text-muted-foreground">
+                  负载均衡模式下同优先级先随机同格式候选，再随机跨格式候选
+                  <span v-if="!isLoadBalanceSchedulingMode">（当前调度模式非负载均衡，此选项暂不生效）</span>
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </CardSection>
 
@@ -1129,6 +1154,7 @@ interface SystemConfig {
   auto_delete_expired_keys: boolean
   // 格式转换
   enable_format_conversion: boolean
+  load_balance_exact_format_first: boolean
   // 请求记录
   request_record_level: string
   max_request_body_size: number
@@ -1181,6 +1207,7 @@ const usersMergeModeSelectOpen = ref(false)
 
 // 系统版本信息
 const systemVersion = ref<string>('')
+const schedulingMode = ref<string>('cache_affinity')
 
 const systemConfig = ref<SystemConfig>({
   // 站点信息
@@ -1196,6 +1223,7 @@ const systemConfig = ref<SystemConfig>({
   auto_delete_expired_keys: false,
   // 格式转换
   enable_format_conversion: false,
+  load_balance_exact_format_first: false,
   // 请求记录
   request_record_level: 'basic',
   max_request_body_size: 1048576,
@@ -1237,9 +1265,13 @@ const hasBasicConfigChanges = computed(() => {
     systemConfig.value.rate_limit_per_minute !== originalConfig.value.rate_limit_per_minute ||
     systemConfig.value.enable_registration !== originalConfig.value.enable_registration ||
     systemConfig.value.auto_delete_expired_keys !== originalConfig.value.auto_delete_expired_keys ||
-    systemConfig.value.enable_format_conversion !== originalConfig.value.enable_format_conversion
+    systemConfig.value.enable_format_conversion !== originalConfig.value.enable_format_conversion ||
+    systemConfig.value.load_balance_exact_format_first !==
+      originalConfig.value.load_balance_exact_format_first
   )
 })
+
+const isLoadBalanceSchedulingMode = computed(() => schedulingMode.value === 'load_balance')
 
 const hasLogConfigChanges = computed(() => {
   if (!originalConfig.value) return false
@@ -1308,6 +1340,15 @@ async function loadSystemVersion() {
 
 async function loadSystemConfig() {
   try {
+    try {
+      const schedulingModeConfig = await adminApi.getSystemConfig('scheduling_mode')
+      if (typeof schedulingModeConfig.value === 'string' && schedulingModeConfig.value) {
+        schedulingMode.value = schedulingModeConfig.value
+      }
+    } catch {
+      // 调度模式配置不存在时，使用默认值
+    }
+
     const configs = [
       // 站点信息
       'site_name',
@@ -1322,6 +1363,7 @@ async function loadSystemConfig() {
       'auto_delete_expired_keys',
       // 格式转换
       'enable_format_conversion',
+      'load_balance_exact_format_first',
       // 请求记录
       'request_record_level',
       'max_request_body_size',
@@ -1447,6 +1489,11 @@ async function saveBasicConfig() {
         value: systemConfig.value.enable_format_conversion,
         description: '全局格式转换开关：开启时强制允许所有提供商的格式转换'
       },
+      {
+        key: 'load_balance_exact_format_first',
+        value: systemConfig.value.load_balance_exact_format_first,
+        description: '负载均衡模式下同优先级先排列同格式候选，再排列跨格式候选'
+      },
     ]
 
     await Promise.all(
@@ -1461,6 +1508,8 @@ async function saveBasicConfig() {
       originalConfig.value.enable_registration = systemConfig.value.enable_registration
       originalConfig.value.auto_delete_expired_keys = systemConfig.value.auto_delete_expired_keys
       originalConfig.value.enable_format_conversion = systemConfig.value.enable_format_conversion
+      originalConfig.value.load_balance_exact_format_first =
+        systemConfig.value.load_balance_exact_format_first
     }
     success('基础配置已保存')
   } catch (err) {

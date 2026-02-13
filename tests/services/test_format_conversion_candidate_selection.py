@@ -6,6 +6,7 @@ import pytest
 from src.core.api_format.conversion import register_default_normalizers
 from src.services.cache.aware_scheduler import (
     CacheAwareScheduler,
+    ProviderCandidate,
     _sort_endpoints_by_family_priority,
 )
 
@@ -262,6 +263,83 @@ def _group_and_sort_endpoints(
         + _sort_endpoints_by_family_priority(fallback)
         + _sort_endpoints_by_family_priority(fallback_other)
     )
+
+
+def _mock_candidate_for_load_balance(
+    key_id: str,
+    *,
+    needs_conversion: bool,
+    provider_priority: int = 1,
+    internal_priority: int = 1,
+) -> ProviderCandidate:
+    provider = MagicMock()
+    provider.id = f"provider_{key_id}"
+    provider.provider_priority = provider_priority
+
+    key = MagicMock()
+    key.id = key_id
+    key.internal_priority = internal_priority
+    key.global_priority_by_format = {"openai:chat": 1}
+
+    endpoint = MagicMock()
+    endpoint.id = f"endpoint_{key_id}"
+
+    return ProviderCandidate(
+        provider=provider,
+        endpoint=endpoint,
+        key=key,
+        needs_conversion=needs_conversion,
+    )
+
+
+def test_load_balance_exact_first_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    scheduler = CacheAwareScheduler()
+    scheduler.priority_mode = scheduler.PRIORITY_MODE_PROVIDER
+
+    candidates = [
+        _mock_candidate_for_load_balance("exact_1", needs_conversion=False),
+        _mock_candidate_for_load_balance("conv_1", needs_conversion=True),
+        _mock_candidate_for_load_balance("exact_2", needs_conversion=False),
+        _mock_candidate_for_load_balance("conv_2", needs_conversion=True),
+    ]
+
+    monkeypatch.setattr(
+        "src.services.cache.aware_scheduler.random.shuffle",
+        lambda items: items.reverse(),
+    )
+
+    result = scheduler._apply_load_balance(
+        candidates,
+        api_format="openai:chat",
+        exact_first=True,
+    )
+
+    assert [c.key.id for c in result] == ["exact_2", "exact_1", "conv_2", "conv_1"]
+
+
+def test_load_balance_exact_first_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    scheduler = CacheAwareScheduler()
+    scheduler.priority_mode = scheduler.PRIORITY_MODE_PROVIDER
+
+    candidates = [
+        _mock_candidate_for_load_balance("exact_1", needs_conversion=False),
+        _mock_candidate_for_load_balance("conv_1", needs_conversion=True),
+        _mock_candidate_for_load_balance("exact_2", needs_conversion=False),
+        _mock_candidate_for_load_balance("conv_2", needs_conversion=True),
+    ]
+
+    monkeypatch.setattr(
+        "src.services.cache.aware_scheduler.random.shuffle",
+        lambda items: items.reverse(),
+    )
+
+    result = scheduler._apply_load_balance(
+        candidates,
+        api_format="openai:chat",
+        exact_first=False,
+    )
+
+    assert [c.key.id for c in result] == ["conv_2", "exact_2", "conv_1", "exact_1"]
 
 
 def test_group_and_sort_endpoints_client_openai_chat() -> None:
