@@ -17,6 +17,7 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import Any, Iterable, Literal
 
+from src.core.logger import logger
 from src.services.billing.precision import DECIMAL_CONTEXT_PRECISION, to_decimal
 
 
@@ -378,6 +379,11 @@ class FormulaEngine:
                     if status == "missing_required":
                         missing_required.append(var_name)
                         continue
+                    if status == "error":
+                        # 求值异常但非 required，使用 default 值继续
+                        resolved[var_name] = value
+                        progressed = True
+                        continue
                     resolved[var_name] = value
                     progressed = True
                 if not progressed:
@@ -387,6 +393,11 @@ class FormulaEngine:
             for var_name, mapping in unresolved.items():
                 required = bool(mapping.get("required", False))
                 default = mapping.get("default", 0)
+                logger.warning(
+                    "[FormulaEngine] computed 维度 '{}' 在迭代后仍未解析, required={}",
+                    var_name,
+                    required,
+                )
                 if required:
                     missing_required.append(var_name)
                 else:
@@ -505,9 +516,14 @@ class FormulaEngine:
         except NameError:
             # dependency not ready yet
             return (None, "pending") if required else (default, "pending")
-        except Exception:
-            # treat as config error: fallback to default unless required
-            return (None, "missing_required") if required else (default, "ok")
+        except Exception as exc:
+            logger.warning(
+                "[FormulaEngine] computed 维度 '{}' 求值异常: {}, expression={!r}",
+                var_name,
+                exc,
+                expr,
+            )
+            return (None, "missing_required") if required else (default, "error")
 
     def _resolve_mapping(
         self,
@@ -517,16 +533,41 @@ class FormulaEngine:
     ) -> tuple[Any, bool, dict[str, Any] | None]:
         """
         Returns:
-            (value, is_missing_required)
+            (value, is_missing_required, tier_meta)
 
         说明：
         - is_missing_required 仅在 required=true 且缺失时为 True
         - required=false 的缺失会使用 default 或 0 兜底，并返回 is_missing_required=False
         """
         source = (mapping.get("source") or "constant").lower()
+
+        if source == "constant":
+            return self._resolve_constant(mapping)
+        if source == "dimension":
+            return self._resolve_dimension(var_name, mapping, dims)
+        if source == "matrix":
+            return self._resolve_matrix(var_name, mapping, dims)
+        if source == "tiered":
+            return self._resolve_tiered(var_name, mapping, dims)
+        # 未知 source：视为配置错误，但不直接中断计费（返回 default）
+        return mapping.get("default", 0), False, None
+
+    @staticmethod
+    def _resolve_constant(
+        mapping: dict[str, Any],
+    ) -> tuple[Any, bool, dict[str, Any] | None]:
+        """constant 默认行为：由 variables 提供；dimension_mappings 显式 constant 时仅做兜底"""
+        return mapping.get("default", 0), False, None
+
+    @staticmethod
+    def _resolve_dimension(
+        var_name: str,
+        mapping: dict[str, Any],
+        dims: dict[str, Any],
+    ) -> tuple[Any, bool, dict[str, Any] | None]:
+        """解析 dimension source：从 dims 中取值并尝试转换为 Decimal"""
         required = bool(mapping.get("required", False))
         allow_zero = bool(mapping.get("allow_zero", False))
-
         default = mapping.get("default", 0)
 
         def _missing() -> tuple[Any, bool]:
@@ -534,36 +575,15 @@ class FormulaEngine:
                 return None, True
             return default, False
 
-        if source == "constant":
-            # constant 默认行为：由 variables 提供；dimension_mappings 显式 constant 时仅做兜底
-            return default, False, None
-
-        if source == "dimension":
-            key = mapping.get("key") or var_name
-            raw = dims.get(key)
-            if raw is None:
+        key = mapping.get("key") or var_name
+        raw = dims.get(key)
+        if raw is None:
+            v, m = _missing()
+            return v, m, None
+        if isinstance(raw, str):
+            if raw == "":
                 v, m = _missing()
                 return v, m, None
-            if isinstance(raw, str):
-                if raw == "":
-                    v, m = _missing()
-                    return v, m, None
-                # 尝试将字符串解析为数字，否则按字符串返回（供上层自行决定）
-                try:
-                    num = to_decimal(raw)
-                    if num == 0 and not allow_zero:
-                        v, m = _missing()
-                        return v, m, None
-                    return num, False, None
-                except Exception:
-                    return raw, False, None
-            if isinstance(raw, (int, float, Decimal)):
-                num = to_decimal(raw)
-                if num == 0 and not allow_zero:
-                    v, m = _missing()
-                    return v, m, None
-                return num, False, None
-            # 其他类型：尽量转为 float，否则视为缺失
             try:
                 num = to_decimal(raw)
                 if num == 0 and not allow_zero:
@@ -571,61 +591,118 @@ class FormulaEngine:
                     return v, m, None
                 return num, False, None
             except Exception:
+                return raw, False, None
+        if isinstance(raw, (int, float, Decimal)):
+            num = to_decimal(raw)
+            if num == 0 and not allow_zero:
                 v, m = _missing()
                 return v, m, None
+            return num, False, None
+        try:
+            num = to_decimal(raw)
+            if num == 0 and not allow_zero:
+                v, m = _missing()
+                return v, m, None
+            return num, False, None
+        except Exception:
+            v, m = _missing()
+            return v, m, None
 
-        if source == "matrix":
-            key = mapping.get("key") or var_name
-            raw = dims.get(key)
-            if raw is None or raw == "":
-                v, m = _missing()
-                return v, m, None
-            raw_key = str(raw)
-            matrix = mapping.get("map") or {}
-            if raw_key in matrix:
-                try:
-                    return to_decimal(matrix[raw_key]), False, None
-                except Exception:
-                    return matrix[raw_key], False, None
-            # matrix 未命中：若 required=true 则仍视为缺失；否则使用 default
+    @staticmethod
+    def _resolve_matrix(
+        var_name: str,
+        mapping: dict[str, Any],
+        dims: dict[str, Any],
+    ) -> tuple[Any, bool, dict[str, Any] | None]:
+        """解析 matrix source：从 map 中按 key 查找值"""
+        required = bool(mapping.get("required", False))
+        default = mapping.get("default", 0)
+
+        def _missing() -> tuple[Any, bool]:
             if required:
-                return None, True, None
-            return default, False, None
+                return None, True
+            return default, False
 
-        if source == "tiered":
-            tier_key = mapping.get("tier_key")
-            if not tier_key:
-                v, m = _missing()
-                return v, m, None
-            raw_tier_value = dims.get(tier_key)
-            if raw_tier_value is None:
-                v, m = _missing()
-                return v, m, None
+        key = mapping.get("key") or var_name
+        raw = dims.get(key)
+        if raw is None or raw == "":
+            v, m = _missing()
+            return v, m, None
+        raw_key = str(raw)
+        matrix = mapping.get("map") or {}
+        if raw_key in matrix:
             try:
-                tier_value = to_decimal(raw_tier_value)
+                return to_decimal(matrix[raw_key]), False, None
             except Exception:
-                v, m = _missing()
-                return v, m, None
+                return matrix[raw_key], False, None
+        if required:
+            return None, True, None
+        return default, False, None
 
-            if tier_value == 0 and not allow_zero:
-                v, m = _missing()
-                return v, m, None
+    def _resolve_tiered(
+        self,
+        var_name: str,
+        mapping: dict[str, Any],
+        dims: dict[str, Any],
+    ) -> tuple[Any, bool, dict[str, Any] | None]:
+        """解析 tiered source：按阶梯匹配值"""
+        required = bool(mapping.get("required", False))
+        allow_zero = bool(mapping.get("allow_zero", False))
+        default = mapping.get("default", 0)
 
-            # Optional TTL override (legacy: Claude cache pricing)
-            ttl_key = mapping.get("ttl_key")
-            ttl_value_key = mapping.get("ttl_value_key")
-            ttl_minutes: Decimal | None = None
-            if ttl_key and ttl_value_key and dims.get(ttl_key) is not None:
-                try:
-                    ttl_minutes = to_decimal(dims.get(ttl_key))
-                except Exception:
-                    ttl_minutes = None
+        def _missing() -> tuple[Any, bool]:
+            if required:
+                return None, True
+            return default, False
 
-            tiers = mapping.get("tiers") or []
-            # tiers: [{up_to: 128000, value: 2.5}, {up_to: null, value: 1.25}]
-            for idx, tier in enumerate(tiers):
-                up_to = tier.get("up_to")
-                if up_to is None:
+        tier_key = mapping.get("tier_key")
+        if not tier_key:
+            v, m = _missing()
+            return v, m, None
+        raw_tier_value = dims.get(tier_key)
+        if raw_tier_value is None:
+            v, m = _missing()
+            return v, m, None
+        try:
+            tier_value = to_decimal(raw_tier_value)
+        except Exception:
+            v, m = _missing()
+            return v, m, None
+
+        if tier_value == 0 and not allow_zero:
+            v, m = _missing()
+            return v, m, None
+
+        # Optional TTL override (legacy: Claude cache pricing)
+        ttl_key = mapping.get("ttl_key")
+        ttl_value_key = mapping.get("ttl_value_key")
+        ttl_minutes: Decimal | None = None
+        if ttl_key and ttl_value_key and dims.get(ttl_key) is not None:
+            try:
+                ttl_minutes = to_decimal(dims.get(ttl_key))
+            except Exception:
+                ttl_minutes = None
+
+        tiers = mapping.get("tiers") or []
+        # tiers: [{up_to: 128000, value: 2.5}, {up_to: null, value: 1.25}]
+        for idx, tier in enumerate(tiers):
+            up_to = tier.get("up_to")
+            if up_to is None:
+                value = to_decimal(tier.get("value", default))
+                if (
+                    ttl_minutes is not None
+                    and ttl_value_key
+                    and isinstance(tier.get("cache_ttl_pricing"), list)
+                ):
+                    value = self._resolve_ttl_pricing(
+                        tier.get("cache_ttl_pricing") or [],
+                        ttl_minutes,
+                        str(ttl_value_key),
+                        fallback=value,
+                    )
+                return value, False, {"tier_index": idx, "tier_info": dict(tier)}
+            try:
+                if tier_value <= to_decimal(up_to):
                     value = to_decimal(tier.get("value", default))
                     if (
                         ttl_minutes is not None
@@ -639,43 +716,25 @@ class FormulaEngine:
                             fallback=value,
                         )
                     return value, False, {"tier_index": idx, "tier_info": dict(tier)}
-                try:
-                    if tier_value <= to_decimal(up_to):
-                        value = to_decimal(tier.get("value", default))
-                        if (
-                            ttl_minutes is not None
-                            and ttl_value_key
-                            and isinstance(tier.get("cache_ttl_pricing"), list)
-                        ):
-                            value = self._resolve_ttl_pricing(
-                                tier.get("cache_ttl_pricing") or [],
-                                ttl_minutes,
-                                str(ttl_value_key),
-                                fallback=value,
-                            )
-                        return value, False, {"tier_index": idx, "tier_info": dict(tier)}
-                except Exception:
-                    # up_to 配置异常：忽略并继续
-                    continue
-            # 无匹配：使用最后一个或 default
-            if tiers:
-                last = tiers[-1]
-                value = to_decimal(last.get("value", default))
-                if (
-                    ttl_minutes is not None
-                    and ttl_value_key
-                    and isinstance(last.get("cache_ttl_pricing"), list)
-                ):
-                    value = self._resolve_ttl_pricing(
-                        last.get("cache_ttl_pricing") or [],
-                        ttl_minutes,
-                        str(ttl_value_key),
-                        fallback=value,
-                    )
-                return value, False, {"tier_index": len(tiers) - 1, "tier_info": dict(last)}
-            return default, False, None
-
-        # 未知 source：视为配置错误，但不直接中断计费（返回 default）
+            except Exception:
+                # up_to 配置异常：忽略并继续
+                continue
+        # 无匹配：使用最后一个或 default
+        if tiers:
+            last = tiers[-1]
+            value = to_decimal(last.get("value", default))
+            if (
+                ttl_minutes is not None
+                and ttl_value_key
+                and isinstance(last.get("cache_ttl_pricing"), list)
+            ):
+                value = self._resolve_ttl_pricing(
+                    last.get("cache_ttl_pricing") or [],
+                    ttl_minutes,
+                    str(ttl_value_key),
+                    fallback=value,
+                )
+            return value, False, {"tier_index": len(tiers) - 1, "tier_info": dict(last)}
         return default, False, None
 
     def _resolve_ttl_pricing(

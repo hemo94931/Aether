@@ -110,34 +110,45 @@ class CacheSyncService:
         logger.debug(f"[CacheSync] 注册处理器: {channel}")
 
     async def _listen(self) -> None:
-        """监听 Redis pub/sub 消息"""
+        """监听 Redis pub/sub 消息（含断线重连）"""
         logger.info("[CacheSync] 开始监听缓存失效消息")
+        consecutive_failures = 0
+        max_consecutive_failures = 10
+        reconnect_interval = 5.0
 
-        try:
-            async for message in self._pubsub.listen():
-                if message["type"] == "message":
-                    channel = message["channel"]
-                    data = message["data"]
+        while self._running:
+            try:
+                async for message in self._pubsub.listen():
+                    consecutive_failures = 0  # 收到消息即重置
+                    if message["type"] == "message":
+                        channel = message["channel"]
+                        data = message["data"]
 
-                    # 解析消息
-                    try:
-                        payload = json.loads(data)
-                        logger.debug(f"[CacheSync] 收到消息: {channel} -> {payload}")
+                        try:
+                            payload = json.loads(data)
+                            logger.debug(f"[CacheSync] 收到消息: {channel} -> {payload}")
 
-                        # 调用注册的处理器
-                        if channel in self._handlers:
-                            handler = self._handlers[channel]
-                            await handler(payload)
-                        else:
-                            logger.warning(f"[CacheSync] 未找到处理器: {channel}")
-                    except json.JSONDecodeError as e:
-                        logger.error(f"[CacheSync] 消息解析失败: {data}, 错误: {e}")
-                    except Exception as e:
-                        logger.error(f"[CacheSync] 处理消息失败: {channel}, 错误: {e}")
-        except asyncio.CancelledError:
-            logger.info("[CacheSync] 监听任务已取消")
-        except Exception as e:
-            logger.error(f"[CacheSync] 监听失败: {e}")
+                            if channel in self._handlers:
+                                handler = self._handlers[channel]
+                                await handler(payload)
+                            else:
+                                logger.warning(f"[CacheSync] 未找到处理器: {channel}")
+                        except json.JSONDecodeError as e:
+                            logger.error(f"[CacheSync] 消息解析失败: {data}, 错误: {e}")
+                        except Exception as e:
+                            logger.error(f"[CacheSync] 处理消息失败: {channel}, 错误: {e}")
+            except asyncio.CancelledError:
+                logger.info("[CacheSync] 监听任务已取消")
+                return
+            except Exception as e:
+                consecutive_failures += 1
+                logger.error(
+                    f"[CacheSync] 监听失败 ({consecutive_failures}/{max_consecutive_failures}): {e}"
+                )
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.error("[CacheSync] 连续失败次数过多，停止重连")
+                    return
+                await asyncio.sleep(reconnect_interval)
 
     async def publish_global_model_changed(self, model_name: str) -> Any:
         """发布 GlobalModel 变更通知"""
@@ -154,13 +165,19 @@ class CacheSyncService:
         await self._publish(self.CHANNEL_CLEAR_ALL, {})
 
     async def _publish(self, channel: str, data: dict) -> None:
-        """发布消息到 Redis 频道"""
-        try:
-            message = json.dumps(data)
-            await self._redis.publish(channel, message)
-            logger.debug(f"[CacheSync] 发布消息: {channel} -> {data}")
-        except Exception as e:
-            logger.error(f"[CacheSync] 发布消息失败: {channel}, 错误: {e}")
+        """发布消息到 Redis 频道（含简单重试）"""
+        message = json.dumps(data)
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                await self._redis.publish(channel, message)
+                logger.debug(f"[CacheSync] 发布消息: {channel} -> {data}")
+                return
+            except Exception as e:
+                last_error = e
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+        logger.error(f"[CacheSync] 发布消息失败（已重试）: {channel}, 错误: {last_error}")
 
 
 # 全局单例

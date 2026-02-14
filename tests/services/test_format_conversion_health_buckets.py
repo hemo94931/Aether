@@ -1,4 +1,6 @@
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -8,7 +10,7 @@ from src.services.request.executor import RequestExecutor
 
 
 @asynccontextmanager
-async def _noop_async_cm():
+async def _noop_async_cm() -> AsyncGenerator[None]:
     yield
 
 
@@ -46,7 +48,9 @@ async def test_executor_records_health_by_provider_format() -> None:
     candidate.key = key
     candidate.is_cached = False
 
-    async def request_func(_provider, _endpoint, _key, _candidate):  # noqa: ANN001
+    async def request_func(
+        _provider: Any, _endpoint: Any, _key: Any, _candidate: Any
+    ) -> dict[str, bool]:
         return {"ok": True}
 
     with (
@@ -96,7 +100,7 @@ async def test_error_classifier_records_failure_by_provider_format() -> None:
     key.id = "k1"
 
     with patch(
-        "src.services.orchestration.error_classifier.health_monitor.record_failure"
+        "src.services.orchestration.error_handler.health_monitor.record_failure"
     ) as record_failure:
         await classifier.handle_retriable_error(
             error=RuntimeError("boom"),

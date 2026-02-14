@@ -97,16 +97,15 @@ class LocalCache(BaseCacheBackend):
             # 如果键已存在，更新访问顺序
             if key in self._cache:
                 self._cache.move_to_end(key)
-
-            self._cache[key] = value
-            self._expiry[key] = time.time() + ttl
-
-            # 检查容量限制，淘汰最旧项
-            if len(self._cache) > self._max_size:
+            elif len(self._cache) >= self._max_size:
+                # 插入新键前淘汰最旧项，确保容量不超过 max_size
                 oldest_key = next(iter(self._cache))
                 del self._cache[oldest_key]
                 if oldest_key in self._expiry:
                     del self._expiry[oldest_key]
+
+            self._cache[key] = value
+            self._expiry[key] = time.time() + ttl
 
     async def delete(self, key: str) -> None:
         """删除缓存值（线程安全）"""
@@ -276,6 +275,7 @@ class RedisCache(BaseCacheBackend):
 
 # 缓存后端工厂
 _cache_backends: dict[str, BaseCacheBackend] = {}
+_cache_backend_lock = asyncio.Lock()
 
 
 async def get_cache_backend(
@@ -295,36 +295,44 @@ async def get_cache_backend(
     """
     cache_key = f"{name}:{backend_type}"
 
+    # 无锁快路径
     if cache_key in _cache_backends:
         return _cache_backends[cache_key]
 
-    # 根据类型创建缓存后端
+    async with _cache_backend_lock:
+        # Double-check: 锁内再检查一次，避免重复创建
+        if cache_key in _cache_backends:
+            return _cache_backends[cache_key]
+
+        backend = _create_cache_backend(name, backend_type, max_size, ttl)
+        _cache_backends[cache_key] = backend
+        return backend
+
+
+def _create_cache_backend(
+    name: str, backend_type: str, max_size: int, ttl: int
+) -> BaseCacheBackend:
+    """根据类型创建缓存后端实例"""
     if backend_type == "redis":
-        # 尝试使用 Redis
         redis_client = get_redis_client_sync()
 
         if redis_client is None:
             logger.warning(f"[CacheBackend] Redis 未初始化，{name} 降级为本地缓存")
-            backend = LocalCache(max_size=max_size, default_ttl=ttl)
+            return LocalCache(max_size=max_size, default_ttl=ttl)
         else:
-            backend = RedisCache(redis_client=redis_client, key_prefix=name, default_ttl=ttl)
             logger.info(f"[CacheBackend] {name} 使用 Redis 缓存")
+            return RedisCache(redis_client=redis_client, key_prefix=name, default_ttl=ttl)
 
     elif backend_type == "local":
-        # 强制使用本地缓存
-        backend = LocalCache(max_size=max_size, default_ttl=ttl)
         logger.info(f"[CacheBackend] {name} 使用本地缓存")
+        return LocalCache(max_size=max_size, default_ttl=ttl)
 
     else:  # auto
-        # 自动选择：优先 Redis，降级到 Local
         redis_client = get_redis_client_sync()
 
         if redis_client is not None:
-            backend = RedisCache(redis_client=redis_client, key_prefix=name, default_ttl=ttl)
             logger.debug(f"[CacheBackend] {name} 自动选择 Redis 缓存")
+            return RedisCache(redis_client=redis_client, key_prefix=name, default_ttl=ttl)
         else:
-            backend = LocalCache(max_size=max_size, default_ttl=ttl)
             logger.debug(f"[CacheBackend] {name} 自动选择本地缓存（Redis 不可用）")
-
-    _cache_backends[cache_key] = backend
-    return backend
+            return LocalCache(max_size=max_size, default_ttl=ttl)

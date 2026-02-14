@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import threading
 import time
 from collections import OrderedDict
 from typing import Any
@@ -24,7 +23,7 @@ class MemoryCachePlugin(CachePlugin):
         super().__init__(name, config)
         self._cache: OrderedDict = OrderedDict()
         self._expiry: dict[str, float] = {}
-        self._lock = threading.RLock()
+        self._lock = asyncio.Lock()
         self._hits = 0
         self._misses = 0
         self._evictions = 0
@@ -60,7 +59,7 @@ class MemoryCachePlugin(CachePlugin):
         now = time.time()
         expired_keys = []
 
-        with self._lock:
+        async with self._lock:
             for key, expiry in self._expiry.items():
                 if expiry < now:
                     expired_keys.append(key)
@@ -81,7 +80,7 @@ class MemoryCachePlugin(CachePlugin):
 
     async def get(self, key: str) -> Any | None:
         """获取缓存值"""
-        with self._lock:
+        async with self._lock:
             # 检查是否过期
             if key in self._expiry:
                 if self._expiry[key] < time.time():
@@ -103,7 +102,7 @@ class MemoryCachePlugin(CachePlugin):
 
     async def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """设置缓存值"""
-        with self._lock:
+        async with self._lock:
             # 检查大小限制
             if key not in self._cache:
                 self._check_size()
@@ -126,7 +125,7 @@ class MemoryCachePlugin(CachePlugin):
 
     async def delete(self, key: str) -> bool:
         """删除缓存项"""
-        with self._lock:
+        async with self._lock:
             if key in self._cache:
                 self._cache.pop(key)
                 self._expiry.pop(key, None)
@@ -135,7 +134,7 @@ class MemoryCachePlugin(CachePlugin):
 
     async def exists(self, key: str) -> bool:
         """检查缓存项是否存在"""
-        with self._lock:
+        async with self._lock:
             # 检查是否过期
             if key in self._expiry:
                 if self._expiry[key] < time.time():
@@ -147,7 +146,7 @@ class MemoryCachePlugin(CachePlugin):
 
     async def clear(self) -> bool:
         """清空所有缓存"""
-        with self._lock:
+        async with self._lock:
             self._cache.clear()
             self._expiry.clear()
             return True

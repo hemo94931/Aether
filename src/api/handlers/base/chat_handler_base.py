@@ -25,6 +25,7 @@ import asyncio
 import json
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -223,6 +224,22 @@ def _build_error_json_payload(
             return parsed
 
     return _build_client_error_response_best_effort(message, client_format)
+
+
+@dataclass
+class ProviderRequestResult:
+    """_prepare_provider_request() 的返回结果，封装请求构建阶段的所有产出。"""
+
+    request_body: dict[str, Any]
+    url_model: str
+    mapped_model: str | None
+    envelope: Any  # ProviderEnvelope | None
+    extra_headers: dict[str, str] = field(default_factory=dict)
+    upstream_is_stream: bool = True
+    needs_conversion: bool = False
+    provider_api_format: str = ""
+    client_api_format: str = ""
+    auth_info: Any = None
 
 
 class ChatHandlerBase(BaseMessageHandler, ABC):
@@ -755,62 +772,43 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             await self._record_stream_failure(ctx, e, original_headers, original_request_body)
             raise
 
-    async def _execute_stream_request(
+    async def _prepare_provider_request(
         self,
-        ctx: StreamContext,
-        stream_processor: StreamProcessor,
+        *,
+        model: str,
         provider: Provider,
         endpoint: ProviderEndpoint,
         key: ProviderAPIKey,
         original_request_body: dict[str, Any],
-        original_headers: dict[str, str],
-        query_params: dict[str, str] | None = None,
-        candidate: ProviderCandidate | None = None,
-        is_disconnected: Callable[[], Awaitable[bool]] | None = None,
-    ) -> AsyncGenerator[bytes]:
-        """执行流式请求并返回流生成器"""
-        # 重置上下文状态（重试时清除之前的数据）
-        ctx.reset_for_retry()
+        client_api_format: str,
+        provider_api_format: str,
+        candidate: ProviderCandidate | None,
+        client_is_stream: bool,
+    ) -> ProviderRequestResult:
+        """
+        构建 Provider 请求：模型映射、格式转换、envelope 包装。
 
-        # 更新 Provider 信息
-        ctx.update_provider_info(
-            provider_name=str(provider.name),
-            provider_id=str(provider.id),
-            endpoint_id=str(endpoint.id),
-            key_id=str(key.id),
-            provider_api_format=str(endpoint.api_format) if endpoint.api_format else None,
-        )
-        ctx.provider_type = str(getattr(provider, "provider_type", "") or "")
-
-        # ctx.api_format 是枚举，需要取 value 作为字符串
-        _api_format_str = (
-            ctx.api_format.value if hasattr(ctx.api_format, "value") else str(ctx.api_format)
-        )
-        provider_api_format = ctx.provider_api_format or _api_format_str
-        client_api_format = ctx.client_api_format or _api_format_str
-
+        流式和非流式请求共享此逻辑，唯一差异是 client_is_stream 参数。
+        """
         # 提前获取认证信息（Vertex AI 格式判断需要使用 auth_config）
         auth_info = await get_provider_auth(endpoint, key)
 
         # 解析 Vertex AI 动态格式并计算 needs_conversion
         provider_api_format, needs_conversion = _resolve_vertex_ai_format(
-            key, auth_info, ctx.model, provider_api_format, client_api_format, candidate
+            key, auth_info, model, provider_api_format, client_api_format, candidate
         )
-        ctx.provider_api_format = provider_api_format
-        ctx.needs_conversion = needs_conversion
 
         # 获取模型映射（优先使用映射匹配到的模型，其次是 Provider 级别的映射）
         mapped_model = candidate.mapping_matched_model if candidate else None
         if not mapped_model:
             mapped_model = await self._get_mapped_model(
-                source_model=ctx.model,
+                source_model=model,
                 provider_id=str(provider.id),
                 api_format=provider_api_format,
             )
 
         # 应用模型映射到请求体
         if mapped_model:
-            ctx.mapped_model = mapped_model
             request_body = self.apply_mapped_model(original_request_body, mapped_model)
         else:
             request_body = dict(original_request_body)
@@ -824,14 +822,14 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         same_format_variant = behavior.same_format_variant
         cross_format_variant = behavior.cross_format_variant
 
-        # Upstream streaming policy (per-endpoint): may force upstream to sync/stream mode.
+        # Upstream streaming policy (per-endpoint).
         upstream_policy = get_upstream_stream_policy(
             endpoint,
             provider_type=provider_type,
             endpoint_sig=str(provider_api_format),
         )
         upstream_is_stream = resolve_upstream_is_stream(
-            client_is_stream=True,
+            client_is_stream=client_is_stream,
             policy=upstream_policy,
         )
 
@@ -849,7 +847,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 request_body,
                 str(provider_api_format),
                 mapped_model,
-                ctx.model,
+                model,
             )
             # 格式转换后，为需要 stream 字段的格式设置流式标志
             self._set_stream_after_conversion(
@@ -886,13 +884,13 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             )
 
         # 获取 URL 模型名
-        url_model = self.get_model_for_url(request_body, mapped_model) or ctx.model
+        url_model = self.get_model_for_url(request_body, mapped_model) or model
 
-        # Provider envelope: wrap request after auth is available and before RequestBuilder.build().
+        # Provider envelope: wrap request.
         if envelope:
             request_body, url_model = envelope.wrap_request(
                 request_body,
-                model=url_model or ctx.model or "",
+                model=url_model or model or "",
                 url_model=url_model,
                 decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
             )
@@ -902,6 +900,78 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         if envelope:
             extra_headers.update(envelope.extra_headers() or {})
 
+        return ProviderRequestResult(
+            request_body=request_body,
+            url_model=url_model,
+            mapped_model=mapped_model,
+            envelope=envelope,
+            extra_headers=extra_headers,
+            upstream_is_stream=upstream_is_stream,
+            needs_conversion=needs_conversion,
+            provider_api_format=provider_api_format,
+            client_api_format=client_api_format,
+            auth_info=auth_info,
+        )
+
+    async def _execute_stream_request(
+        self,
+        ctx: StreamContext,
+        stream_processor: StreamProcessor,
+        provider: Provider,
+        endpoint: ProviderEndpoint,
+        key: ProviderAPIKey,
+        original_request_body: dict[str, Any],
+        original_headers: dict[str, str],
+        query_params: dict[str, str] | None = None,
+        candidate: ProviderCandidate | None = None,
+        is_disconnected: Callable[[], Awaitable[bool]] | None = None,
+    ) -> AsyncGenerator[bytes]:
+        """执行流式请求并返回流生成器"""
+        # 重置上下文状态（重试时清除之前的数据）
+        ctx.reset_for_retry()
+
+        # 更新 Provider 信息
+        ctx.update_provider_info(
+            provider_name=str(provider.name),
+            provider_id=str(provider.id),
+            endpoint_id=str(endpoint.id),
+            key_id=str(key.id),
+            provider_api_format=str(endpoint.api_format) if endpoint.api_format else None,
+        )
+        ctx.provider_type = str(getattr(provider, "provider_type", "") or "")
+
+        # ctx.api_format 是枚举，需要取 value 作为字符串
+        _api_format_str = (
+            ctx.api_format.value if hasattr(ctx.api_format, "value") else str(ctx.api_format)
+        )
+        provider_api_format = ctx.provider_api_format or _api_format_str
+        client_api_format = ctx.client_api_format or _api_format_str
+
+        # 构建 Provider 请求（模型映射、格式转换、envelope 包装）
+        prep = await self._prepare_provider_request(
+            model=ctx.model,
+            provider=provider,
+            endpoint=endpoint,
+            key=key,
+            original_request_body=original_request_body,
+            client_api_format=client_api_format,
+            provider_api_format=provider_api_format,
+            candidate=candidate,
+            client_is_stream=True,
+        )
+        provider_api_format = prep.provider_api_format
+        needs_conversion = prep.needs_conversion
+        ctx.provider_api_format = provider_api_format
+        ctx.needs_conversion = needs_conversion
+        mapped_model = prep.mapped_model
+        if mapped_model:
+            ctx.mapped_model = mapped_model
+        request_body = prep.request_body
+        url_model = prep.url_model
+        envelope = prep.envelope
+        upstream_is_stream = prep.upstream_is_stream
+        auth_info = prep.auth_info
+
         # 构建请求（上游始终使用 header 认证，不跟随客户端的 query 方式）
         provider_payload, provider_headers = self._request_builder.build(
             request_body,
@@ -909,7 +979,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             endpoint,
             key,
             is_stream=upstream_is_stream,
-            extra_headers=extra_headers if extra_headers else None,
+            extra_headers=prep.extra_headers if prep.extra_headers else None,
             pre_computed_auth=auth_info.as_tuple() if auth_info else None,
         )
         if upstream_is_stream:
@@ -1070,6 +1140,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                     )
 
             # Convert sync JSON -> InternalResponse, then InternalResponse -> client stream events.
+            registry = get_format_converter_registry()
             src_norm = (
                 registry.get_normalizer(str(provider_api_format)) if provider_api_format else None
             )
@@ -1425,125 +1496,35 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             provider_name = str(provider.name)
             provider_api_format = str(endpoint.api_format or api_format)
-            # 客户端格式（与流式处理保持一致的命名）
             client_api_format = (
                 api_format.value if hasattr(api_format, "value") else str(api_format)
             )
 
-            # 提前获取认证信息（Vertex AI 格式判断需要使用 auth_config）
-            auth_info = await get_provider_auth(endpoint, key)
-
-            # 解析 Vertex AI 动态格式并计算 needs_conversion
-            provider_api_format, needs_conversion = _resolve_vertex_ai_format(
-                key, auth_info, model, provider_api_format, client_api_format, candidate
+            # 构建 Provider 请求（模型映射、格式转换、envelope 包装）
+            prep = await self._prepare_provider_request(
+                model=model,
+                provider=provider,
+                endpoint=endpoint,
+                key=key,
+                original_request_body=request_body_ref["body"],
+                client_api_format=client_api_format,
+                provider_api_format=provider_api_format,
+                candidate=candidate,
+                client_is_stream=False,
             )
-
+            provider_api_format = prep.provider_api_format
+            needs_conversion = prep.needs_conversion
             provider_api_format_for_error = provider_api_format
             client_api_format_for_error = client_api_format
             needs_conversion_for_error = needs_conversion
-
-            # 获取模型映射（优先使用映射匹配到的模型，其次是 Provider 级别的映射）
-            mapped_model = candidate.mapping_matched_model if candidate else None
-            if not mapped_model:
-                mapped_model = await self._get_mapped_model(
-                    source_model=model,
-                    provider_id=str(provider.id),
-                    api_format=provider_api_format,
-                )
-
-            # 应用模型映射
+            mapped_model = prep.mapped_model
             if mapped_model:
-                mapped_model_result = mapped_model  # 保存映射后的模型名，用于 Usage 记录
-                request_body = self.apply_mapped_model(request_body_ref["body"], mapped_model)
-            else:
-                request_body = dict(request_body_ref["body"])
-
-            provider_type = str(getattr(provider, "provider_type", "") or "").lower()
-            behavior = get_provider_behavior(
-                provider_type=provider_type,
-                endpoint_sig=provider_api_format,
-            )
-            envelope = behavior.envelope
-            same_format_variant = behavior.same_format_variant
-            cross_format_variant = behavior.cross_format_variant
-
-            # Upstream streaming policy (per-endpoint).
-            upstream_policy = get_upstream_stream_policy(
-                endpoint,
-                provider_type=provider_type,
-                endpoint_sig=str(provider_api_format),
-            )
-            upstream_is_stream = resolve_upstream_is_stream(
-                client_is_stream=False,
-                policy=upstream_policy,
-            )
-
-            # 跨格式：先做请求体转换（失败触发 failover）
-            registry = get_format_converter_registry()
-            if needs_conversion:
-                request_body = registry.convert_request(
-                    request_body,
-                    client_api_format,
-                    provider_api_format,
-                    target_variant=cross_format_variant,
-                )
-                # 格式转换后，为需要 model 字段的格式设置模型名
-                self._set_model_after_conversion(
-                    request_body,
-                    provider_api_format,
-                    mapped_model,
-                    model,
-                )
-                # 格式转换后，为需要 stream 字段的格式设置流式标志
-                self._set_stream_after_conversion(
-                    request_body,
-                    client_api_format,
-                    provider_api_format,
-                    is_stream=upstream_is_stream,
-                )
-            else:
-                # 同格式：按原逻辑做轻量清理（子类可覆盖以移除不需要的字段）
-                request_body = self.prepare_provider_request_body(request_body)
-                # 同格式时也需要应用 target_variant 转换（如 Codex）
-                if same_format_variant:
-                    request_body = registry.convert_request(
-                        request_body,
-                        provider_api_format,
-                        provider_api_format,
-                        target_variant=same_format_variant,
-                    )
-
-            # 模型感知的请求后处理（如图像生成模型移除不兼容字段）
-            request_body = self.finalize_provider_request(
-                request_body,
-                mapped_model=mapped_model,
-                provider_api_format=str(provider_api_format) if provider_api_format else None,
-            )
-
-            # Force upstream stream/sync mode in request body (best-effort).
-            if provider_api_format:
-                enforce_stream_mode_for_upstream(
-                    request_body,
-                    provider_api_format=str(provider_api_format),
-                    upstream_is_stream=upstream_is_stream,
-                )
-
-            # 获取 URL 模型名（兜底使用外层的 model，确保 Gemini 等格式能正确构建 URL）
-            url_model = self.get_model_for_url(request_body, mapped_model) or model
-
-            # Provider envelope: wrap request after auth is available and before RequestBuilder.build().
-            if envelope:
-                request_body, url_model = envelope.wrap_request(
-                    request_body,
-                    model=url_model or model or "",
-                    url_model=url_model,
-                    decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
-                )
-
-            # Provider envelope: extra upstream headers (e.g. dedicated User-Agent).
-            extra_headers: dict[str, str] = {}
-            if envelope:
-                extra_headers.update(envelope.extra_headers() or {})
+                mapped_model_result = mapped_model
+            request_body = prep.request_body
+            url_model = prep.url_model
+            envelope = prep.envelope
+            upstream_is_stream = prep.upstream_is_stream
+            auth_info = prep.auth_info
 
             # 构建请求（上游始终使用 header 认证，不跟随客户端的 query 方式）
             provider_payload, provider_hdrs = self._request_builder.build(
@@ -1552,7 +1533,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 endpoint,
                 key,
                 is_stream=upstream_is_stream,
-                extra_headers=extra_headers if extra_headers else None,
+                extra_headers=prep.extra_headers if prep.extra_headers else None,
                 pre_computed_auth=auth_info.as_tuple() if auth_info else None,
             )
             if upstream_is_stream:
@@ -1584,6 +1565,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             _effective_proxy = resolve_effective_proxy(provider.proxy, getattr(key, "proxy", None))
             sync_proxy_info = resolve_proxy_info(_effective_proxy)
             _proxy_label = get_proxy_label(sync_proxy_info)
+            provider_type = str(getattr(provider, "provider_type", "") or "").lower()
 
             logger.info(
                 f"  [{self.request_id}] 发送{'上游流式(聚合)' if upstream_is_stream else '非流式'}请求: "
@@ -1678,6 +1660,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                             provider_parser=provider_parser,
                         )
 
+                        registry = get_format_converter_registry()
                         tgt_norm = (
                             registry.get_normalizer(client_api_format)
                             if client_api_format

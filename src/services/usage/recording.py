@@ -12,7 +12,7 @@ from src.core.logger import logger
 from src.models.database import ApiKey, Provider, Usage, User
 from src.services.billing.token_normalization import normalize_input_tokens_for_billing
 from src.services.system.config import SystemConfigService
-from src.services.usage._types import UsageRecordParams
+from src.services.usage._types import UsageCostInfo, UsageRecordParams
 from src.services.usage.error_classifier import classify_error
 
 
@@ -74,25 +74,25 @@ class UsageRecordingMixin:
         provider_api_key_id: str | None,
         status: str,
         target_model: str | None,
-        # 成本计算结果
-        input_cost: float,
-        output_cost: float,
-        cache_creation_cost: float,
-        cache_read_cost: float,
-        cache_cost: float,
-        request_cost: float,
-        total_cost: float,
-        # 价格信息
-        input_price: float | None,
-        output_price: float | None,
-        cache_creation_price: float | None,
-        cache_read_price: float | None,
-        request_price: float | None,
-        # 倍率
-        actual_rate_multiplier: float,
-        is_free_tier: bool,
+        cost: UsageCostInfo,
     ) -> dict[str, Any]:
         """构建 Usage 记录的参数字典（内部方法，避免代码重复）"""
+
+        # 展开成本信息
+        input_cost = cost.input_cost
+        output_cost = cost.output_cost
+        cache_creation_cost = cost.cache_creation_cost
+        cache_read_cost = cost.cache_read_cost
+        cache_cost = cost.cache_cost
+        request_cost = cost.request_cost
+        total_cost = cost.total_cost
+        input_price = cost.input_price
+        output_price = cost.output_price
+        cache_creation_price = cost.cache_creation_price
+        cache_read_price = cost.cache_read_price
+        request_price = cost.request_price
+        actual_rate_multiplier = cost.actual_rate_multiplier
+        is_free_tier = cost.is_free_tier
 
         # 根据配置决定是否记录请求详情
         should_log_headers = SystemConfigService.should_log_headers(db)
@@ -463,20 +463,22 @@ class UsageRecordingMixin:
             provider_api_key_id=params.provider_api_key_id,
             status=params.status,
             target_model=params.target_model,
-            input_cost=input_cost,
-            output_cost=output_cost,
-            cache_creation_cost=cache_creation_cost,
-            cache_read_cost=cache_read_cost,
-            cache_cost=cache_cost,
-            request_cost=request_cost,
-            total_cost=total_cost,
-            input_price=input_price,
-            output_price=output_price,
-            cache_creation_price=cache_creation_price,
-            cache_read_price=cache_read_price,
-            request_price=request_price,
-            actual_rate_multiplier=actual_rate_multiplier,
-            is_free_tier=is_free_tier,
+            cost=UsageCostInfo(
+                input_cost=input_cost,
+                output_cost=output_cost,
+                cache_creation_cost=cache_creation_cost,
+                cache_read_cost=cache_read_cost,
+                cache_cost=cache_cost,
+                request_cost=request_cost,
+                total_cost=total_cost,
+                input_price=input_price,
+                output_price=output_price,
+                cache_creation_price=cache_creation_price,
+                cache_read_price=cache_read_price,
+                request_price=request_price,
+                actual_rate_multiplier=actual_rate_multiplier,
+                is_free_tier=is_free_tier,
+            ),
         )
 
         return usage_params, total_cost
@@ -921,21 +923,17 @@ class UsageRecordingMixin:
             provider_api_key_id=provider_api_key_id,
             status=status,
             target_model=target_model,
-            input_cost=input_cost,
-            output_cost=output_cost,
-            cache_creation_cost=cache_creation_cost,
-            cache_read_cost=cache_read_cost,
-            cache_cost=cache_cost,
-            request_cost=request_cost,
-            total_cost=total_cost,
-            # token 价格对异步任务不适用，保持 None
-            input_price=None,
-            output_price=None,
-            cache_creation_price=None,
-            cache_read_price=None,
-            request_price=None,
-            actual_rate_multiplier=actual_rate_multiplier,
-            is_free_tier=is_free_tier,
+            cost=UsageCostInfo(
+                input_cost=input_cost,
+                output_cost=output_cost,
+                cache_creation_cost=cache_creation_cost,
+                cache_read_cost=cache_read_cost,
+                cache_cost=cache_cost,
+                request_cost=request_cost,
+                total_cost=total_cost,
+                actual_rate_multiplier=actual_rate_multiplier,
+                is_free_tier=is_free_tier,
+            ),
         )
 
         # Upsert（并发幂等：优先用 billing_status 作为结算闸门）

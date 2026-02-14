@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -79,3 +79,26 @@ class UsageRecordParams:
         valid_statuses = {"pending", "streaming", "completed", "failed", "cancelled"}
         if self.status not in valid_statuses:
             raise ValueError(f"无效的状态值: {self.status}，有效值: {valid_statuses}")
+
+
+@dataclass
+class UsageCostInfo:
+    """成本与价格信息，用于 _build_usage_params 参数封装"""
+
+    # 成本计算结果
+    input_cost: float = 0.0
+    output_cost: float = 0.0
+    cache_creation_cost: float = 0.0
+    cache_read_cost: float = 0.0
+    cache_cost: float = 0.0
+    request_cost: float = 0.0
+    total_cost: float = 0.0
+    # 价格信息
+    input_price: float | None = None
+    output_price: float | None = None
+    cache_creation_price: float | None = None
+    cache_read_price: float | None = None
+    request_price: float | None = None
+    # 倍率
+    actual_rate_multiplier: float = 1.0
+    is_free_tier: bool = False

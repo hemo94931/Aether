@@ -93,6 +93,10 @@ class CacheAffinityManager:
         self._memory_lock: asyncio.Lock | None = None
 
         # L1 缓存（即使使用 Redis 也启用，减少网络往返）
+        # 注意：L1 是本地进程内缓存，多实例部署时存在短暂不一致窗口（TTL 秒级）。
+        # 当前 TTL 默认 3 秒，对于亲和性路由来说可接受：最坏情况是短暂路由到
+        # 旧 provider，下次请求即可自动修正。如果需要严格一致性，将 TTL 设为 0
+        # 以禁用 L1 缓存，或通过 CacheSyncService 接收 pub/sub 主动失效。
         self._l1_cache_ttl = int(os.getenv("CACHE_AFFINITY_L1_TTL", str(CacheTTL.L1_LOCAL)))
         self._l1_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._l1_lock = asyncio.Lock()

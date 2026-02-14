@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
@@ -27,6 +28,16 @@ _SENSITIVE_PATTERN = re.compile(
     r"(api[_-]?key|token|bearer|authorization)[=:\s]+\S+",
     re.IGNORECASE,
 )
+
+
+@dataclass
+class AttemptErrorOutcome:
+    """_handle_attempt_error 的返回结果"""
+
+    action: FailoverAction
+    last_status_code: int | None
+    max_retries: int
+    stop_result: ExecutionResult | None = None
 
 
 class FailoverEngine:
@@ -186,23 +197,7 @@ class FailoverEngine:
                             record_id=record_id,
                         )
 
-                    # Mark success-like status
-                    if record_id:
-                        if attempt_result.kind == AttemptKind.STREAM:
-                            # For streaming, mark "streaming" (final status is recorded elsewhere).
-                            self._update_record(
-                                record_id,
-                                status="streaming",
-                                status_code=attempt_result.http_status,
-                            )
-                        else:
-                            self._update_record(
-                                record_id,
-                                status="success",
-                                status_code=attempt_result.http_status,
-                                finished_at=datetime.now(timezone.utc),
-                            )
-                        self.db.commit()
+                    self._record_attempt_success(record_id, attempt_result)
 
                     # PRE_EXPAND: mark unused slots after request ends (success)
                     if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
@@ -234,93 +229,32 @@ class FailoverEngine:
                     )
 
                 except StreamProbeError as exc:
-                    # Probe failed (before first chunk) => eligible for failover
                     last_status_code = exc.http_status
-                    if record_id:
-                        self._update_record(
-                            record_id,
-                            status="failed",
-                            status_code=exc.http_status,
-                            error_type=type(exc).__name__,
-                            error_message=self._sanitize(str(exc)),
-                            finished_at=datetime.now(timezone.utc),
-                        )
-                        self.db.commit()
+                    self._record_attempt_failure(record_id, exc, exc.http_status)
                     action = FailoverAction.CONTINUE
 
                 except Exception as exc:
-                    has_retry_left = retry_index + 1 < max_retries
-
-                    # If caller provides an execution_error_handler, prefer it for RequestExecutor's ExecutionError.
-                    handler_used = False
-                    if execution_error_handler is not None:
-                        try:
-                            from src.services.request.executor import (
-                                ExecutionError as _ExecutionError,
-                            )
-
-                            if isinstance(exc, _ExecutionError):
-                                handler_used = True
-                                action, new_max_retries = await execution_error_handler(
-                                    exec_err=exc,
-                                    candidate=candidate,
-                                    candidate_index=candidate_index,
-                                    retry_index=retry_index,
-                                    max_retries_for_candidate=max_retries,
-                                    record_id=record_id,
-                                    attempt_count=attempt_count,
-                                    max_attempts=max_attempts,
-                                )
-                                if new_max_retries is not None:
-                                    max_retries = max(max_retries, int(new_max_retries))
-                        except Exception:
-                            # Fall back to internal handler below.
-                            handler_used = False
-
-                    if not handler_used:
-                        action = await self._handle_error(
-                            exc,
-                            candidate=candidate,
-                            has_retry_left=has_retry_left,
-                        )
-
-                        last_status_code = int(getattr(exc, "status_code", 0) or 0) or int(
-                            getattr(exc, "http_status", 0) or 0
-                        )
-
-                        if record_id:
-                            self._update_record(
-                                record_id,
-                                status="failed",
-                                status_code=last_status_code or None,
-                                error_type=type(exc).__name__,
-                                error_message=self._sanitize(str(exc)),
-                                finished_at=datetime.now(timezone.utc),
-                            )
-                            self.db.commit()
-
-                        if action == FailoverAction.STOP:
-                            # PRE_EXPAND: STOP ends the request => mark remaining slots unused.
-                            if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
-                                self._mark_remaining_slots_unused(
-                                    candidate_record_map=candidate_record_map,
-                                    candidates=candidates,
-                                    success_candidate_idx=candidate_index,
-                                    success_retry_idx=retry_index,
-                                    retry_policy=retry_policy,
-                                )
-                            return ExecutionResult(
-                                success=False,
-                                error_type=type(exc).__name__,
-                                error_message=self._sanitize(str(exc)),
-                                last_status_code=last_status_code or None,
-                                candidate_keys=self._get_candidate_keys(
-                                    request_id=request_id,
-                                    fallback=candidate_keys_fallback,
-                                    candidates=candidates,
-                                ),
-                                attempt_count=attempt_count,
-                            )
+                    outcome = await self._handle_attempt_error(
+                        exc,
+                        candidate=candidate,
+                        candidate_index=candidate_index,
+                        retry_index=retry_index,
+                        max_retries=max_retries,
+                        record_id=record_id,
+                        attempt_count=attempt_count,
+                        max_attempts=max_attempts,
+                        execution_error_handler=execution_error_handler,
+                        retry_policy=retry_policy,
+                        candidate_record_map=candidate_record_map,
+                        candidates=candidates,
+                        request_id=request_id,
+                        candidate_keys_fallback=candidate_keys_fallback,
+                    )
+                    action = outcome.action
+                    last_status_code = outcome.last_status_code
+                    max_retries = outcome.max_retries
+                    if outcome.stop_result is not None:
+                        return outcome.stop_result
 
                 # action switch: continue/ retry
                 if action == FailoverAction.CONTINUE:
@@ -355,6 +289,138 @@ class FailoverEngine:
                 candidates=candidates,
             ),
             attempt_count=attempt_count,
+        )
+
+    def _record_attempt_success(self, record_id: str | None, attempt_result: AttemptResult) -> None:
+        """Mark attempt record as success/streaming."""
+        if not record_id:
+            return
+        if attempt_result.kind == AttemptKind.STREAM:
+            self._update_record(
+                record_id,
+                status="streaming",
+                status_code=attempt_result.http_status,
+            )
+        else:
+            self._update_record(
+                record_id,
+                status="success",
+                status_code=attempt_result.http_status,
+                finished_at=datetime.now(timezone.utc),
+            )
+        self.db.commit()
+
+    def _record_attempt_failure(
+        self, record_id: str | None, exc: Exception, status_code: int | None = None
+    ) -> None:
+        """Mark attempt record as failed."""
+        if not record_id:
+            return
+        self._update_record(
+            record_id,
+            status="failed",
+            status_code=status_code,
+            error_type=type(exc).__name__,
+            error_message=self._sanitize(str(exc)),
+            finished_at=datetime.now(timezone.utc),
+        )
+        self.db.commit()
+
+    async def _handle_attempt_error(
+        self,
+        exc: Exception,
+        *,
+        candidate: ProviderCandidate,
+        candidate_index: int,
+        retry_index: int,
+        max_retries: int,
+        record_id: str | None,
+        attempt_count: int,
+        max_attempts: int | None,
+        execution_error_handler: Any,
+        retry_policy: RetryPolicy,
+        candidate_record_map: dict[tuple[int, int], str] | None,
+        candidates: list[ProviderCandidate],
+        request_id: str | None,
+        candidate_keys_fallback: list[CandidateKey],
+    ) -> AttemptErrorOutcome:
+        """
+        Handle attempt exception: delegate to external/internal handler, update records.
+
+        Returns:
+            AttemptErrorOutcome; stop_result is non-None only when action==STOP.
+        """
+        has_retry_left = retry_index + 1 < max_retries
+
+        # If caller provides an execution_error_handler, prefer it for ExecutionError.
+        handler_used = False
+        action = FailoverAction.CONTINUE
+        if execution_error_handler is not None:
+            try:
+                from src.services.request.executor import ExecutionError as _ExecutionError
+
+                if isinstance(exc, _ExecutionError):
+                    handler_used = True
+                    action, new_max_retries = await execution_error_handler(
+                        exec_err=exc,
+                        candidate=candidate,
+                        candidate_index=candidate_index,
+                        retry_index=retry_index,
+                        max_retries_for_candidate=max_retries,
+                        record_id=record_id,
+                        attempt_count=attempt_count,
+                        max_attempts=max_attempts,
+                    )
+                    if new_max_retries is not None:
+                        max_retries = max(max_retries, int(new_max_retries))
+            except Exception:
+                handler_used = False
+
+        last_status_code: int | None = None
+        if not handler_used:
+            action = await self._handle_error(
+                exc,
+                candidate=candidate,
+                has_retry_left=has_retry_left,
+            )
+
+            last_status_code = int(getattr(exc, "status_code", 0) or 0) or int(
+                getattr(exc, "http_status", 0) or 0
+            )
+
+            self._record_attempt_failure(record_id, exc, last_status_code or None)
+
+            if action == FailoverAction.STOP:
+                if retry_policy.mode == RetryMode.PRE_EXPAND and candidate_record_map:
+                    self._mark_remaining_slots_unused(
+                        candidate_record_map=candidate_record_map,
+                        candidates=candidates,
+                        success_candidate_idx=candidate_index,
+                        success_retry_idx=retry_index,
+                        retry_policy=retry_policy,
+                    )
+                return AttemptErrorOutcome(
+                    action=action,
+                    last_status_code=last_status_code,
+                    max_retries=max_retries,
+                    stop_result=ExecutionResult(
+                        success=False,
+                        error_type=type(exc).__name__,
+                        error_message=self._sanitize(str(exc)),
+                        last_status_code=last_status_code or None,
+                        candidate_keys=self._get_candidate_keys(
+                            request_id=request_id,
+                            fallback=candidate_keys_fallback,
+                            candidates=candidates,
+                        ),
+                        attempt_count=attempt_count,
+                    ),
+                )
+
+        return AttemptErrorOutcome(
+            action=action,
+            last_status_code=last_status_code,
+            max_retries=max_retries,
         )
 
     def _sanitize(self, message: str, max_length: int = 200) -> str:
