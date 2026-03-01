@@ -10,8 +10,8 @@
     <div class="space-y-5 max-h-[60vh] overflow-y-auto px-0.5 py-0.5 -mx-0.5">
       <!-- 成功转移规则 -->
       <div class="space-y-3">
-        <div class="flex items-center justify-between">
-          <div>
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
             <h3 class="text-sm font-medium">
               成功转移规则
             </h3>
@@ -23,6 +23,7 @@
             type="button"
             variant="outline"
             size="sm"
+            class="shrink-0"
             @click="addRule('success')"
           >
             <Plus class="w-4 h-4 mr-1" />
@@ -45,6 +46,7 @@
           <Input
             v-model="rule.pattern"
             placeholder="例如: relay:.*格式错误"
+            size="sm"
             class="font-mono text-xs flex-1"
           />
           <Button
@@ -60,8 +62,8 @@
 
       <!-- 错误终止规则 -->
       <div class="space-y-3">
-        <div class="flex items-center justify-between">
-          <div>
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
             <h3 class="text-sm font-medium">
               错误终止规则
             </h3>
@@ -73,6 +75,7 @@
             type="button"
             variant="outline"
             size="sm"
+            class="shrink-0"
             @click="addRule('error')"
           >
             <Plus class="w-4 h-4 mr-1" />
@@ -93,15 +96,15 @@
           class="flex items-center gap-1"
         >
           <Input
-            :model-value="formatStatusCodes(rule.status_codes)"
-            placeholder="状态码"
+            v-model="statusCodeInputs[index]"
+            placeholder="状态码 (可选)"
             size="sm"
-            class="font-mono text-xs w-24 shrink-0"
-            @update:model-value="(v: string | number) => rule.status_codes = parseStatusCodes(String(v))"
+            class="font-mono text-xs w-28 shrink-0"
           />
           <Input
             v-model="rule.pattern"
             placeholder="例如: content_policy_violation"
+            size="sm"
             class="font-mono text-xs flex-1"
           />
           <Button
@@ -162,12 +165,16 @@ const saving = ref(false)
 
 const successPatterns = ref<FailoverRuleItem[]>([])
 const errorPatterns = ref<FailoverRuleItem[]>([])
+const statusCodeInputs = ref<string[]>([])
 
 watch(() => [props.open, props.provider], () => {
   if (props.open && props.provider) {
     const rules = props.provider.failover_rules
     successPatterns.value = (rules?.success_failover_patterns || []).map(r => ({ ...r }))
     errorPatterns.value = (rules?.error_stop_patterns || []).map(r => ({ ...r }))
+    statusCodeInputs.value = errorPatterns.value.map(r =>
+      r.status_codes?.length ? r.status_codes.join(',') : ''
+    )
   }
 }, { immediate: true })
 
@@ -177,6 +184,7 @@ function addRule(type: 'success' | 'error') {
     successPatterns.value.push(rule)
   } else {
     errorPatterns.value.push(rule)
+    statusCodeInputs.value.push('')
   }
 }
 
@@ -185,6 +193,7 @@ function removeRule(type: 'success' | 'error', index: number) {
     successPatterns.value.splice(index, 1)
   } else {
     errorPatterns.value.splice(index, 1)
+    statusCodeInputs.value.splice(index, 1)
   }
 }
 
@@ -192,19 +201,29 @@ function handleClose() {
   emit('update:open', false)
 }
 
-function formatStatusCodes(codes: number[] | undefined): string {
-  if (!codes || codes.length === 0) return ''
-  return codes.join(',')
+function parseStatusCodes(input: string): { valid: true; codes?: number[] } | { valid: false; reason: string } {
+  const trimmed = input.trim()
+  if (!trimmed) return { valid: true }
+  const parts = trimmed.split(/[,\s]+/)
+  const codes: number[] = []
+  for (const part of parts) {
+    if (!part) continue
+    if (!/^\d+$/.test(part)) return { valid: false, reason: `"${part}" 不是有效数字` }
+    const n = parseInt(part, 10)
+    if (n < 100 || n > 599) return { valid: false, reason: `${n} 不在 100-599 范围内` }
+    codes.push(n)
+  }
+  return { valid: true, codes: codes.length > 0 ? codes : undefined }
 }
 
-function parseStatusCodes(input: string): number[] | undefined {
-  const trimmed = input.trim()
-  if (!trimmed) return undefined
-  const codes = trimmed
-    .split(/[,\s]+/)
-    .map(s => parseInt(s.trim(), 10))
-    .filter(n => !isNaN(n) && n >= 100 && n <= 599)
-  return codes.length > 0 ? codes : undefined
+function validatePattern(pattern: string): string | null {
+  if (!pattern.trim()) return '正则表达式不能为空'
+  try {
+    new RegExp(pattern)
+    return null
+  } catch {
+    return `无效的正则表达式: ${pattern}`
+  }
 }
 
 async function handleSave() {
@@ -213,16 +232,22 @@ async function handleSave() {
   // Validate patterns
   const allPatterns = [...successPatterns.value, ...errorPatterns.value]
   for (const rule of allPatterns) {
-    if (!rule.pattern.trim()) {
-      showError('正则表达式不能为空', '验证失败')
+    const err = validatePattern(rule.pattern)
+    if (err) {
+      showError(err, '验证失败')
       return
     }
-    try {
-      new RegExp(rule.pattern)
-    } catch {
-      showError(`无效的正则表达式: ${rule.pattern}`, '验证失败')
+  }
+
+  // Parse and validate status codes from raw inputs
+  for (let i = 0; i < errorPatterns.value.length; i++) {
+    const raw = statusCodeInputs.value[i]?.trim() || ''
+    const result = parseStatusCodes(raw)
+    if (!result.valid) {
+      showError(`状态码格式错误: ${result.reason}，请输入 100-599 之间的整数，多个用逗号分隔`, '验证失败')
       return
     }
+    errorPatterns.value[i].status_codes = result.codes
   }
 
   saving.value = true
