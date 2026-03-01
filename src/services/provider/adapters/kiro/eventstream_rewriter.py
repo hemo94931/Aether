@@ -142,6 +142,7 @@ class _KiroStreamState:
     has_tool_use: bool = False
     stop_reason_override: str | None = None
     had_error: bool = False
+    _last_content: str = ""
 
     def generate_initial_events(self) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
@@ -286,6 +287,11 @@ class _KiroStreamState:
     def process_assistant_response(self, content: str) -> list[dict[str, Any]]:
         if not content:
             return []
+
+        # Kiro may send duplicate content events; skip exact repeats.
+        if content == self._last_content:
+            return []
+        self._last_content = content
 
         self.output_tokens += _estimate_tokens(content)
 

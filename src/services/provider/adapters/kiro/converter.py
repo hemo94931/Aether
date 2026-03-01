@@ -189,6 +189,29 @@ def _process_message_content(
     return "".join(text_parts), images, tool_results
 
 
+def _clean_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Recursively remove fields that Kiro API rejects.
+
+    Kiro returns 400 "Improperly formed request" when tool schemas contain
+    ``additionalProperties`` (any value) or empty ``required: []`` arrays.
+    """
+    if not isinstance(schema, dict):
+        return schema  # type: ignore[return-value]
+    result: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "additionalProperties":
+            continue
+        if key == "required" and isinstance(value, list) and not value:
+            continue
+        if isinstance(value, dict):
+            result[key] = _clean_tool_schema(value)
+        elif isinstance(value, list):
+            result[key] = [_clean_tool_schema(v) if isinstance(v, dict) else v for v in value]
+        else:
+            result[key] = value
+    return result
+
+
 def _convert_tools(tools: Any) -> list[dict[str, Any]]:
     if not isinstance(tools, list):
         return []
@@ -216,6 +239,8 @@ def _convert_tools(tools: Any) -> list[dict[str, Any]]:
         if not isinstance(input_schema, dict):
             input_schema = {}
 
+        input_schema = _clean_tool_schema(input_schema)
+
         out.append(
             {
                 "toolSpecification": {
@@ -236,11 +261,8 @@ def _create_placeholder_tool(name: str) -> dict[str, Any]:
             "description": "Tool used in conversation history",
             "inputSchema": {
                 "json": {
-                    "$schema": "http://json-schema.org/draft-07/schema#",
                     "type": "object",
                     "properties": {},
-                    "required": [],
-                    "additionalProperties": True,
                 }
             },
         }
@@ -348,25 +370,10 @@ def convert_claude_messages_to_conversation_state(
     if system_text:
         # Append chunked-write policy so the model silently obeys tool limits.
         final_system = f"{system_text}\n{_SYSTEM_CHUNKED_POLICY}"
-        if thinking_prefix and not _has_thinking_tags(system_text):
-            final_system = f"{thinking_prefix}\n{final_system}"
         history.append(
             {
                 "userInputMessage": {
                     "content": final_system,
-                    "modelId": model_id,
-                    "origin": "AI_EDITOR",
-                }
-            }
-        )
-        history.append(
-            {"assistantResponseMessage": {"content": "I will follow these instructions."}}
-        )
-    elif thinking_prefix:
-        history.append(
-            {
-                "userInputMessage": {
-                    "content": thinking_prefix,
                     "modelId": model_id,
                     "origin": "AI_EDITOR",
                 }
@@ -437,9 +444,22 @@ def convert_claude_messages_to_conversation_state(
             user_item = _flush_user_buffer()
             if user_item is not None:
                 history.append(user_item)
-                assistant_item = _convert_assistant_message(msg)
-                if assistant_item is not None:
-                    history.append({"assistantResponseMessage": assistant_item})
+            elif not history or "assistantResponseMessage" in history[-1]:
+                # No preceding user message: insert synthetic user message
+                # to maintain alternating roles required by Kiro API.
+                history.append(
+                    {
+                        "userInputMessage": {
+                            "content": "Continue.",
+                            "modelId": model_id,
+                            "origin": "AI_EDITOR",
+                        }
+                    }
+                )
+
+            assistant_item = _convert_assistant_message(msg)
+            if assistant_item is not None:
+                history.append({"assistantResponseMessage": assistant_item})
             continue
 
     # trailing unpaired user messages in history
@@ -560,6 +580,11 @@ def convert_claude_messages_to_conversation_state(
         user_ctx["tools"] = tools
     if validated_tool_results:
         user_ctx["toolResults"] = validated_tool_results
+
+    # Inject thinking tags into currentMessage (not history) so the
+    # instruction applies to the current turn only.
+    if thinking_prefix and not _has_thinking_tags(text_content):
+        text_content = f"{thinking_prefix}\n{text_content}"
 
     user_input: dict[str, Any] = {
         "userInputMessageContext": user_ctx,
