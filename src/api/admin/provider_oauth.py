@@ -125,6 +125,8 @@ async def _consume_state(redis: Redis, nonce: str) -> ProviderOAuthStateData | N
 _PROVIDER_OAUTH_BATCH_TASK_PREFIX = "provider_oauth_batch_task:"
 _PROVIDER_OAUTH_BATCH_TASK_TTL_SECONDS = 24 * 3600
 _PROVIDER_OAUTH_BATCH_TASK_MAX_ERROR_SAMPLES = 20
+_PROVIDER_OAUTH_DEFAULT_TIMEOUT_SECONDS = 30.0
+_PROVIDER_OAUTH_BATCH_IMPORT_PROXY_TIMEOUT_SECONDS = 60.0
 _PROVIDER_OAUTH_BATCH_TASK_ALLOWED_STATUSES = {
     "submitted",
     "processing",
@@ -175,7 +177,9 @@ async def _save_batch_task_state(
     )
 
 
-async def _load_batch_task_state(task_id: str, *, redis: Redis | None = None) -> dict[str, Any] | None:
+async def _load_batch_task_state(
+    task_id: str, *, redis: Redis | None = None
+) -> dict[str, Any] | None:
     now_ts = int(time.time())
     _cleanup_in_memory_batch_tasks(now_ts)
     redis_client = redis if redis is not None else await get_redis_client(require_redis=False)
@@ -309,6 +313,21 @@ def _resolve_proxy_for_oauth(
         return key_proxy, key_proxy
     # 无 Key 级代理，使用 Provider 级代理
     return provider_proxy, None
+
+
+def _resolve_batch_import_timeout_seconds(proxy_config: dict[str, Any] | None) -> float:
+    """返回 OAuth 批量导入 token 刷新超时。
+
+    走代理链路时延更高，适当放宽超时，减少批量导入误超时。
+    """
+    if not proxy_config:
+        return _PROVIDER_OAUTH_DEFAULT_TIMEOUT_SECONDS
+    if isinstance(proxy_config, dict):
+        if not proxy_config.get("enabled", True):
+            return _PROVIDER_OAUTH_DEFAULT_TIMEOUT_SECONDS
+        return _PROVIDER_OAUTH_BATCH_IMPORT_PROXY_TIMEOUT_SECONDS
+    # 兼容历史数据：非 dict 但存在代理配置时同样使用放宽超时
+    return _PROVIDER_OAUTH_BATCH_IMPORT_PROXY_TIMEOUT_SECONDS
 
 
 def _pkce_s256(verifier: str) -> str:
@@ -1750,6 +1769,7 @@ async def _batch_import_standard_oauth_internal(
 ) -> BatchImportResponse:
     """标准 OAuth Provider 批量导入（不含 Kiro）。"""
     template = _require_oauth_template(provider_type)
+    timeout_seconds = _resolve_batch_import_timeout_seconds(proxy_config)
 
     tokens = _parse_tokens_input(raw_credentials)
     if not tokens:
@@ -1811,7 +1831,7 @@ async def _batch_import_standard_oauth_internal(
                         data=data,
                         json_body=json_body,
                         proxy_config=proxy_config,
-                        timeout_seconds=30.0,
+                        timeout_seconds=timeout_seconds,
                     )
                 except Exception as exc:
                     result_item = BatchImportResultItem(
@@ -2109,7 +2129,9 @@ async def _run_batch_import_task(
             try:
                 await _save_batch_task_state(task_id, state, redis=redis)
             except Exception as exc:
-                logger.debug("[BATCH_IMPORT_TASK] save progress failed (task_id={}): {}", task_id, exc)
+                logger.debug(
+                    "[BATCH_IMPORT_TASK] save progress failed (task_id={}): {}", task_id, exc
+                )
 
         if provider_type == ProviderType.KIRO.value:
             result = await _batch_import_kiro_internal(
@@ -2264,6 +2286,7 @@ async def _batch_import_kiro_internal(
     credentials = _parse_kiro_import_input(raw_credentials)
     if not credentials:
         raise InvalidRequestException("未找到有效的凭据数据")
+    timeout_seconds = _resolve_batch_import_timeout_seconds(proxy_config)
 
     api_formats = _get_provider_api_formats(provider)
 
@@ -2297,7 +2320,11 @@ async def _batch_import_kiro_internal(
             cfg.provider_type = ProviderType.KIRO.value
 
             try:
-                access_token, new_cfg = await refresh_access_token(cfg, proxy_config=proxy_config)
+                access_token, new_cfg = await refresh_access_token(
+                    cfg,
+                    proxy_config=proxy_config,
+                    timeout_seconds=timeout_seconds,
+                )
             except Exception as exc:
                 result_item = BatchImportResultItem(
                     index=idx,

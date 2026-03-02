@@ -253,8 +253,7 @@ mod tests {
 
     #[test]
     fn request_meta_accepts_integer_like_float_timeout() {
-        let raw =
-            br#"{"method":"GET","url":"https://example.com","headers":{},"timeout":15.0}"#;
+        let raw = br#"{"method":"GET","url":"https://example.com","headers":{},"timeout":15.0}"#;
         let meta: RequestMeta = serde_json::from_slice(raw).expect("parse request meta");
         assert_eq!(meta.timeout, 15);
     }

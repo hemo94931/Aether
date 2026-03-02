@@ -60,7 +60,7 @@ network_access = "enabled"
 disable_response_storage = true
 
 [model_providers.aether]
-name = "aether"
+name = "OpenAI"
 base_url = "${baseUrl.value}/v1"
 wire_api = "responses"
 requires_openai_auth = true`)

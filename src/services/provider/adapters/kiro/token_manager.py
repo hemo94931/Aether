@@ -295,11 +295,20 @@ async def refresh_access_token(
     cfg: KiroAuthConfig,
     *,
     proxy_config: dict[str, Any] | None,
+    timeout_seconds: float = 30.0,
 ) -> tuple[str, KiroAuthConfig]:
     method = (cfg.auth_method or "social").strip().lower()
     if method == "idc":
-        return await refresh_idc_token(cfg, proxy_config=proxy_config)
-    return await refresh_social_token(cfg, proxy_config=proxy_config)
+        return await refresh_idc_token(
+            cfg,
+            proxy_config=proxy_config,
+            timeout_seconds=timeout_seconds,
+        )
+    return await refresh_social_token(
+        cfg,
+        proxy_config=proxy_config,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 __all__ = [

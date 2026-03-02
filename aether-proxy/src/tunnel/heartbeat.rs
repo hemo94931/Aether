@@ -3,6 +3,8 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bytes::Bytes;
 use tokio::sync::watch;
@@ -15,6 +17,11 @@ use crate::state::ServerContext;
 
 use super::protocol::{Frame, MsgType};
 use super::writer::FrameSender;
+
+enum AckDecision {
+    Accept(Option<u64>),
+    Ignore,
+}
 
 /// Handle for the dispatcher to forward HeartbeatAck frames.
 #[derive(Clone)]
@@ -37,6 +44,15 @@ pub fn spawn_noop() -> HeartbeatHandle {
     HeartbeatHandle { ack_tx }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct HeartbeatSnapshot {
+    requests: u64,
+    latency_ns: u64,
+    failed: u64,
+    dns_failures: u64,
+    stream_errors: u64,
+}
+
 /// Spawn the heartbeat task. Returns a handle for forwarding ACKs.
 pub fn spawn(
     _config: Arc<Config>,
@@ -50,6 +66,19 @@ pub fn spawn(
         // Read initial interval from dynamic config (may be updated by remote config).
         let initial_interval = Duration::from_secs(server.dynamic.load().heartbeat_interval);
         let mut current_interval = initial_interval;
+        // At most one in-flight heartbeat snapshot is tracked at a time.
+        // Snapshot is only cleared after receiving an ACK, which avoids losing
+        // interval counters when ACK/frame delivery is temporarily unstable.
+        let mut pending: Option<(u64, HeartbeatSnapshot)> = None;
+        let mut next_heartbeat_id: u64 = 1;
+        let heartbeat_session_id = format!(
+            "{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
 
         // Skip first immediate tick by sleeping first.
         tokio::time::sleep(current_interval).await;
@@ -57,9 +86,30 @@ pub fn spawn(
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(current_interval) => {
-                    let payload = build_heartbeat_payload(&server);
+                    let (heartbeat_id, snapshot) = if let Some((id, snap)) = pending {
+                        (id, snap)
+                    } else {
+                        let snap = collect_snapshot(&server);
+                        let id = next_heartbeat_id;
+                        next_heartbeat_id = next_heartbeat_id.wrapping_add(1);
+                        if next_heartbeat_id == 0 {
+                            next_heartbeat_id = 1;
+                        }
+                        pending = Some((id, snap));
+                        (id, snap)
+                    };
+
+                    let payload = build_heartbeat_payload(
+                        &server,
+                        &heartbeat_session_id,
+                        heartbeat_id,
+                        snapshot
+                    );
                     let frame = Frame::control(MsgType::HeartbeatData, payload);
                     if frame_tx.send(frame).await.is_err() {
+                        if let Some((_, snap)) = pending.take() {
+                            restore_snapshot(&server, snap);
+                        }
                         break; // Writer closed
                     }
                     debug!("sent heartbeat data");
@@ -79,10 +129,30 @@ pub fn spawn(
                     }
                 }
                 Some(ack_payload) = ack_rx.recv() => {
-                    handle_ack(&server, &ack_payload);
+                    match handle_ack(&server, &ack_payload) {
+                        AckDecision::Accept(ack_id) => {
+                            if let Some((pending_id, _)) = pending {
+                                match ack_id {
+                                    Some(id) if id == pending_id => {
+                                        pending = None;
+                                    }
+                                    None => {
+                                        // Backward-compatible with servers that don't echo
+                                        // heartbeat_id in ACK payload yet.
+                                        pending = None;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        AckDecision::Ignore => {}
+                    }
                 }
                 _ = shutdown.changed() => {
                     debug!("heartbeat task shutting down");
+                    if let Some((_, snap)) = pending.take() {
+                        restore_snapshot(&server, snap);
+                    }
                     break;
                 }
             }
@@ -92,36 +162,81 @@ pub fn spawn(
     HeartbeatHandle { ack_tx }
 }
 
-fn build_heartbeat_payload(server: &ServerContext) -> Bytes {
+fn collect_snapshot(server: &ServerContext) -> HeartbeatSnapshot {
+    HeartbeatSnapshot {
+        requests: server.metrics.total_requests.swap(0, Ordering::AcqRel),
+        latency_ns: server.metrics.total_latency_ns.swap(0, Ordering::AcqRel),
+        failed: server.metrics.failed_requests.swap(0, Ordering::AcqRel),
+        dns_failures: server.metrics.dns_failures.swap(0, Ordering::AcqRel),
+        stream_errors: server.metrics.stream_errors.swap(0, Ordering::AcqRel),
+    }
+}
+
+fn restore_snapshot(server: &ServerContext, snap: HeartbeatSnapshot) {
+    if snap.requests > 0 {
+        server
+            .metrics
+            .total_requests
+            .fetch_add(snap.requests, Ordering::Release);
+    }
+    if snap.latency_ns > 0 {
+        server
+            .metrics
+            .total_latency_ns
+            .fetch_add(snap.latency_ns, Ordering::Release);
+    }
+    if snap.failed > 0 {
+        server
+            .metrics
+            .failed_requests
+            .fetch_add(snap.failed, Ordering::Release);
+    }
+    if snap.dns_failures > 0 {
+        server
+            .metrics
+            .dns_failures
+            .fetch_add(snap.dns_failures, Ordering::Release);
+    }
+    if snap.stream_errors > 0 {
+        server
+            .metrics
+            .stream_errors
+            .fetch_add(snap.stream_errors, Ordering::Release);
+    }
+}
+
+fn build_heartbeat_payload(
+    server: &ServerContext,
+    heartbeat_session_id: &str,
+    heartbeat_id: u64,
+    snapshot: HeartbeatSnapshot,
+) -> Bytes {
     let node_id = server.node_id.read().unwrap().clone();
 
-    let interval_requests = server.metrics.total_requests.swap(0, Ordering::AcqRel);
-    let interval_latency_ns = server.metrics.total_latency_ns.swap(0, Ordering::AcqRel);
-    let interval_failed = server.metrics.failed_requests.swap(0, Ordering::AcqRel);
-    let interval_dns_failures = server.metrics.dns_failures.swap(0, Ordering::AcqRel);
-    let interval_stream_errors = server.metrics.stream_errors.swap(0, Ordering::AcqRel);
-    let avg_latency_ms = if interval_requests > 0 {
-        Some(interval_latency_ns as f64 / interval_requests as f64 / 1_000_000.0)
+    let avg_latency_ms = if snapshot.requests > 0 {
+        Some(snapshot.latency_ns as f64 / snapshot.requests as f64 / 1_000_000.0)
     } else {
         None
     };
 
     let payload = serde_json::json!({
         "node_id": node_id,
+        "heartbeat_session_id": heartbeat_session_id,
+        "heartbeat_id": heartbeat_id,
         "active_connections": server.active_connections.load(Ordering::Acquire),
-        "total_requests": interval_requests,
+        "total_requests": snapshot.requests,
         "avg_latency_ms": avg_latency_ms,
-        "failed_requests": interval_failed,
-        "dns_failures": interval_dns_failures,
-        "stream_errors": interval_stream_errors,
+        "failed_requests": snapshot.failed,
+        "dns_failures": snapshot.dns_failures,
+        "stream_errors": snapshot.stream_errors,
     });
 
     Bytes::from(serde_json::to_vec(&payload).unwrap_or_default())
 }
 
-fn handle_ack(server: &ServerContext, payload: &[u8]) {
+fn handle_ack(server: &ServerContext, payload: &[u8]) -> AckDecision {
     if payload.is_empty() {
-        return;
+        return AckDecision::Accept(None);
     }
 
     #[derive(serde::Deserialize)]
@@ -130,6 +245,8 @@ fn handle_ack(server: &ServerContext, payload: &[u8]) {
         remote_config: Option<RemoteConfig>,
         #[serde(default)]
         config_version: u64,
+        #[serde(default)]
+        heartbeat_id: Option<u64>,
     }
 
     match serde_json::from_slice::<AckPayload>(payload) {
@@ -137,9 +254,11 @@ fn handle_ack(server: &ServerContext, payload: &[u8]) {
             if let Some(ref rc) = ack.remote_config {
                 runtime::apply_remote_config(&server.dynamic, rc, ack.config_version);
             }
+            AckDecision::Accept(ack.heartbeat_id)
         }
         Err(e) => {
             warn!(error = %e, "failed to parse heartbeat ACK");
+            AckDecision::Ignore
         }
     }
 }

@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from src.core.exceptions import InvalidRequestException, NotFoundException
@@ -338,36 +339,43 @@ class ProxyNodeService:
             )
 
         now = datetime.now(timezone.utc)
+        values: dict[str, Any] = {"last_heartbeat_at": now}
+
         # 心跳通过 tunnel 连接传输，能收到心跳说明 tunnel 一定连通。
-        # 如果状态不是 ONLINE 或 tunnel_connected 不一致（例如并发写入覆盖），修正状态。
+        # 若状态不一致（例如并发写入覆盖），修正为 ONLINE。
         if node.status != ProxyNodeStatus.ONLINE or not node.tunnel_connected:
-            node.status = ProxyNodeStatus.ONLINE
-            node.tunnel_connected = True
-            node.tunnel_connected_at = now
-            node.updated_at = now
-        node.last_heartbeat_at = now
+            values["status"] = ProxyNodeStatus.ONLINE
+            values["tunnel_connected"] = True
+            values["tunnel_connected_at"] = now
+            values["updated_at"] = now
+
         if heartbeat_interval is not None:
-            node.heartbeat_interval = heartbeat_interval
+            values["heartbeat_interval"] = heartbeat_interval
 
         # 实时快照指标 -- 直接覆盖
         if active_connections is not None:
-            node.active_connections = active_connections
+            values["active_connections"] = active_connections
         if avg_latency_ms is not None:
-            node.avg_latency_ms = avg_latency_ms
+            values["avg_latency_ms"] = avg_latency_ms
 
-        # 区间增量指标 -- 累加到累计值
+        # 区间增量指标 -- 使用数据库原子自增，避免并发心跳读改写丢增量
         if total_requests is not None and total_requests > 0:
-            node.total_requests = (node.total_requests or 0) + total_requests
+            values["total_requests"] = ProxyNode.total_requests + int(total_requests)
         if failed_requests is not None and failed_requests > 0:
-            node.failed_requests = (node.failed_requests or 0) + failed_requests
+            values["failed_requests"] = ProxyNode.failed_requests + int(failed_requests)
         if dns_failures is not None and dns_failures > 0:
-            node.dns_failures = (node.dns_failures or 0) + dns_failures
+            values["dns_failures"] = ProxyNode.dns_failures + int(dns_failures)
         if stream_errors is not None and stream_errors > 0:
-            node.stream_errors = (node.stream_errors or 0) + stream_errors
+            values["stream_errors"] = ProxyNode.stream_errors + int(stream_errors)
 
+        db.execute(update(ProxyNode).where(ProxyNode.id == node_id).values(**values))
         db.commit()
-        db.refresh(node)
-        return node
+        db.expire_all()
+
+        refreshed = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
+        if not refreshed:
+            raise NotFoundException(f"ProxyNode {node_id} 不存在", "proxy_node")
+        return refreshed
 
     @staticmethod
     def unregister_node(db: Session, *, node_id: str) -> ProxyNode:

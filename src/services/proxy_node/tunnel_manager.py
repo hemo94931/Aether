@@ -20,7 +20,7 @@ from starlette.websockets import WebSocket, WebSocketState
 
 from src.core.logger import logger
 
-from .tunnel_protocol import Frame, FrameFlags, MsgType
+from .tunnel_protocol import Frame, FrameFlags, MsgType, normalize_heartbeat_id
 
 # 隧道帧压缩的最小 payload 大小（字节）
 # 小于此值的帧压缩收益不大，反而增加 CPU 开销
@@ -463,6 +463,10 @@ class TunnelManager:
             data = json.loads(frame.payload) if frame.payload else {}
         except Exception:
             data = {}
+        heartbeat_id = normalize_heartbeat_id(data.get("heartbeat_id"))
+        ack: dict[str, Any] = {}
+        if heartbeat_id is not None:
+            ack["heartbeat_id"] = heartbeat_id
 
         def _sync_heartbeat() -> dict[str, Any]:
             from src.database import create_session
@@ -489,10 +493,9 @@ class TunnelManager:
                 db.close()
 
         try:
-            ack = await asyncio.to_thread(_sync_heartbeat)
+            ack.update(await asyncio.to_thread(_sync_heartbeat))
         except Exception as e:
             logger.warning("tunnel heartbeat DB update failed: {}", e)
-            ack = {}
 
         try:
             await conn.send_frame(Frame(0, MsgType.HEARTBEAT_ACK, 0, json.dumps(ack).encode()))

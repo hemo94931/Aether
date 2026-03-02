@@ -11,6 +11,8 @@ import struct
 from enum import IntEnum
 from typing import Self
 
+_U64_MAX = (1 << 64) - 1
+
 HEADER_SIZE = 10  # 4 + 1 + 1 + 4 bytes
 
 
@@ -98,3 +100,25 @@ class Frame:
             f"Frame(stream={self.stream_id}, type={self.msg_type.name}, "
             f"flags=0x{self.flags:02x}, payload_len={len(self.payload)})"
         )
+
+
+def normalize_heartbeat_id(value: object) -> int | None:
+    """Normalize heartbeat_id to u64-compatible int for Rust ACK parsing."""
+    if isinstance(value, bool) or value is None:
+        return None
+    parsed: int | None = None
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float):
+        if value.is_integer():
+            parsed = int(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            try:
+                parsed = int(stripped)
+            except ValueError:
+                parsed = None
+    if parsed is None or parsed < 0 or parsed > _U64_MAX:
+        return None
+    return parsed
