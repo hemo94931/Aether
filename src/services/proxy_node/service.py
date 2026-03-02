@@ -556,38 +556,14 @@ class ProxyNodeService:
 
         # tunnel 节点：通过 WebSocket tunnel 测试
         if not node.is_manual:
-            from src.services.proxy_node.hub_config import get_hub_config
-
-            hub_enabled = get_hub_config().enabled
-            connected = False
-            if hub_enabled:
-                connected = bool(node.tunnel_connected) and node.status == ProxyNodeStatus.ONLINE
-            else:
-                # 非 Hub 模式：以当前 worker 本地 TunnelManager 状态为准，
-                # 避免多 worker 场景的跨进程状态误判。
-                from src.services.proxy_node.tunnel_manager import get_tunnel_manager
-
-                manager = get_tunnel_manager()
-                connected = manager.has_tunnel(node.id)
+            connected = bool(node.tunnel_connected) and node.status == ProxyNodeStatus.ONLINE
 
             if not connected:
-                hint = ""
-                try:
-                    from src.config import config
-
-                    if config.worker_processes > 1 and not hub_enabled:
-                        hint = (
-                            "（当前 worker 无 tunnel 连接；检测到多 worker 部署，"
-                            "建议设置 GUNICORN_WORKERS/WEB_CONCURRENCY=1）"
-                        )
-                except Exception:
-                    # 配置读取失败时保持原始错误，避免影响主流程
-                    hint = ""
                 return {
                     "success": False,
                     "latency_ms": None,
                     "exit_ip": None,
-                    "error": f"tunnel 未连接{hint}",
+                    "error": "tunnel 未连接",
                 }
             result = await _test_tunnel_connectivity(node.id)
 

@@ -2,7 +2,7 @@
 ProxyNode 心跳检测调度器
 
 定期检查 proxy_nodes 的连接健康状态，更新节点状态：
-- 本地 TunnelManager 观测到连接 -> ONLINE（自愈）
+- 心跳正常且 tunnel_connected=True -> ONLINE（自愈）
 - 心跳超时（跨 worker 共享信号） -> OFFLINE
 """
 
@@ -83,15 +83,11 @@ class ProxyNodeHealthScheduler:
             await self._cleanup_old_events()
 
     async def _check_heartbeats(self) -> None:
-        from src.services.proxy_node.tunnel_manager import get_tunnel_manager
-
-        manager = get_tunnel_manager()
         db = create_session()
         try:
             now = datetime.now(timezone.utc)
             # 检查所有非手动节点（手动节点无心跳，始终保持 ONLINE）
-            # 包括 OFFLINE 节点：tunnel 重连后如果 _update_tunnel_status 失败，
-            # 健康检查需要能根据 TunnelManager 内存状态将其恢复为 ONLINE
+            # 包括 OFFLINE 节点：心跳恢复后可自愈
             nodes = (
                 db.query(ProxyNode)
                 .filter(
@@ -104,23 +100,6 @@ class ProxyNodeHealthScheduler:
 
             changed = 0
             for node in nodes:
-                # 注意：TunnelManager 仅是当前 worker 的进程内状态，跨 worker 不共享。
-                # 因此“本地无 tunnel”不能直接判定 OFFLINE（可能连接在其他 worker）。
-                # OFFLINE 统一由心跳超时判定，避免多进程误判。
-                actually_connected_local = manager.has_tunnel(node.id)
-
-                if actually_connected_local:
-                    if not node.tunnel_connected:
-                        node.tunnel_connected = True
-                        node.tunnel_connected_at = now
-                        changed += 1
-                    if node.status != ProxyNodeStatus.ONLINE:
-                        node.status = ProxyNodeStatus.ONLINE
-                        node.updated_at = now
-                        changed += 1
-                    continue
-
-                # 本地无 tunnel：仅在心跳超时时标记 OFFLINE
                 if heartbeat_is_stale(node, now):
                     if node.tunnel_connected:
                         node.tunnel_connected = False
@@ -130,6 +109,13 @@ class ProxyNodeHealthScheduler:
                         node.status = ProxyNodeStatus.OFFLINE
                         node.updated_at = now
                         changed += 1
+                    continue
+
+                # 心跳正常且连接状态为已连时，确保 ONLINE（自愈状态不一致）
+                if node.tunnel_connected and node.status != ProxyNodeStatus.ONLINE:
+                    node.status = ProxyNodeStatus.ONLINE
+                    node.updated_at = now
+                    changed += 1
 
             if changed:
                 db.commit()

@@ -144,12 +144,42 @@ pub struct RequestMeta {
     pub method: String,
     pub url: String,
     pub headers: std::collections::HashMap<String, String>,
-    #[serde(default = "default_timeout")]
+    #[serde(default = "default_timeout", deserialize_with = "deserialize_timeout")]
     pub timeout: u64,
 }
 
 fn default_timeout() -> u64 {
     60
+}
+
+fn deserialize_timeout<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum TimeoutValue {
+        Int(u64),
+        Float(f64),
+    }
+
+    match <TimeoutValue as serde::Deserialize>::deserialize(deserializer)? {
+        TimeoutValue::Int(v) => Ok(v),
+        TimeoutValue::Float(v) => {
+            if !v.is_finite() || v < 0.0 {
+                return Err(serde::de::Error::custom(
+                    "timeout must be a non-negative finite number",
+                ));
+            }
+            if v.fract() != 0.0 {
+                return Err(serde::de::Error::custom("timeout must be integer seconds"));
+            }
+            if v > (u64::MAX as f64) {
+                return Err(serde::de::Error::custom("timeout is too large"));
+            }
+            Ok(v as u64)
+        }
+    }
 }
 
 /// JSON payload for RESPONSE_HEADERS frames.
@@ -208,4 +238,24 @@ fn compress_gzip(data: &[u8]) -> Result<Bytes, std::io::Error> {
     encoder.write_all(data)?;
     let compressed = encoder.finish()?;
     Ok(Bytes::from(compressed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RequestMeta;
+
+    #[test]
+    fn request_meta_accepts_integer_timeout() {
+        let raw = br#"{"method":"GET","url":"https://example.com","headers":{},"timeout":15}"#;
+        let meta: RequestMeta = serde_json::from_slice(raw).expect("parse request meta");
+        assert_eq!(meta.timeout, 15);
+    }
+
+    #[test]
+    fn request_meta_accepts_integer_like_float_timeout() {
+        let raw =
+            br#"{"method":"GET","url":"https://example.com","headers":{},"timeout":15.0}"#;
+        let meta: RequestMeta = serde_json::from_slice(raw).expect("parse request meta");
+        assert_eq!(meta.timeout, 15);
+    }
 }

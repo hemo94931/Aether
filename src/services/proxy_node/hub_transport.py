@@ -465,7 +465,7 @@ class HubConnectionManager:
                     "method": method,
                     "url": url,
                     "headers": headers,
-                    "timeout": timeout,
+                    "timeout": int(timeout),
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),

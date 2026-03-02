@@ -23,9 +23,8 @@ if TYPE_CHECKING:
 def _reset_tunnel_connected_on_startup() -> None:
     """服务端启动时将所有 tunnel_connected=True 的节点重置为 False/OFFLINE。
 
-    服务端重启后 TunnelManager 内存状态丢失，但 DB 中可能残留
-    tunnel_connected=True 的记录。如果不重置，health_scheduler 会错误地
-    将这些节点标记为 ONLINE，而实际上 tunnel 并未连接。
+    服务端重启后 DB 中可能残留 tunnel_connected=True 的记录。
+    如果不重置，节点会在 Hub 状态广播到来前短暂显示 ONLINE。
     """
     from datetime import datetime, timezone
 
@@ -78,37 +77,27 @@ async def _on_startup() -> None:
 
     from src.config import config
     from src.services.proxy_node.health_scheduler import get_proxy_node_health_scheduler
-    from src.services.proxy_node.hub_config import get_hub_config
     from src.utils.task_coordinator import StartupTaskCoordinator
 
     logger = logging.getLogger("aether.modules.proxy_nodes")
-    hub_enabled = get_hub_config().enabled
 
-    if config.worker_processes > 1 and not hub_enabled:
-        logger.warning(
-            "检测到 WEB_CONCURRENCY={}。Proxy tunnel 连接是进程内资源，"
-            "多 worker 场景可能出现节点显示 ONLINE 但当前 worker 无可用 tunnel 的情况。"
-            "建议设置 GUNICORN_WORKERS/WEB_CONCURRENCY=1。",
-            config.worker_processes,
-        )
-    elif config.worker_processes > 1 and hub_enabled:
+    if config.worker_processes > 1:
         logger.info(
-            "检测到 WEB_CONCURRENCY={}，Hub 模式已启用，允许多 worker 共享 tunnel。",
+            "检测到 WEB_CONCURRENCY={}，Hub 模式允许多 worker 共享 tunnel。",
             config.worker_processes,
         )
 
-    # Hub 模式下，worker 启动时主动建立 /worker 长连接：
+    # 启动时主动建立 /worker 长连接：
     # - 立即接收 NODE_STATUS 广播，避免“proxy 已连但 UI 仍显示离线”的窗口期
     # - 确保后续 tunnel 请求不需要首请求触发懒连接
-    if hub_enabled:
-        from src.services.proxy_node.hub_transport import get_hub_connection_manager
+    from src.services.proxy_node.hub_transport import get_hub_connection_manager
 
-        try:
-            await get_hub_connection_manager().ensure_connected()
-            logger.info("Hub worker channel initialized on startup")
-        except Exception as e:
-            # ensure_connected 失败时内部会启动重连循环，这里仅记录告警不阻塞启动
-            logger.warning("Hub worker channel init failed, reconnecting in background: {}", e)
+    try:
+        await get_hub_connection_manager().ensure_connected()
+        logger.info("Hub worker channel initialized on startup")
+    except Exception as e:
+        # ensure_connected 失败时内部会启动重连循环，这里仅记录告警不阻塞启动
+        logger.warning("Hub worker channel init failed, reconnecting in background: {}", e)
 
     from src.clients import get_redis_client
 
@@ -132,22 +121,13 @@ async def _on_shutdown() -> None:
     import logging
 
     from src.services.proxy_node.health_scheduler import get_proxy_node_health_scheduler
-    from src.services.proxy_node.hub_config import get_hub_config
     from src.utils.task_coordinator import StartupTaskCoordinator
 
     logger = logging.getLogger("aether.modules.proxy_nodes")
 
-    hub_enabled = get_hub_config().enabled
-    if hub_enabled:
-        from src.services.proxy_node.hub_transport import shutdown_hub_connection_manager
+    from src.services.proxy_node.hub_transport import shutdown_hub_connection_manager
 
-        await shutdown_hub_connection_manager()
-    else:
-        # 先向所有 tunnel 连接发送 GoAway，让 proxy 端立即重连到其他 worker
-        from src.services.proxy_node.tunnel_manager import get_tunnel_manager
-
-        manager = get_tunnel_manager()
-        await manager.shutdown_all()
+    await shutdown_hub_connection_manager()
 
     from src.clients import get_redis_client
 

@@ -515,11 +515,6 @@ app.include_router(dashboard_router)  # 仪表盘端点
 app.include_router(public_router)  # 公开API端点（用户可查看提供商和模型）
 app.include_router(monitoring_router)  # 监控端点
 
-# WebSocket 隧道端点（aether-proxy tunnel 模式）
-from src.api.admin.proxy_tunnel import router as proxy_tunnel_router
-
-app.include_router(proxy_tunnel_router)
-
 
 def main() -> Any:
     # 初始化新日志系统

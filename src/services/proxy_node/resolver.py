@@ -10,7 +10,6 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
-import os
 import time
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -27,55 +26,7 @@ from src.core.logger import logger
 _proxy_node_cache: dict[str, tuple[dict[str, Any] | None, float]] = {}
 _PROXY_NODE_CACHE_TTL_SECONDS = 15.0
 _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS = 5.0  # 不可用节点使用更短的 TTL，加速恢复感知
-_PROXY_NODE_CACHE_TUNNEL_LOCAL_MISS_TTL_SECONDS = 0.5  # 本地 worker 无 tunnel 时，快速重试
 _PROXY_NODE_CACHE_MAX_SIZE = 256
-_TUNNEL_LOCAL_MISS_LOG_COOLDOWN_SECONDS = 30.0
-_tunnel_local_miss_log_next_at: dict[str, float] = {}
-
-
-def _is_hub_mode_enabled() -> bool:
-    from src.services.proxy_node.hub_config import get_hub_config
-
-    return get_hub_config().enabled
-
-
-def _build_tunnel_local_miss_message(node_id: str) -> str:
-    """构建“当前 worker 无本地 tunnel”的用户可读错误信息。"""
-    return (
-        f"代理节点 {node_id} 当前 worker 无 tunnel 连接（pid={os.getpid()}）。"
-        "这通常发生在多 worker 部署（WEB_CONCURRENCY/GUNICORN_WORKERS > 1）时。"
-        "请设置 GUNICORN_WORKERS=1（或 WEB_CONCURRENCY=1），"
-        "或确保每个 worker 都建立该节点的 tunnel 连接。"
-    )
-
-
-def _is_tunnel_local_miss(node_id: str) -> bool:
-    """判断节点是否“全局在线但当前 worker 无本地 tunnel 连接”。
-
-    仅在错误路径调用（build_proxy_url 解析失败时），用于提供更准确的报错信息。
-    """
-    if _is_hub_mode_enabled():
-        return False
-
-    from src.database import create_session
-    from src.models.database import ProxyNode, ProxyNodeStatus
-    from src.services.proxy_node.tunnel_manager import get_tunnel_manager
-
-    db = create_session()
-    try:
-        node = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
-        if not node:
-            return False
-        if node.is_manual or not node.tunnel_mode:
-            return False
-        if node.status != ProxyNodeStatus.ONLINE:
-            return False
-        manager = get_tunnel_manager()
-        return not manager.has_tunnel(node_id)
-    except Exception:
-        return False
-    finally:
-        db.close()
 
 
 def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
@@ -116,41 +67,14 @@ def _get_proxy_node_info(node_id: str) -> dict[str, Any] | None:
             _proxy_node_cache[node_id] = (None, now + _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS)
             return None
 
-        # tunnel 模式节点：
-        # - Hub 模式：信任 DB 的 tunnel_connected/status（由 Hub 广播统一维护）
-        # - 非 Hub 模式：以当前 worker 本地 TunnelManager 状态为准
+        # tunnel 模式节点：统一以 DB 的 tunnel_connected/status 为准（由 Hub 广播维护）
         if node.tunnel_mode and not node.is_manual:
-            if _is_hub_mode_enabled():
-                if node.status != ProxyNodeStatus.ONLINE or not bool(node.tunnel_connected):
-                    _proxy_node_cache[node_id] = (
-                        None,
-                        now + _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS,
-                    )
-                    return None
-            else:
-                from src.services.proxy_node.tunnel_manager import get_tunnel_manager
-
-                manager = get_tunnel_manager()
-                if not manager.has_tunnel(node_id):
-                    # 多 worker 部署时，DB 可能显示 ONLINE（其他 worker 有 tunnel），
-                    # 但当前 worker 无本地连接，请求仍不可用。记录限频告警便于定位。
-                    if now >= _tunnel_local_miss_log_next_at.get(node_id, 0.0):
-                        _tunnel_local_miss_log_next_at[node_id] = (
-                            now + _TUNNEL_LOCAL_MISS_LOG_COOLDOWN_SECONDS
-                        )
-                        logger.warning(
-                            "tunnel node {} has no local connection on pid={} "
-                            "(db_status={}, db_tunnel_connected={}), request may fail on this worker",
-                            node_id,
-                            os.getpid(),
-                            str(getattr(node, "status", "unknown")),
-                            bool(getattr(node, "tunnel_connected", False)),
-                        )
-                    _proxy_node_cache[node_id] = (
-                        None,
-                        now + _PROXY_NODE_CACHE_TUNNEL_LOCAL_MISS_TTL_SECONDS,
-                    )
-                    return None
+            if node.status != ProxyNodeStatus.ONLINE or not bool(node.tunnel_connected):
+                _proxy_node_cache[node_id] = (
+                    None,
+                    now + _PROXY_NODE_CACHE_NEGATIVE_TTL_SECONDS,
+                )
+                return None
             value: dict[str, Any] = {
                 "name": node.name,
                 "ip": node.ip,
@@ -199,7 +123,6 @@ _SYSTEM_PROXY_CACHE_TTL = 60.0
 def invalidate_proxy_node_cache(node_id: str) -> None:
     """主动清除指定节点的信息缓存（tunnel 断开时调用，避免使用过期的连接状态）"""
     _proxy_node_cache.pop(node_id, None)
-    _tunnel_local_miss_log_next_at.pop(node_id, None)
 
 
 def invalidate_system_proxy_cache() -> None:
@@ -509,11 +432,7 @@ def build_proxy_url(proxy_config: dict[str, Any]) -> str | None:
         node_info = _get_proxy_node_info(node_id)
         if not node_info:
             logger.warning("代理节点不可用（离线或不存在）: node_id={}", node_id)
-            message = (
-                _build_tunnel_local_miss_message(node_id)
-                if _is_tunnel_local_miss(node_id)
-                else f"代理节点 {node_id} 不可用"
-            )
+            message = f"代理节点 {node_id} 不可用"
             raise ProxyNodeUnavailableError(message, node_id=node_id)
 
         # 手动节点：直接使用存储的代理 URL（含认证信息）
