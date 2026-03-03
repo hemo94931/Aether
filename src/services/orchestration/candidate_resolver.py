@@ -14,7 +14,8 @@ from src.core.exceptions import ProviderNotAvailableException
 from src.core.logger import logger
 from src.models.database import ApiKey
 from src.services.provider.format import normalize_endpoint_signature
-from src.services.scheduling.aware_scheduler import CacheAwareScheduler, ProviderCandidate
+from src.services.scheduling.aware_scheduler import CacheAwareScheduler
+from src.services.scheduling.schemas import PoolCandidate, ProviderCandidate
 
 
 class CandidateResolver:
@@ -153,14 +154,27 @@ class CandidateResolver:
         if preferred_key_ids:
             preferred_set = {str(kid) for kid in preferred_key_ids if kid}
             if preferred_set:
-                preferred_candidates = [
-                    c for c in all_candidates if c.key and str(c.key.id) in preferred_set
-                ]
-                other_candidates = [
-                    c for c in all_candidates if not (c.key and str(c.key.id) in preferred_set)
-                ]
+
+                def _is_preferred_candidate(c: ProviderCandidate) -> bool:
+                    if c.key and str(c.key.id) in preferred_set:
+                        return True
+                    if isinstance(c, PoolCandidate):
+                        return any(str(pk.id) in preferred_set for pk in (c.pool_keys or []))
+                    return False
+
+                preferred_candidates = [c for c in all_candidates if _is_preferred_candidate(c)]
+                other_candidates = [c for c in all_candidates if not _is_preferred_candidate(c)]
                 if preferred_candidates:
-                    matched_key_ids = [str(c.key.id) for c in preferred_candidates if c.key]
+                    matched_key_ids: list[str] = []
+                    for candidate in preferred_candidates:
+                        if isinstance(candidate, PoolCandidate):
+                            matched_key_ids.extend(
+                                str(pk.id)
+                                for pk in (candidate.pool_keys or [])
+                                if str(pk.id) in preferred_set
+                            )
+                        elif candidate.key:
+                            matched_key_ids.append(str(candidate.key.id))
                     logger.debug(
                         f"  [{request_id}] 优先候选命中: {len(preferred_candidates)} 个 "
                         f"(key_ids={matched_key_ids[:3]}{'...' if len(matched_key_ids) > 3 else ''})"
@@ -210,6 +224,11 @@ class CandidateResolver:
             if not active_capabilities:
                 active_capabilities = None
 
+        def _retry_slots_for_candidate(candidate: ProviderCandidate) -> int:
+            if not expand_retries:
+                return 1
+            return int(candidate.provider.max_retries or 2) if candidate.is_cached else 1
+
         for candidate_index, candidate in enumerate(all_candidates):
             provider = candidate.provider
             endpoint = candidate.endpoint
@@ -219,6 +238,71 @@ class CandidateResolver:
                 if isinstance(getattr(candidate, "_pool_extra_data", None), dict)
                 else {}
             )
+            base_extra = {
+                "needs_conversion": candidate.needs_conversion,
+                "provider_api_format": candidate.provider_api_format or None,
+                "mapping_matched_model": candidate.mapping_matched_model or None,
+                **pool_extra,
+            }
+
+            if isinstance(candidate, PoolCandidate) and candidate.pool_keys:
+                retry_slots = _retry_slots_for_candidate(candidate)
+                for key_idx, pool_key in enumerate(candidate.pool_keys):
+                    key_id = str(pool_key.id)
+                    key_pool_extra = (
+                        getattr(pool_key, "_pool_extra_data", None)
+                        if isinstance(getattr(pool_key, "_pool_extra_data", None), dict)
+                        else {}
+                    )
+                    key_skipped = candidate.is_skipped or bool(
+                        getattr(pool_key, "_pool_skipped", False)
+                    )
+                    key_skip_reason_raw = (
+                        getattr(pool_key, "_pool_skip_reason", None) if key_skipped else None
+                    )
+                    key_skip_reason = (
+                        str(key_skip_reason_raw)
+                        if key_skip_reason_raw
+                        else (candidate.skip_reason if key_skipped else None)
+                    )
+                    mapping_model = getattr(pool_key, "_pool_mapping_matched_model", None)
+                    extra_data = {
+                        **base_extra,
+                        "mapping_matched_model": (
+                            mapping_model
+                            if mapping_model
+                            else base_extra.get("mapping_matched_model")
+                        ),
+                        "pool_group_id": str(provider.id),
+                        "pool_key_index": key_idx,
+                        **key_pool_extra,
+                    }
+
+                    for retry_in_key in range(retry_slots):
+                        retry_index = key_idx * retry_slots + retry_in_key
+                        status = "skipped" if key_skipped else "available"
+                        record_id = str(uuid.uuid4())
+                        candidate_records_to_insert.append(
+                            {
+                                "id": record_id,
+                                "request_id": request_id,
+                                "candidate_index": candidate_index,
+                                "retry_index": retry_index,
+                                "user_id": user_id,
+                                "api_key_id": user_api_key.id if user_api_key else None,
+                                "provider_id": provider.id,
+                                "endpoint_id": endpoint.id,
+                                "key_id": key_id,
+                                "status": status,
+                                "skip_reason": key_skip_reason if key_skipped else None,
+                                "is_cached": candidate.is_cached,
+                                "extra_data": extra_data,
+                                "required_capabilities": active_capabilities,
+                                "created_at": datetime.now(timezone.utc),
+                            }
+                        )
+                        candidate_record_map[(candidate_index, retry_index)] = record_id
+                continue
 
             if candidate.is_skipped:
                 record_id = str(uuid.uuid4())
@@ -236,25 +320,14 @@ class CandidateResolver:
                         "status": "skipped",
                         "skip_reason": candidate.skip_reason,
                         "is_cached": candidate.is_cached,
-                        "extra_data": {
-                            "needs_conversion": candidate.needs_conversion,
-                            "provider_api_format": candidate.provider_api_format or None,
-                            "mapping_matched_model": candidate.mapping_matched_model or None,
-                            **pool_extra,
-                        },
+                        "extra_data": base_extra,
                         "required_capabilities": active_capabilities,
                         "created_at": datetime.now(timezone.utc),
                     }
                 )
                 candidate_record_map[(candidate_index, 0)] = record_id
             else:
-                # max_retries 已从 Endpoint 迁移到 Provider（Endpoint 仍可能保留旧字段用于兼容）
-                if not expand_retries:
-                    max_retries_for_candidate = 1
-                else:
-                    max_retries_for_candidate = (
-                        int(provider.max_retries or 2) if candidate.is_cached else 1
-                    )
+                max_retries_for_candidate = _retry_slots_for_candidate(candidate)
 
                 for retry_index in range(max_retries_for_candidate):
                     record_id = str(uuid.uuid4())
@@ -271,12 +344,7 @@ class CandidateResolver:
                             "key_id": key.id,
                             "status": "available",
                             "is_cached": candidate.is_cached,
-                            "extra_data": {
-                                "needs_conversion": candidate.needs_conversion,
-                                "provider_api_format": candidate.provider_api_format or None,
-                                "mapping_matched_model": candidate.mapping_matched_model or None,
-                                **pool_extra,
-                            },
+                            "extra_data": base_extra,
                             "required_capabilities": active_capabilities,
                             "created_at": datetime.now(timezone.utc),
                         }
@@ -326,7 +394,22 @@ class CandidateResolver:
         total = 0
         for candidate in all_candidates:
             if not candidate.is_skipped:
-                provider = candidate.provider
-                max_retries = int(provider.max_retries or 2) if candidate.is_cached else 1
-                total += max_retries
+                retries_per_slot = (
+                    int(candidate.provider.max_retries or 2) if candidate.is_cached else 1
+                )
+                if isinstance(candidate, PoolCandidate):
+                    schedulable_keys = [
+                        k
+                        for k in (candidate.pool_keys or [])
+                        if not bool(getattr(k, "_pool_skipped", False))
+                    ]
+                    if schedulable_keys:
+                        total += len(schedulable_keys) * retries_per_slot
+                    elif candidate.pool_keys:
+                        # 兜底：尚未附加 _pool_skipped 标记时，按 key 数估算。
+                        total += len(candidate.pool_keys) * retries_per_slot
+                    else:
+                        total += retries_per_slot
+                else:
+                    total += retries_per_slot
         return total

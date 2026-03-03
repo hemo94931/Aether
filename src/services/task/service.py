@@ -206,60 +206,129 @@ class TaskService:
         candidates: list[Any],
         request_body: dict[str, Any] | None,
     ) -> tuple[list[Any], list[Any]]:
-        """Apply Account Pool reordering when applicable.
-
-        Groups candidates by provider_id and applies pool reordering
-        independently per provider, then reassembles in original group order.
-        Non-pool providers are left in their original order.
-
-        Returns:
-            Tuple of (reordered_candidates, pool_traces) where pool_traces
-            is a list of :class:`PoolSchedulingTrace` objects (one per
-            pooled provider group, may be empty).
-        """
+        """Apply pool key ordering for PoolCandidate objects."""
         if not candidates:
             return candidates, []
 
         pool_traces: list[Any] = []
 
         try:
-            from collections import OrderedDict
-
             from src.services.provider.pool.config import parse_pool_config
             from src.services.provider.pool.manager import PoolManager
+            from src.services.scheduling.schemas import PoolCandidate
 
-            # Group candidates by provider_id while preserving order.
-            groups: OrderedDict[str, list[Any]] = OrderedDict()
-            for c in candidates:
-                pid = str(getattr(c.provider, "id", "") or "")
-                groups.setdefault(pid, []).append(c)
-
-            result: list[Any] = []
-            for pid, group in groups.items():
-                provider = group[0].provider
-                pool_cfg = parse_pool_config(getattr(provider, "config", None))
-                if pool_cfg is None or not pid:
-                    result.extend(group)
+            for candidate in candidates:
+                if not isinstance(candidate, PoolCandidate):
                     continue
+
+                provider = candidate.provider
+                provider_id = str(getattr(provider, "id", "") or "")
+                if not provider_id:
+                    continue
+
+                pool_cfg = candidate.pool_config or parse_pool_config(
+                    getattr(provider, "config", None)
+                )
+                if pool_cfg is None:
+                    continue
+                candidate.pool_config = pool_cfg
 
                 provider_type = str(getattr(provider, "provider_type", "") or "")
                 session_uuid = TaskService._extract_session_uuid(provider_type, request_body)
-                mgr = PoolManager(pid, pool_cfg)
-                reordered = await mgr.reorder_candidates(session_uuid, group)
-                result.extend(reordered)
+                manager = PoolManager(provider_id, pool_cfg)
 
-                # Extract trace attached by PoolManager.reorder_candidates
-                if reordered:
-                    trace = getattr(reordered[0], "_pool_scheduling_trace", None)
-                    if trace is not None:
-                        pool_traces.append(trace)
+                candidate_keys = list(candidate.pool_keys or [])
+                if not candidate_keys and getattr(candidate, "key", None) is not None:
+                    candidate_keys = [candidate.key]
 
-            return result, pool_traces
+                ordered_keys, trace = await manager.select_pool_keys(session_uuid, candidate_keys)
+                candidate.pool_keys = ordered_keys
+
+                selected_key_index = 0
+                selected_key = None
+                for idx, pool_key in enumerate(ordered_keys):
+                    if not bool(getattr(pool_key, "_pool_skipped", False)):
+                        selected_key = pool_key
+                        selected_key_index = idx
+                        break
+
+                if selected_key is not None:
+                    candidate.key = selected_key
+                    candidate._pool_key_index = selected_key_index
+                    candidate.mapping_matched_model = getattr(
+                        selected_key, "_pool_mapping_matched_model", None
+                    )
+                    candidate.is_skipped = False
+                    candidate.skip_reason = None
+                else:
+                    candidate.is_skipped = True
+                    candidate.skip_reason = "pool: all keys unavailable"
+
+                if trace is not None:
+                    pool_traces.append(trace)
+
+            return candidates, pool_traces
         except Exception:
             from src.core.logger import logger
 
             logger.opt(exception=True).debug("Pool reorder failed, using original order")
             return candidates, []
+
+    @staticmethod
+    def _expand_pool_candidates_for_async_submit(candidates: list[Any]) -> list[Any]:
+        """Expand PoolCandidate to key-level candidates for async submit traversal."""
+        from src.services.scheduling.schemas import PoolCandidate, ProviderCandidate
+
+        expanded: list[Any] = []
+        for candidate in candidates:
+            if not isinstance(candidate, PoolCandidate):
+                expanded.append(candidate)
+                continue
+
+            pool_keys = list(candidate.pool_keys or [])
+            if not pool_keys:
+                expanded.append(candidate)
+                continue
+
+            for key_index, pool_key in enumerate(pool_keys):
+                key_skipped = bool(getattr(pool_key, "_pool_skipped", False))
+                key_skip_reason = (
+                    str(getattr(pool_key, "_pool_skip_reason", "") or "") or candidate.skip_reason
+                )
+                key_extra = (
+                    getattr(pool_key, "_pool_extra_data", None)
+                    if isinstance(getattr(pool_key, "_pool_extra_data", None), dict)
+                    else {}
+                )
+
+                key_candidate = ProviderCandidate(
+                    provider=candidate.provider,
+                    endpoint=candidate.endpoint,
+                    key=pool_key,
+                    is_cached=candidate.is_cached,
+                    is_skipped=bool(candidate.is_skipped) or key_skipped,
+                    skip_reason=(
+                        key_skip_reason if (bool(candidate.is_skipped) or key_skipped) else None
+                    ),
+                    mapping_matched_model=getattr(pool_key, "_pool_mapping_matched_model", None)
+                    or candidate.mapping_matched_model,
+                    needs_conversion=candidate.needs_conversion,
+                    provider_api_format=candidate.provider_api_format,
+                    output_limit=candidate.output_limit,
+                    capability_miss_count=candidate.capability_miss_count,
+                )
+                setattr(
+                    key_candidate,
+                    "_pool_extra_data",
+                    {
+                        "pool_group_id": str(candidate.provider.id),
+                        "pool_key_index": key_index,
+                        **key_extra,
+                    },
+                )
+                expanded.append(key_candidate)
+
+        return expanded
 
     @staticmethod
     async def _pool_on_success(
@@ -466,6 +535,25 @@ class TaskService:
 
             # Safety net: if record_id missing, create an "available" record on-demand.
             if not candidate_record_id:
+                from src.services.scheduling.schemas import PoolCandidate
+
+                pool_extra = (
+                    getattr(candidate.key, "_pool_extra_data", None)
+                    if isinstance(getattr(candidate.key, "_pool_extra_data", None), dict)
+                    else {}
+                )
+                extra_data: dict[str, Any] = {
+                    "needs_conversion": bool(getattr(candidate, "needs_conversion", False)),
+                    "provider_api_format": getattr(candidate, "provider_api_format", None) or None,
+                    "mapping_matched_model": getattr(candidate, "mapping_matched_model", None)
+                    or None,
+                    **pool_extra,
+                }
+                if isinstance(candidate, PoolCandidate):
+                    extra_data["pool_group_id"] = str(candidate.provider.id)
+                    extra_data["pool_key_index"] = int(
+                        getattr(candidate, "_pool_key_index", 0) or 0
+                    )
                 created = RequestCandidateService.create_candidate(
                     db=self.db,
                     request_id=request_id,
@@ -478,6 +566,7 @@ class TaskService:
                     key_id=str(candidate.key.id),
                     status="available",
                     is_cached=bool(getattr(candidate, "is_cached", False)),
+                    extra_data=extra_data,
                 )
                 candidate_record_id = str(created.id)
                 candidate_record_map[(candidate_index, retry_index)] = candidate_record_id
@@ -1331,6 +1420,7 @@ class TaskService:
             candidates, _pool_traces = await self._apply_pool_reorder(
                 candidates, request_body=request_body
             )
+            candidates = self._expand_pool_candidates_for_async_submit(candidates)
 
             if max_candidates is not None and max_candidates > 0:
                 candidates = candidates[:max_candidates]

@@ -6,13 +6,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from src.models.database import (
     Provider,
     ProviderAPIKey,
     ProviderEndpoint,
 )
+
+if TYPE_CHECKING:
+    from src.services.provider.pool.config import PoolConfig
 
 
 @dataclass
@@ -67,6 +71,19 @@ class ProviderCandidate:
         if not isinstance(other, ProviderCandidate):
             return NotImplemented
         return self._stable_order_key() < other._stable_order_key()
+
+
+@dataclass
+class PoolCandidate(ProviderCandidate):
+    """号池候选。
+
+    排序阶段作为单个候选参与；执行阶段再在 pool_keys 内部选择/切换 key。
+    """
+
+    pool_keys: list[ProviderAPIKey] = field(default_factory=list)
+    pool_config: PoolConfig | None = None
+    pool_priority: int = 999999
+    _pool_key_index: int = 0
 
 
 @dataclass

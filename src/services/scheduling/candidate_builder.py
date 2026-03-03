@@ -398,7 +398,7 @@ class CandidateBuilder:
         Returns:
             候选列表
         """
-        from src.services.scheduling.schemas import ProviderCandidate
+        from src.services.scheduling.schemas import PoolCandidate, ProviderCandidate
 
         candidates: list[ProviderCandidate] = []
         client_format_str = normalize_endpoint_signature(client_format)
@@ -438,7 +438,6 @@ class CandidateBuilder:
             ] = {}
             exact_candidates: list[ProviderCandidate] = []
             convertible_candidates: list[ProviderCandidate] = []
-            pool_has_usable = False
             pool_cfg = _get_pool_config(provider)
 
             # 使用新架构字段 (api_family, endpoint_kind) 进行预过滤与排序：
@@ -576,8 +575,6 @@ class CandidateBuilder:
                 if not active_keys:
                     continue
 
-                # Pool provider should still expose all key candidates here.
-                # Runtime pool scheduling/failover is handled later by TaskService._apply_pool_reorder.
                 use_random = all((key.cache_ttl_minutes or 0) == 0 for key in active_keys)
                 if pool_cfg is not None:
                     use_random = False
@@ -591,6 +588,84 @@ class CandidateBuilder:
                 keys_to_check = self._sorter.shuffle_keys_by_internal_priority(
                     active_keys, affinity_key, use_random
                 )
+
+                if pool_cfg is not None:
+                    # 号池 Provider 仅构建一个 PoolCandidate，内部 key 选择延迟到执行阶段。
+                    pool_keys: list[ProviderAPIKey] = []
+                    pool_miss_counts: list[int] = []
+                    pool_mapping: dict[str, str | None] = {}
+                    for key in keys_to_check:
+                        is_available, _key_skip_reason, mapping_matched_model = (
+                            self._check_key_availability(
+                                key,
+                                endpoint_format_str,
+                                model_name,
+                                capability_requirements,
+                                model_mappings=model_mappings,
+                                candidate_models=provider_model_names,
+                                provider_type=getattr(provider, "provider_type", None),
+                            )
+                        )
+                        if not is_available:
+                            continue
+
+                        pool_keys.append(key)
+                        pool_miss_counts.append(
+                            compute_capability_score(
+                                key.capabilities or {},
+                                capability_requirements,
+                            )
+                        )
+                        pool_mapping[str(key.id)] = mapping_matched_model
+
+                    if not pool_keys:
+                        continue
+
+                    provider_priority_raw = getattr(provider, "provider_priority", None)
+                    try:
+                        provider_priority = (
+                            int(provider_priority_raw)
+                            if provider_priority_raw is not None
+                            else 999999
+                        )
+                    except Exception:
+                        provider_priority = 999999
+                    try:
+                        pool_priority = (
+                            int(pool_cfg.global_priority)
+                            if pool_cfg.global_priority is not None
+                            else provider_priority
+                        )
+                    except Exception:
+                        pool_priority = provider_priority
+
+                    pool_candidate = PoolCandidate(
+                        provider=provider,
+                        endpoint=endpoint,
+                        key=pool_keys[0],
+                        pool_keys=pool_keys,
+                        pool_config=pool_cfg,
+                        pool_priority=pool_priority,
+                        mapping_matched_model=pool_mapping.get(str(pool_keys[0].id)),
+                        needs_conversion=needs_conversion,
+                        provider_api_format=str(endpoint_format_str or ""),
+                        output_limit=output_limit,
+                        capability_miss_count=min(pool_miss_counts) if pool_miss_counts else 0,
+                    )
+
+                    # 在 key 对象上附加映射结果，供 PoolCandidate 运行时切 key 后同步模型名。
+                    for pool_key in pool_keys:
+                        setattr(
+                            pool_key,
+                            "_pool_mapping_matched_model",
+                            pool_mapping.get(str(pool_key.id)),
+                        )
+
+                    if needs_conversion:
+                        convertible_candidates.append(pool_candidate)
+                    else:
+                        exact_candidates.append(pool_candidate)
+                    break
 
                 for key in keys_to_check:
                     # Key 级别检查（健康度/熔断按 provider_format bucket）
@@ -633,13 +708,6 @@ class CandidateBuilder:
                         convertible_candidates.append(candidate)
                     else:
                         exact_candidates.append(candidate)
-
-                    if is_available:
-                        pool_has_usable = True
-
-                # Pool mode: stop after the first endpoint that produced a usable candidate.
-                if pool_cfg is not None and pool_has_usable:
-                    break
 
             candidates.extend(exact_candidates)
             candidates.extend(convertible_candidates)

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.services.scheduling.aware_scheduler import CacheAwareScheduler
+from src.services.scheduling.schemas import PoolCandidate
 
 
 def _mock_key(key_id: str, api_formats: list[str]) -> MagicMock:
@@ -27,7 +28,7 @@ def _mock_endpoint(api_format: str) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_pool_provider_enumerates_all_key_candidates() -> None:
+async def test_pool_provider_builds_single_pool_candidate() -> None:
     scheduler = CacheAwareScheduler()
     builder = scheduler._candidate_builder
     builder._check_model_support = AsyncMock(return_value=(True, None, None, {"m"}))  # type: ignore[method-assign]
@@ -53,5 +54,8 @@ async def test_pool_provider_enumerates_all_key_candidates() -> None:
         global_conversion_enabled=True,
     )
 
-    assert len(candidates) == 2
-    assert {str(c.key.id) for c in candidates} == {"k1", "k2"}
+    assert len(candidates) == 1
+    pool_candidate = candidates[0]
+    assert isinstance(pool_candidate, PoolCandidate)
+    assert str(pool_candidate.key.id) == "k1"
+    assert {str(k.id) for k in pool_candidate.pool_keys} == {"k1", "k2"}

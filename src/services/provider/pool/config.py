@@ -26,6 +26,8 @@ class PoolConfig:
 
     # -- Sticky Session -------------------------------------------------------
     sticky_session_ttl_seconds: int = 3600  # 1 hour
+    # Key 优先模式下号池整体优先级（None 时回退 provider_priority）
+    global_priority: int | None = None
 
     # -- Load-Aware Selection -------------------------------------------------
     load_threshold_percent: int = 80
@@ -122,6 +124,7 @@ def parse_pool_config(provider_config: Any) -> PoolConfig | None:
 
     return PoolConfig(
         sticky_session_ttl_seconds=_int_or("sticky_session_ttl_seconds", 3600),
+        global_priority=_opt_int("global_priority"),
         load_threshold_percent=_int_or("load_threshold_percent", 80),
         lru_enabled=_bool_or("lru_enabled", True),
         cost_window_seconds=_int_or("cost_window_seconds", 18000),

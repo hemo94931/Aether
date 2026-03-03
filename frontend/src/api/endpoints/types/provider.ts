@@ -454,6 +454,7 @@ export interface ClaudeCodeAdvancedConfig {
 }
 
 export interface PoolAdvancedConfig {
+  global_priority?: number | null
   sticky_session_ttl_seconds?: number | null
   load_threshold_percent?: number | null
   lru_enabled?: boolean

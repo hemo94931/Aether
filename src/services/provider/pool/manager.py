@@ -280,6 +280,66 @@ class PoolManager:
 
         return result
 
+    async def select_pool_keys(
+        self,
+        session_uuid: str | None,
+        keys: list[ProviderAPIKey],
+    ) -> tuple[list[ProviderAPIKey], PoolSchedulingTrace]:
+        """Select and order pool keys with trace output.
+
+        Reuses :meth:`reorder_candidates` logic by adapting keys to lightweight
+        candidate-like wrappers, then propagates skip/trace metadata back onto
+        each key object for downstream execution/recording.
+        """
+        if not keys:
+            return (
+                [],
+                PoolSchedulingTrace(
+                    provider_id=self.provider_id,
+                    total_keys=0,
+                    session_uuid=session_uuid[:8] if session_uuid else None,
+                ),
+            )
+
+        class _KeyCandidate:
+            __slots__ = ("key", "is_skipped", "skip_reason")
+
+            def __init__(self, key: ProviderAPIKey) -> None:
+                self.key = key
+                self.is_skipped = False
+                self.skip_reason: str | None = None
+
+        wrappers = [_KeyCandidate(k) for k in keys]
+        reordered_wrappers = await self.reorder_candidates(session_uuid, wrappers)  # type: ignore[arg-type]
+
+        trace: PoolSchedulingTrace | None = None
+        if reordered_wrappers:
+            maybe_trace = getattr(reordered_wrappers[0], "_pool_scheduling_trace", None)
+            if isinstance(maybe_trace, PoolSchedulingTrace):
+                trace = maybe_trace
+        if trace is None:
+            trace = PoolSchedulingTrace(
+                provider_id=self.provider_id,
+                total_keys=len(keys),
+                session_uuid=session_uuid[:8] if session_uuid else None,
+            )
+
+        ordered_keys: list[ProviderAPIKey] = []
+        for order_idx, wrapped in enumerate(reordered_wrappers):
+            key = wrapped.key
+            is_skipped = bool(getattr(wrapped, "is_skipped", False))
+            skip_reason = str(getattr(wrapped, "skip_reason", "") or "")
+            setattr(key, "_pool_skipped", is_skipped)
+            setattr(key, "_pool_skip_reason", skip_reason if skip_reason else None)
+            setattr(key, "_pool_order_index", order_idx)
+            pool_extra = getattr(wrapped, "_pool_extra_data", None)
+            setattr(
+                key, "_pool_extra_data", dict(pool_extra) if isinstance(pool_extra, dict) else {}
+            )
+            ordered_keys.append(key)
+
+        return ordered_keys, trace
+
     # ------------------------------------------------------------------
     # Single-key selection (used by CandidateBuilder for pooled providers)
     # ------------------------------------------------------------------

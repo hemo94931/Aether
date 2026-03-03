@@ -76,6 +76,7 @@ from src.services.scheduling.concurrency_checker import ConcurrencyChecker
 from src.services.scheduling.restriction_checker import get_effective_restrictions
 from src.services.scheduling.scheduling_config import SchedulingConfig
 from src.services.scheduling.schemas import ConcurrencySnapshot as ConcurrencySnapshot  # re-export
+from src.services.scheduling.schemas import PoolCandidate as PoolCandidate  # re-export
 from src.services.scheduling.schemas import ProviderCandidate as ProviderCandidate  # re-export
 from src.services.scheduling.utils import affinity_hash as _affinity_hash  # re-export compat
 from src.services.scheduling.utils import (
@@ -652,11 +653,20 @@ class CacheAwareScheduler:
                 endpoint = candidate.endpoint
                 key = candidate.key
 
-                if (
-                    provider.id == affinity.provider_id
+                is_pool_candidate = isinstance(candidate, PoolCandidate)
+                pool_matched = (
+                    is_pool_candidate
+                    and provider.id == affinity.provider_id
+                    and endpoint.id == affinity.endpoint_id
+                )
+                key_matched = (
+                    (not is_pool_candidate)
+                    and provider.id == affinity.provider_id
                     and endpoint.id == affinity.endpoint_id
                     and key.id == affinity.key_id
-                ):
+                )
+
+                if pool_matched or key_matched:
                     candidate.is_cached = True
                     matched_candidate = candidate
                     matched = True

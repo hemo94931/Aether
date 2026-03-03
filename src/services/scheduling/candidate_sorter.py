@@ -14,6 +14,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from src.services.scheduling.scheduling_config import SchedulingConfig
+from src.services.scheduling.schemas import PoolCandidate
 from src.services.scheduling.utils import affinity_hash
 from src.services.system.config import SystemConfigService
 
@@ -149,6 +150,8 @@ class CandidateSorter:
 
         def get_priority(candidate: ProviderCandidate) -> int:
             """获取候选的优先级"""
+            if isinstance(candidate, PoolCandidate):
+                return int(getattr(candidate, "pool_priority", 999999) or 999999)
             if not candidate.key:
                 return 999999
             priority_by_format = candidate.key.global_priority_by_format or {}
@@ -170,8 +173,11 @@ class CandidateSorter:
                 # 同优先级内哈希分散负载均衡
                 scored_candidates = []
                 for candidate in group:
-                    key_id = candidate.key.id if candidate.key else ""
-                    hash_value = affinity_hash(affinity_key, key_id)
+                    if isinstance(candidate, PoolCandidate):
+                        hash_id = str(getattr(candidate.provider, "id", "") or "")
+                    else:
+                        hash_id = candidate.key.id if candidate.key else ""
+                    hash_value = affinity_hash(affinity_key, hash_id)
                     scored_candidates.append((hash_value, candidate))
 
                 # 按哈希值排序
@@ -181,11 +187,16 @@ class CandidateSorter:
                 # 单个候选或没有 affinity_key，按次要排序条件排序
                 def secondary_sort(c: ProviderCandidate) -> tuple[int, int, str]:
                     pp = c.provider.provider_priority
-                    ip = c.key.internal_priority if c.key else None
+                    if isinstance(c, PoolCandidate):
+                        ip = int(getattr(c, "pool_priority", 999999) or 999999)
+                        key_id = str(getattr(c.provider, "id", "") or "")
+                    else:
+                        ip = c.key.internal_priority if c.key else None
+                        key_id = c.key.id if c.key else ""
                     return (
                         pp if pp is not None else 999999,
                         ip if ip is not None else 999999,
-                        c.key.id if c.key else "",
+                        key_id,
                     )
 
                 result.extend(sorted(group, key=secondary_sort))
@@ -222,17 +233,27 @@ class CandidateSorter:
         if self._config.priority_mode == SchedulingConfig.PRIORITY_MODE_GLOBAL_KEY:
             # 全局 Key 优先模式：按格式特定优先级分组
             for candidate in candidates:
-                priority = 999999
+                if isinstance(candidate, PoolCandidate):
+                    priority = int(getattr(candidate, "pool_priority", 999999) or 999999)
+                    # -1 使号池候选独立成组，不与普通 key 候选 (0) 混组打乱
+                    priority_groups[(priority, -1)].append(candidate)
+                    continue
+                else:
+                    priority = 999999
                 if candidate.key:
                     priority_by_format = candidate.key.global_priority_by_format or {}
                     if api_format and api_format in priority_by_format:
                         priority = priority_by_format[api_format]
-                priority_groups[(priority,)].append(candidate)
+                priority_groups[(priority, 0)].append(candidate)
         else:
             # 提供商优先模式：按 (provider_priority, internal_priority) 分组
             for candidate in candidates:
                 pp = candidate.provider.provider_priority
-                ip = candidate.key.internal_priority if candidate.key else None
+                if isinstance(candidate, PoolCandidate):
+                    # 号池候选独立成组，不与普通 key 候选混组打乱。
+                    ip = -1
+                else:
+                    ip = candidate.key.internal_priority if candidate.key else None
                 key = (
                     pp if pp is not None else 999999,
                     ip if ip is not None else 999999,

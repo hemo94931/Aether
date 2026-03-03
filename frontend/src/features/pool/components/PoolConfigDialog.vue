@@ -47,6 +47,23 @@
               同一对话始终路由到同一 Key
             </p>
           </div>
+          <div class="space-y-1.5">
+            <Label>
+              全局优先级
+              <span class="text-xs text-muted-foreground">(global_key)</span>
+            </Label>
+            <Input
+              :model-value="form.global_priority ?? ''"
+              type="number"
+              min="0"
+              max="999999"
+              placeholder="留空回退 provider_priority"
+              @update:model-value="(v) => form.global_priority = parseNum(v)"
+            />
+            <p class="text-xs text-muted-foreground">
+              global_key 模式下号池整体排序值（越小越优先）
+            </p>
+          </div>
         </div>
       </div>
 
@@ -320,6 +337,7 @@ const { success, error: showError } = useToast()
 const loading = ref(false)
 
 const form = ref<PoolAdvancedConfig>({
+  global_priority: null,
   sticky_session_ttl_seconds: null,
   lru_enabled: true,
   cost_window_seconds: null,
@@ -363,6 +381,7 @@ watch(() => props.modelValue, (v) => {
     form.value = { ...props.currentConfig }
   } else if (v) {
     form.value = {
+      global_priority: null,
       sticky_session_ttl_seconds: null,
       lru_enabled: true,
       cost_window_seconds: null,
@@ -411,6 +430,7 @@ async function handleSave() {
   try {
     const payload: Record<string, unknown> = {
       pool_advanced: {
+        global_priority: form.value.global_priority ?? undefined,
         sticky_session_ttl_seconds: form.value.sticky_session_ttl_seconds ?? undefined,
         lru_enabled: form.value.lru_enabled,
         cost_window_seconds: form.value.cost_window_seconds ?? undefined,

@@ -666,7 +666,23 @@ const schedulingAudit = computed<Record<string, unknown> | null>(() => {
   return raw as Record<string, unknown>
 })
 
+const extractPoolGroupId = (candidate: CandidateRecord): string | null => {
+  const extra = candidate.extra_data
+  if (!extra || typeof extra !== 'object' || Array.isArray(extra)) return null
+  const value = (extra as Record<string, unknown>).pool_group_id
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  return text || null
+}
+
 const poolAttemptCandidates = computed<CandidateRecord[]>(() => {
+  // 新链路：优先使用后端写入的 extra_data.pool_group_id。
+  const fromTrace = rawTimeline.value.filter((candidate) => extractPoolGroupId(candidate) !== null)
+  if (fromTrace.length > 0) {
+    return fromTrace
+  }
+
+  // 兼容旧链路：回退到 request_metadata.scheduling_audit.attempts。
   const audit = schedulingAudit.value
   if (!audit) return []
   const attempts = audit.attempts
@@ -711,9 +727,35 @@ const poolAttemptCandidates = computed<CandidateRecord[]>(() => {
       if (typeof raw.key_name === 'string') merged.key_name = raw.key_name
       if (typeof raw.status_code === 'number') merged.status_code = raw.status_code
       if (typeof raw.error_type === 'string') merged.error_type = raw.error_type
+      const rawPoolGroupId = typeof raw.pool_group_id === 'string' ? raw.pool_group_id.trim() : ''
+      const fallbackPoolGroupId = typeof raw.provider_id === 'string' ? raw.provider_id.trim() : ''
+      const finalPoolGroupId = rawPoolGroupId || fallbackPoolGroupId
+      if (finalPoolGroupId) {
+        merged.extra_data = {
+          ...(merged.extra_data || {}),
+          pool_group_id: finalPoolGroupId,
+        }
+      }
       return merged
     })
     .filter((item): item is CandidateRecord => item !== null)
+})
+
+const poolAttemptsByGroup = computed<Map<string, CandidateRecord[]>>(() => {
+  const grouped = new Map<string, CandidateRecord[]>()
+  for (const attempt of poolAttemptCandidates.value) {
+    const groupId =
+      extractPoolGroupId(attempt)
+      || String(attempt.provider_id || '').trim()
+      || '__pool_group__'
+    const existing = grouped.get(groupId)
+    if (existing) {
+      existing.push(attempt)
+    } else {
+      grouped.set(groupId, [attempt])
+    }
+  }
+  return grouped
 })
 
 const poolAttemptKeySet = computed<Set<string>>(() => {
@@ -805,45 +847,56 @@ const buildProviderGroups = (items: CandidateRecord[]): NodeGroup[] => {
 // 将相同 Provider 的所有请求合并为组（同提供商的 Key 放在子节点）
 const groupedTimeline = computed<NodeGroup[]>(() => {
   const providerGroups = buildProviderGroups(timeline.value)
-  const poolAttempts = poolAttemptCandidates.value
-  if (poolAttempts.length === 0) {
+  if (poolAttemptsByGroup.value.size === 0) {
     return providerGroups
   }
 
-  const poolPrimaryStatus = poolAttempts.reduce((best, current) => {
-    const bestPriority = STATUS_PRIORITY[best] ?? 0
-    const currentPriority = STATUS_PRIORITY[current.status] ?? 0
-    return currentPriority > bestPriority ? current.status : best
-  }, poolAttempts[0].status)
+  const poolProviderIds = new Set<string>()
+  const poolProviderNames = new Set<string>()
+  const poolGroups: NodeGroup[] = []
 
-  const successAttempt = poolAttempts.find((item) => item.status === 'success')
-  const poolPrimary = successAttempt || poolAttempts[poolAttempts.length - 1] || poolAttempts[0]
+  for (const [groupId, attemptsRaw] of poolAttemptsByGroup.value.entries()) {
+    const attempts = [...attemptsRaw].sort((a, b) => {
+      if (a.candidate_index !== b.candidate_index) {
+        return a.candidate_index - b.candidate_index
+      }
+      return a.retry_index - b.retry_index
+    })
+    if (attempts.length === 0) continue
 
-  const poolGroup: NodeGroup = {
-    id: '__pool_group__',
-    providerName: getProviderDisplayName(poolPrimary),
-    primary: poolPrimary,
-    primaryStatus: poolPrimaryStatus,
-    allAttempts: poolAttempts,
-    retryCount: Math.max(0, poolAttempts.length - 1),
-    totalLatency: poolAttempts.reduce((sum, item) => sum + (item.latency_ms || 0), 0),
-    startIndex: 0,
-    endIndex: poolAttempts.length - 1,
-    hasConversion: poolAttempts.some((item) => item.extra_data?.needs_conversion === true),
-    providerApiFormat: null,
-    isPoolGroup: true,
+    const poolPrimaryStatus = attempts.reduce((best, current) => {
+      const bestPriority = STATUS_PRIORITY[best] ?? 0
+      const currentPriority = STATUS_PRIORITY[current.status] ?? 0
+      return currentPriority > bestPriority ? current.status : best
+    }, attempts[0].status)
+
+    const successAttempt = attempts.find((item) => item.status === 'success')
+    const poolPrimary = successAttempt || attempts[attempts.length - 1] || attempts[0]
+    const startIndex = Math.min(...attempts.map(item => item.candidate_index))
+    const endIndex = Math.max(...attempts.map(item => item.candidate_index))
+
+    poolGroups.push({
+      id: `pool:${groupId}`,
+      providerName: getProviderDisplayName(poolPrimary),
+      primary: poolPrimary,
+      primaryStatus: poolPrimaryStatus,
+      allAttempts: attempts,
+      retryCount: Math.max(0, attempts.length - 1),
+      totalLatency: attempts.reduce((sum, item) => sum + (item.latency_ms || 0), 0),
+      startIndex,
+      endIndex,
+      hasConversion: attempts.some((item) => item.extra_data?.needs_conversion === true),
+      providerApiFormat: null,
+      isPoolGroup: true,
+    })
+
+    for (const attempt of attempts) {
+      const providerId = String(attempt.provider_id || '').trim()
+      if (providerId) poolProviderIds.add(providerId)
+      const providerName = normalizeProviderIdentity(attempt.provider_name)
+      if (providerName) poolProviderNames.add(providerName)
+    }
   }
-
-  const poolProviderIds = new Set(
-    poolAttempts
-      .map(item => String(item.provider_id || '').trim())
-      .filter(Boolean),
-  )
-  const poolProviderNames = new Set(
-    poolAttempts
-      .map(item => normalizeProviderIdentity(item.provider_name))
-      .filter(Boolean),
-  )
 
   const dedupedProviderGroups = providerGroups.filter((group) => {
     const sameProviderById = group.allAttempts.some((attempt) => {
@@ -858,7 +911,8 @@ const groupedTimeline = computed<NodeGroup[]>(() => {
     return true
   })
 
-  return [poolGroup, ...dedupedProviderGroups]
+  poolGroups.sort((a, b) => a.startIndex - b.startIndex)
+  return [...poolGroups, ...dedupedProviderGroups]
 })
 
 // 格式转换分界点索引（首个 hasConversion=true 的 group index）
