@@ -22,8 +22,6 @@ from typing import Any
 from src.core.api_format import (
     UPSTREAM_DROP_HEADERS,
     HeaderBuilder,
-    build_anthropic_extra_headers,
-    build_browser_fingerprint_headers,
     get_auth_config_for_endpoint,
     make_signature_key,
 )
@@ -31,7 +29,6 @@ from src.core.crypto import crypto_service
 from src.models.endpoint_models import _CONDITION_OPS, _TYPE_IS_VALUES, parse_re_flags
 from src.services.provider.auth import get_provider_auth  # noqa: F401
 from src.services.provider.envelope import ProviderEnvelope
-from src.services.provider.request_context import get_current_fingerprint
 
 # ==============================================================================
 # 统一的头部配置常量
@@ -1243,13 +1240,7 @@ class PassthroughRequestBuilder(RequestBuilder):
         if header_rules:
             builder.apply_rules(header_rules, protected_keys)
 
-        # 4. 注入 per-key 指纹头（仅 Claude 格式需要浏览器指纹绕过 Cloudflare 检测）。
-        if str(endpoint_sig or "").strip().lower().startswith("claude:"):
-            fp = get_current_fingerprint()
-            builder.add_many(build_browser_fingerprint_headers(fp))
-            builder.add_many(build_anthropic_extra_headers(fp))
-
-        # 5. 添加额外头部
+        # 4. 添加额外头部
         effective_extra_headers = self._merge_extra_headers_with_original(
             original_headers,
             extra_headers,
@@ -1258,10 +1249,10 @@ class PassthroughRequestBuilder(RequestBuilder):
         if effective_extra_headers:
             builder.add_many(effective_extra_headers)
 
-        # 6. 设置认证头（最高优先级，上游始终使用 header 认证）
+        # 5. 设置认证头（最高优先级，上游始终使用 header 认证）
         builder.add(auth_header, auth_value)
 
-        # 7. 确保有 Content-Type
+        # 6. 确保有 Content-Type
         headers = builder.build()
         if not any(k.lower() == "content-type" for k in headers):
             headers["Content-Type"] = "application/json"
