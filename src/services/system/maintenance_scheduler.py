@@ -362,6 +362,12 @@ class MaintenanceScheduler:
             logger.exception(f"启动时清理任务执行出错: {e}")
 
         try:
+            logger.info("启动时清理残留的 pending/streaming 请求...")
+            await self._perform_pending_cleanup()
+        except Exception as e:
+            logger.exception(f"启动时 pending 清理执行出错: {e}")
+
+        try:
             logger.info("启动时检查统计数据...")
             await self._perform_stats_aggregation(backfill=True)
         except Exception as e:
