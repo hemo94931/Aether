@@ -24,6 +24,7 @@ from src.models.database import ApiKey, Provider, Usage, User
 from src.services.email.email_template import EmailTemplate
 from src.services.provider_ops.types import SENSITIVE_CREDENTIAL_FIELDS
 from src.services.system.config import SystemConfigService
+from src.services.wallet import WalletService
 from src.utils.cache_decorator import cache_result
 
 router = APIRouter(prefix="/api/admin/system", tags=["Admin - System"])
@@ -677,26 +678,6 @@ class AdminSetSystemConfigAdapter(AdminApiAdapter):
                 scheduler.update_checkin_time(value)
             except Exception as e:
                 logger.warning(f"更新签到任务时间失败: {e}")
-
-        # 如果更新的是用户配额重置任务时间，动态更新调度器
-        if self.key == "user_quota_reset_time" and value:
-            try:
-                from src.services.system.maintenance_scheduler import get_maintenance_scheduler
-
-                scheduler = get_maintenance_scheduler()
-                scheduler.update_user_quota_reset_time(value)
-            except Exception as e:
-                logger.warning(f"更新用户配额重置任务时间失败: {e}")
-
-        # 如果更新的是独立密钥额度重置任务时间，动态更新调度器
-        if self.key == "standalone_key_quota_reset_time" and value:
-            try:
-                from src.services.system.maintenance_scheduler import get_maintenance_scheduler
-
-                scheduler = get_maintenance_scheduler()
-                scheduler.update_standalone_key_quota_reset_time(value)
-            except Exception as e:
-                logger.warning(f"更新独立密钥额度重置任务时间失败: {e}")
 
         # 如果更新的是调度模式或优先级模式，立即更新当前 Worker 的 Scheduler 单例
         if self.key in ("scheduling_mode", "provider_priority_mode"):
@@ -1946,15 +1927,19 @@ class AdminImportConfigAdapter(AdminApiAdapter):
 
 class AdminExportUsersAdapter(AdminApiAdapter):
     @staticmethod
-    def _serialize_api_key(key: ApiKey, include_is_standalone: bool = False) -> dict[str, Any]:
+    def _serialize_api_key(
+        key: ApiKey, include_is_standalone: bool = False, db: Any = None,
+    ) -> dict[str, Any]:
         """序列化用户 API Key 为导出格式。"""
         from src.core.crypto import crypto_service
 
-        data = {
+        wallet = None
+        if db is not None and key.is_standalone:
+            wallet = WalletService.get_wallet(db, api_key_id=key.id)
+
+        data: dict[str, Any] = {
             "key_hash": key.key_hash,
             "name": key.name,
-            "balance_used_usd": key.balance_used_usd,
-            "current_balance_usd": key.current_balance_usd,
             "allowed_providers": key.allowed_providers,
             "allowed_api_formats": key.allowed_api_formats,
             "allowed_models": key.allowed_models,
@@ -1966,6 +1951,7 @@ class AdminExportUsersAdapter(AdminApiAdapter):
             "auto_delete_on_expiry": key.auto_delete_on_expiry,
             "total_requests": key.total_requests,
             "total_cost_usd": key.total_cost_usd,
+            "wallet": WalletService.serialize_wallet_summary(wallet) if wallet else None,
         }
 
         if key.key_encrypted:
@@ -1995,6 +1981,7 @@ class AdminExportUsersAdapter(AdminApiAdapter):
         users = db.query(User).filter(User.is_deleted.is_(False), User.role != UserRole.ADMIN).all()
         users_data = []
         for user in users:
+            wallet = WalletService.get_wallet(db, user_id=user.id)
             # 导出用户的 API Keys（排除独立余额Key，独立Key单独导出）
             api_keys = (
                 db.query(ApiKey)
@@ -2016,9 +2003,8 @@ class AdminExportUsersAdapter(AdminApiAdapter):
                     "allowed_api_formats": user.allowed_api_formats,
                     "allowed_models": user.allowed_models,
                     "model_capability_settings": user.model_capability_settings,
-                    "quota_usd": user.quota_usd,
-                    "used_usd": user.used_usd,
-                    "total_usd": user.total_usd,
+                    "unlimited": WalletService.is_unlimited_wallet(wallet),
+                    "wallet": WalletService.serialize_wallet_summary(wallet) if wallet else None,
                     "is_active": user.is_active,
                     "api_keys": api_keys_data,
                 }
@@ -2026,7 +2012,7 @@ class AdminExportUsersAdapter(AdminApiAdapter):
 
         # 导出独立余额 Keys（管理员创建的，不属于普通用户）
         standalone_keys = db.query(ApiKey).filter(ApiKey.is_standalone.is_(True)).all()
-        standalone_keys_data = [self._serialize_api_key(key) for key in standalone_keys]
+        standalone_keys_data = [self._serialize_api_key(key, db=db) for key in standalone_keys]
 
         return {
             "version": "1.2",
@@ -2119,8 +2105,6 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                     key_encrypted=key_encrypted,
                     name=key_data.get("name"),
                     is_standalone=is_standalone or key_data.get("is_standalone", False),
-                    balance_used_usd=key_data.get("balance_used_usd", 0.0),
-                    current_balance_usd=key_data.get("current_balance_usd"),
                     allowed_providers=key_data.get("allowed_providers"),
                     allowed_api_formats=key_data.get("allowed_api_formats"),
                     allowed_models=key_data.get("allowed_models"),
@@ -2153,6 +2137,14 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                     continue
 
                 existing_user = db.query(User).filter(User.email == import_email).first()
+                wallet_payload = (
+                    user_data.get("wallet") if isinstance(user_data.get("wallet"), dict) else None
+                )
+                wallet_limit_mode = (
+                    str(wallet_payload.get("limit_mode"))
+                    if wallet_payload and wallet_payload.get("limit_mode") in {"finite", "unlimited"}
+                    else ("unlimited" if user_data.get("unlimited") else "finite")
+                )
 
                 if existing_user:
                     user_id = existing_user.id
@@ -2173,11 +2165,20 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                         existing_user.model_capability_settings = user_data.get(
                             "model_capability_settings"
                         )
-                        existing_user.quota_usd = user_data.get("quota_usd")
-                        existing_user.used_usd = user_data.get("used_usd", 0.0)
-                        existing_user.total_usd = user_data.get("total_usd", 0.0)
                         existing_user.is_active = user_data.get("is_active", True)
                         existing_user.updated_at = datetime.now(timezone.utc)
+                        wallet = WalletService.get_or_create_wallet(db, user=existing_user)
+                        if wallet is not None:
+                            wallet.limit_mode = wallet_limit_mode
+                            if wallet_payload:
+                                wallet.balance = wallet_payload.get("recharge_balance", 0) or 0
+                                wallet.gift_balance = wallet_payload.get("gift_balance", 0) or 0
+                                wallet.total_recharged = wallet_payload.get("total_recharged", 0) or 0
+                                wallet.total_consumed = wallet_payload.get("total_consumed", 0) or 0
+                                wallet.total_refunded = wallet_payload.get("total_refunded", 0) or 0
+                                wallet.total_adjusted = wallet_payload.get("total_adjusted", 0) or 0
+                                wallet.status = wallet_payload.get("status", "active") or "active"
+                            wallet.updated_at = datetime.now(timezone.utc)
                         stats["users"]["updated"] += 1
                 else:
                     # 创建新用户
@@ -2196,13 +2197,22 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                         allowed_api_formats=user_data.get("allowed_api_formats"),
                         allowed_models=user_data.get("allowed_models"),
                         model_capability_settings=user_data.get("model_capability_settings"),
-                        quota_usd=user_data.get("quota_usd"),
-                        used_usd=user_data.get("used_usd", 0.0),
-                        total_usd=user_data.get("total_usd", 0.0),
                         is_active=user_data.get("is_active", True),
                     )
                     db.add(new_user)
                     db.flush()
+                    wallet = WalletService.get_or_create_wallet(db, user=new_user)
+                    if wallet is not None:
+                        wallet.limit_mode = wallet_limit_mode
+                        if wallet_payload:
+                            wallet.balance = wallet_payload.get("recharge_balance", 0) or 0
+                            wallet.gift_balance = wallet_payload.get("gift_balance", 0) or 0
+                            wallet.total_recharged = wallet_payload.get("total_recharged", 0) or 0
+                            wallet.total_consumed = wallet_payload.get("total_consumed", 0) or 0
+                            wallet.total_refunded = wallet_payload.get("total_refunded", 0) or 0
+                            wallet.total_adjusted = wallet_payload.get("total_adjusted", 0) or 0
+                            wallet.status = wallet_payload.get("status", "active") or "active"
+                        wallet.updated_at = datetime.now(timezone.utc)
                     user_id = new_user.id
                     stats["users"]["created"] += 1
 
@@ -2229,6 +2239,38 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                         )
                         if new_key:
                             db.add(new_key)
+                            db.flush()
+                            wallet = WalletService.get_or_create_wallet(db, api_key=new_key)
+                            wallet_payload = (
+                                key_data.get("wallet")
+                                if isinstance(key_data.get("wallet"), dict)
+                                else None
+                            )
+                            if wallet is not None:
+                                wallet.limit_mode = (
+                                    str(wallet_payload.get("limit_mode"))
+                                    if wallet_payload
+                                    and wallet_payload.get("limit_mode")
+                                    in {"finite", "unlimited"}
+                                    else ("unlimited" if key_data.get("unlimited") else "finite")
+                                )
+                                if wallet_payload:
+                                    wallet.balance = wallet_payload.get("recharge_balance", 0) or 0
+                                    wallet.gift_balance = wallet_payload.get("gift_balance", 0) or 0
+                                    wallet.total_recharged = (
+                                        wallet_payload.get("total_recharged", 0) or 0
+                                    )
+                                    wallet.total_consumed = (
+                                        wallet_payload.get("total_consumed", 0) or 0
+                                    )
+                                    wallet.total_refunded = (
+                                        wallet_payload.get("total_refunded", 0) or 0
+                                    )
+                                    wallet.total_adjusted = (
+                                        wallet_payload.get("total_adjusted", 0) or 0
+                                    )
+                                    wallet.status = wallet_payload.get("status", "active") or "active"
+                                wallet.updated_at = datetime.now(timezone.utc)
                             stats["standalone_keys"]["created"] += 1
                         elif status == "skipped":
                             stats["standalone_keys"]["skipped"] += 1
@@ -2655,15 +2697,11 @@ def _purge_stats_and_reset_counters(db: Session) -> None:
     db.query(StatsSummary).delete()
     db.query(StatsUserDaily).delete()
 
-    # 重置 User 上的累计统计字段
-    db.query(User).update({User.used_usd: 0.0, User.total_usd: 0.0}, synchronize_session=False)
-
     # 重置 ApiKey 上的缓存统计字段
     db.query(ApiKey).update(
         {
             ApiKey.total_requests: 0,
             ApiKey.total_cost_usd: 0.0,
-            ApiKey.balance_used_usd: 0.0,
         },
         synchronize_session=False,
     )
