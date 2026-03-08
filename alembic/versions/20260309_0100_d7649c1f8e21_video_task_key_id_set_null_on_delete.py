@@ -1,6 +1,6 @@
 """video_tasks.key_id: add ondelete SET NULL
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: d7649c1f8e21
 Revises: 2053ab8ed764
 Create Date: 2026-03-09 01:00:00.000000+00:00
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "a1b2c3d4e5f6"
+revision = "d7649c1f8e21"
 down_revision = "2053ab8ed764"
 branch_labels = None
 depends_on = None
