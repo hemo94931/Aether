@@ -105,6 +105,7 @@ def run_migrations_online() -> None:
                 target_metadata=target_metadata,
                 compare_type=True,
                 compare_server_default=True,
+                transaction_per_migration=True,  # 每个迁移文件独立事务，完成即提交
             )
 
             with context.begin_transaction():
