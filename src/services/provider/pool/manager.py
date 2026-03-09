@@ -362,12 +362,23 @@ class PoolManager:
         self,
         session_uuid: str | None,
         keys: list[ProviderAPIKey],
+        *,
+        availability_checker: (
+            Callable[[ProviderAPIKey], tuple[bool, str | None, str | None]] | None
+        ) = None,
+        page_size: int = 50,
     ) -> tuple[list[ProviderAPIKey], PoolSchedulingTrace]:
         """Select and order pool keys with trace output.
 
         Reuses :meth:`reorder_candidates` logic by adapting keys to lightweight
         candidate-like wrappers, then propagates skip/trace metadata back onto
         each key object for downstream execution/recording.
+
+        When *availability_checker* is provided, post-sort availability checks
+        are performed lazily: only the top *page_size* non-skipped keys are
+        checked at a time; if all fail, the next page is checked, and so on.
+        Keys beyond the last checked page are marked as ``deferred`` (skipped
+        without checking) to avoid unnecessary CPU work on large pools.
         """
         if not keys:
             return (
@@ -423,6 +434,30 @@ class PoolManager:
                 key, "_pool_extra_data", dict(pool_extra) if isinstance(pool_extra, dict) else {}
             )
             ordered_keys.append(key)
+
+        # -- 分页可用性检查 --
+        # 排序后对非 skipped key 分页调用 availability_checker，
+        # 找到 page_size 个可用 key 后停止检查，剩余标记 deferred。
+        if availability_checker is not None:
+            available_count = 0
+            found_enough = False
+            for key in ordered_keys:
+                if getattr(key, "_pool_skipped", False):
+                    continue
+                if found_enough:
+                    setattr(key, "_pool_skipped", True)
+                    setattr(key, "_pool_skip_reason", "deferred")
+                    continue
+                is_available, skip_reason_check, mapping_model = availability_checker(key)
+                if not is_available:
+                    setattr(key, "_pool_skipped", True)
+                    setattr(key, "_pool_skip_reason", skip_reason_check)
+                else:
+                    if mapping_model:
+                        setattr(key, "_pool_mapping_matched_model", mapping_model)
+                    available_count += 1
+                    if available_count >= page_size:
+                        found_enough = True
 
         return ordered_keys, trace
 

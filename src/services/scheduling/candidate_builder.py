@@ -563,33 +563,9 @@ class CandidateBuilder:
                 )
 
                 if pool_cfg is not None:
-                    # 号池 Provider 仅构建一个 PoolCandidate，内部 key 选择延迟到执行阶段。
-                    pool_keys: list[ProviderAPIKey] = []
-                    pool_miss_counts: list[int] = []
-                    pool_mapping: dict[str, str | None] = {}
-                    for key in keys_to_check:
-                        is_available, _key_skip_reason, mapping_matched_model = (
-                            self._check_key_availability(
-                                key,
-                                endpoint_format_str,
-                                model_name,
-                                capability_requirements,
-                                model_mappings=model_mappings,
-                                candidate_models=provider_model_names,
-                                provider_type=getattr(provider, "provider_type", None),
-                            )
-                        )
-                        if not is_available:
-                            continue
-
-                        pool_keys.append(key)
-                        pool_miss_counts.append(
-                            compute_capability_score(
-                                key.capabilities or {},
-                                capability_requirements,
-                            )
-                        )
-                        pool_mapping[str(key.id)] = mapping_matched_model
+                    # 号池优化：跳过逐 key 的 _check_key_availability 检查，
+                    # 直接收集全部 active key，将检查推迟到 PoolManager 排序后分页执行。
+                    pool_keys = list(keys_to_check)
 
                     if not pool_keys:
                         continue
@@ -619,20 +595,21 @@ class CandidateBuilder:
                         pool_keys=pool_keys,
                         pool_config=pool_cfg,
                         pool_priority=pool_priority,
-                        mapping_matched_model=pool_mapping.get(str(pool_keys[0].id)),
                         needs_conversion=needs_conversion,
                         provider_api_format=str(endpoint_format_str or ""),
                         output_limit=output_limit,
-                        capability_miss_count=min(pool_miss_counts) if pool_miss_counts else 0,
+                        capability_miss_count=0,
                     )
 
-                    # 在 key 对象上附加映射结果，供 PoolCandidate 运行时切 key 后同步模型名。
-                    for pool_key in pool_keys:
-                        setattr(
-                            pool_key,
-                            "_pool_mapping_matched_model",
-                            pool_mapping.get(str(pool_key.id)),
-                        )
+                    # 打包延迟检查参数，供 PoolManager 排序后分页调用
+                    pool_candidate._deferred_check_params = {
+                        "endpoint_format": endpoint_format_str,
+                        "model_name": model_name,
+                        "capability_requirements": capability_requirements,
+                        "model_mappings": model_mappings,
+                        "candidate_models": provider_model_names,
+                        "provider_type": getattr(provider, "provider_type", None),
+                    }
 
                     if needs_conversion:
                         convertible_candidates.append(pool_candidate)

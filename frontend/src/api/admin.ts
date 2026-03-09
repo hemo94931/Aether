@@ -47,9 +47,26 @@ export interface ConfigExportData {
   exported_at: string
   global_models: GlobalModelExport[]
   providers: ProviderExport[]
+  proxy_nodes?: ProxyNodeExport[]
   ldap_config?: LDAPConfigExport | null
   oauth_providers?: OAuthProviderExport[]
   system_configs?: SystemConfigExport[]
+}
+
+export interface ProxyNodeExport {
+  id: string
+  name: string
+  ip: string
+  port: number
+  region?: string | null
+  is_manual: boolean
+  proxy_url?: string | null
+  proxy_username?: string | null
+  proxy_password?: string | null
+  tunnel_mode: boolean
+  heartbeat_interval: number
+  remote_config?: Record<string, unknown> | null
+  config_version: number
 }
 
 // 用户导出数据结构
@@ -308,6 +325,7 @@ export interface ConfigImportResponse {
   message: string
   stats: {
     global_models: { created: number; updated: number; skipped: number }
+    proxy_nodes?: { created: number; updated: number; skipped: number }
     providers: { created: number; updated: number; skipped: number }
     endpoints: { created: number; updated: number; skipped: number }
     keys: { created: number; updated: number; skipped: number }
