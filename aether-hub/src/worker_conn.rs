@@ -77,16 +77,30 @@ pub async fn handle_worker_connection(ws: WebSocket, hub: Arc<HubRouter>, cfg: C
         .await;
     });
 
-    tokio::select! {
-        _ = &mut reader => {}
-        _ = &mut liveness => {}
-    }
+    let reader_finished = tokio::select! {
+        res = &mut reader => {
+            if let Err(err) = res {
+                warn!(worker_id = conn_id, error = %err, "worker reader task failed");
+            }
+            true
+        }
+        res = &mut liveness => {
+            if let Err(err) = res {
+                warn!(worker_id = conn_id, error = %err, "worker liveness task failed");
+            }
+            false
+        }
+    };
 
     conn.request_close();
-    reader.abort();
-    liveness.abort();
-    let _ = reader.await;
-    let _ = liveness.await;
+    if !reader_finished {
+        reader.abort();
+        let _ = reader.await;
+    }
+    if reader_finished {
+        liveness.abort();
+        let _ = liveness.await;
+    }
 
     hub.unregister_worker(conn_id);
     tokio::time::sleep(Duration::from_millis(100)).await;
