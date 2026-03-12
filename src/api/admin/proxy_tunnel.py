@@ -41,8 +41,8 @@ def _get_node_lock(node_id: str) -> asyncio.Lock:
 # 单帧最大 64 MB -- AI API 请求体可能包含多张 base64 图片，需要足够余量
 _MAX_FRAME_SIZE = 64 * 1024 * 1024
 
-# 默认 WebSocket 空闲超时（秒）-- 需覆盖客户端 stale_timeout(45s) + 重连延迟窗口
-_DEFAULT_IDLE_TIMEOUT = 90.0
+# 默认 WebSocket 空闲超时（秒）-- 0 表示禁用（依赖 PING/PONG 心跳检测连接存活）
+_DEFAULT_IDLE_TIMEOUT = 0.0
 
 # 默认服务端应用层 ping 间隔（秒）-- 与客户端 ping 间隔一致，确保高频心跳
 _DEFAULT_SERVER_PING_INTERVAL = 15.0
@@ -81,12 +81,12 @@ _SERVER_PING_INTERVAL = _env_float(
 _IDLE_TIMEOUT = _env_float(
     "AETHER_PROXY_TUNNEL_SERVER_IDLE_TIMEOUT",
     _DEFAULT_IDLE_TIMEOUT,
-    min_value=30.0,
+    min_value=0.0,
     max_value=600.0,
 )
 
-# 避免 idle timeout 过小导致 ping 尚未生效就被服务端断开
-if _IDLE_TIMEOUT <= _SERVER_PING_INTERVAL * 2:
+# 避免 idle timeout 过小导致 ping 尚未生效就被服务端断开（0 表示禁用，跳过校验）
+if _IDLE_TIMEOUT > 0 and _IDLE_TIMEOUT <= _SERVER_PING_INTERVAL * 2:
     adjusted_idle = max(_SERVER_PING_INTERVAL * 3, 30.0)
     logger.warning(
         "AETHER_PROXY_TUNNEL_SERVER_IDLE_TIMEOUT too low for ping interval, auto-adjust to {}",
@@ -196,7 +196,10 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
         oversized_count = 0
         while True:
             try:
-                data = await asyncio.wait_for(ws.receive_bytes(), timeout=_IDLE_TIMEOUT)
+                if _IDLE_TIMEOUT > 0:
+                    data = await asyncio.wait_for(ws.receive_bytes(), timeout=_IDLE_TIMEOUT)
+                else:
+                    data = await ws.receive_bytes()
             except asyncio.TimeoutError:
                 count = _idle_timeout_counts.get(node_id, 0) + 1
                 _idle_timeout_counts[node_id] = count

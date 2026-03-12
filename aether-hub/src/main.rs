@@ -23,12 +23,12 @@ struct Args {
     #[arg(long, default_value = "0.0.0.0:8085", env = "TUNNEL_HUB_BIND")]
     bind: String,
 
-    /// Proxy-side idle timeout in seconds
-    #[arg(long, default_value_t = 90, env = "TUNNEL_HUB_PROXY_IDLE_TIMEOUT")]
+    /// Proxy-side idle timeout in seconds (0 to disable)
+    #[arg(long, default_value_t = 0, env = "TUNNEL_HUB_PROXY_IDLE_TIMEOUT")]
     proxy_idle_timeout: u64,
 
     /// Worker-side idle timeout in seconds (0 to disable)
-    #[arg(long, default_value_t = 120, env = "TUNNEL_HUB_WORKER_IDLE_TIMEOUT")]
+    #[arg(long, default_value_t = 0, env = "TUNNEL_HUB_WORKER_IDLE_TIMEOUT")]
     worker_idle_timeout: u64,
 
     /// Ping interval in seconds (for both sides)
