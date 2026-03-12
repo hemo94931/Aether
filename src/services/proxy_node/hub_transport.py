@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import json
+import time as _time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -68,6 +69,11 @@ class HubConnectionManager:
 
         self._closing = False
 
+        self._disconnect_count = 0  # 连续断开计数，用于抑制重复日志
+        # 连续快速断开退避：防止 Hub 端持续发送 GOAWAY 时产生重连风暴
+        self._last_disconnect_ts: float = 0.0
+        self._rapid_disconnect_count: int = 0
+
     @property
     def is_connected(self) -> bool:
         ws = self._ws
@@ -126,7 +132,15 @@ class HubConnectionManager:
 
         self._reader_task = asyncio.create_task(self._reader_loop(ws))
         self._ping_task = asyncio.create_task(self._ping_loop(ws))
-        logger.info("Hub worker channel connected: {}", self._config.worker_ws_url)
+        if self._disconnect_count == 0:
+            logger.info("Hub worker channel connected: {}", self._config.worker_ws_url)
+        else:
+            logger.debug(
+                "Hub worker channel connected: {} (after {} disconnects)",
+                self._config.worker_ws_url,
+                self._disconnect_count,
+            )
+        self._disconnect_count = 0
 
     def _start_reconnect_loop(self) -> None:
         if self._closing:
@@ -138,7 +152,9 @@ class HubConnectionManager:
         self._reconnect_task = asyncio.create_task(self._reconnect_loop())
 
     async def _reconnect_loop(self) -> None:
-        attempt = 0
+        # 如果连续快速断开（GOAWAY 风暴），初始 attempt 跳过 0-delay 阶段
+        rapid = self._rapid_disconnect_count
+        attempt = min(rapid, len(_RECONNECT_DELAYS_SECONDS) - 1)
         while not self._closing and not self.is_connected:
             delay = _RECONNECT_DELAYS_SECONDS[min(attempt, len(_RECONNECT_DELAYS_SECONDS) - 1)]
             if delay > 0:
@@ -149,7 +165,7 @@ class HubConnectionManager:
                         break
                     await self._connect_once()
                 if self.is_connected:
-                    logger.info("Hub worker channel reconnected")
+                    logger.debug("Hub worker channel reconnected (attempt {})", attempt + 1)
                     break
             except Exception as e:
                 attempt += 1
@@ -192,7 +208,26 @@ class HubConnectionManager:
             self._pending_streams.clear()
 
         if not self._closing:
-            logger.warning("Hub worker channel disconnected: {}", reason)
+            self._disconnect_count += 1
+
+            # 追踪连续快速断开：如果距上次断开不足 2 秒，累加计数；否则重置
+            now_mono = _time.monotonic()
+            if now_mono - self._last_disconnect_ts < 2.0:
+                self._rapid_disconnect_count += 1
+            else:
+                self._rapid_disconnect_count = 0
+            self._last_disconnect_ts = now_mono
+
+            if self._disconnect_count <= 1:
+                logger.warning("Hub worker channel disconnected: {}", reason)
+            elif self._disconnect_count % 10 == 0:
+                logger.info(
+                    "Hub worker channel disconnected: {} (repeated {} times)",
+                    reason,
+                    self._disconnect_count,
+                )
+            else:
+                logger.debug("Hub worker channel disconnected: {}", reason)
             self._start_reconnect_loop()
 
     async def _send_frame(self, frame: Frame) -> None:

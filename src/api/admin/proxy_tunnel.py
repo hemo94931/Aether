@@ -26,6 +26,9 @@ router = APIRouter()
 # Per-node 锁: 防止并发的 connect/disconnect 写入 DB 时出现竞态（后断连覆盖先连接）
 _node_status_locks: dict[str, asyncio.Lock] = {}
 
+# Per-node idle timeout 连续计数: 用于抑制重复日志
+_idle_timeout_counts: dict[str, int] = {}
+
 
 def _get_node_lock(node_id: str) -> asyncio.Lock:
     lock = _node_status_locks.get(node_id)
@@ -195,7 +198,19 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
             try:
                 data = await asyncio.wait_for(ws.receive_bytes(), timeout=_IDLE_TIMEOUT)
             except asyncio.TimeoutError:
-                logger.warning("tunnel idle timeout for node_id={}", node_id)
+                count = _idle_timeout_counts.get(node_id, 0) + 1
+                _idle_timeout_counts[node_id] = count
+                # 首次 warning，后续每 10 次打印一条 info，其余 debug
+                if count == 1:
+                    logger.warning("tunnel idle timeout for node_id={}", node_id)
+                elif count % 10 == 0:
+                    logger.info(
+                        "tunnel idle timeout for node_id={} (repeated {} times)",
+                        node_id,
+                        count,
+                    )
+                else:
+                    logger.debug("tunnel idle timeout for node_id={}", node_id)
                 disconnect_reason = "idle timeout"
                 await ws.close(code=4004, reason="idle timeout")
                 break
@@ -209,6 +224,8 @@ async def proxy_tunnel_ws(ws: WebSocket) -> None:
                     break
                 continue
             oversized_count = 0  # 正常帧重置计数
+            _idle_timeout_counts.pop(node_id, None)  # 收到正常帧，重置 idle timeout 计数
+            manager.reset_reconnect_count(node_id)  # 连接正常活跃，重置 reconnect 计数
             try:
                 frame = Frame.decode(data)
             except ValueError as e:
