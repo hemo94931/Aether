@@ -527,12 +527,20 @@ class MockRedisPipeline:
         self._commands.append(("xack", key, group, message_id))
         return self
 
+    def xdel(self, key: str, message_id: str) -> Any:
+        self._commands.append(("xdel", key, message_id))
+        return self
+
     async def execute(self) -> Any:
         results = []
         for cmd in self._commands:
             if cmd[0] == "xack":
                 _, key, group, message_id = cmd
                 self._parent.xack_calls.append((key, group, message_id))
+                results.append(1)
+            elif cmd[0] == "xdel":
+                _, key, message_id = cmd
+                self._parent.xdel_calls.append((key, message_id))
                 results.append(1)
         return results
 
@@ -542,9 +550,12 @@ class MockRedisForConsumer:
 
     def __init__(self) -> None:
         self.xgroup_create_calls: list[tuple[str, str, str, bool]] = []
+        self.xgroup_delconsumer_calls: list[tuple[str, str, str]] = []
+        self.xinfo_consumers_result: list[dict[str, Any]] = []
         self.xreadgroup_results: list[Any] = []
         self.xautoclaim_results: list[Any] = []
         self.xack_calls: list[tuple[str, str, str]] = []
+        self.xdel_calls: list[tuple[str, str]] = []
         self.xadd_calls: list[tuple[str, dict[str, str], int | None, bool | None]] = []
         self.xpending_range_results: list[Any] = []
         self.xlen_result: int = 0
@@ -555,6 +566,13 @@ class MockRedisForConsumer:
         self.xgroup_create_calls.append((key, group, id, mkstream))
         if self.xgroup_create_error:
             raise self.xgroup_create_error
+
+    async def xgroup_delconsumer(self, key: str, group: str, consumer: str) -> int:
+        self.xgroup_delconsumer_calls.append((key, group, consumer))
+        return 1
+
+    async def xinfo_consumers(self, key: str, group: str) -> list[dict[str, Any]]:
+        return list(self.xinfo_consumers_result)
 
     async def xreadgroup(
         self,
@@ -577,6 +595,9 @@ class MockRedisForConsumer:
 
     async def xack(self, key: str, group: str, message_id: str) -> Any:
         self.xack_calls.append((key, group, message_id))
+
+    async def xdel(self, key: str, message_id: str) -> Any:
+        self.xdel_calls.append((key, message_id))
 
     async def xadd(
         self,
@@ -701,6 +722,57 @@ async def test_consumer_start_stop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_consumer_start_cleans_stale_consumers(monkeypatch: Any) -> None:
+    """启动时应清理 pending=0 且长期闲置的旧 consumer。"""
+    mock_redis = MockRedisForConsumer()
+    current_consumer = _consumer_name()
+    mock_redis.xinfo_consumers_result = [
+        {"name": current_consumer, "pending": 0, "idle": 999999999},
+        {"name": "stale:1", "pending": 0, "idle": 999999999},
+        {"name": "busy:1", "pending": 1, "idle": 999999999},
+        {"name": "fresh:1", "pending": 0, "idle": 1000},
+    ]
+
+    async def _get_redis_client(require_redis: bool = False) -> Any:
+        return mock_redis
+
+    monkeypatch.setattr("src.services.usage.consumer_streams.get_redis_client", _get_redis_client)
+
+    consumer = UsageQueueConsumer()
+    consumer._run = AsyncMock()  # type: ignore[method-assign]
+
+    await consumer.start()
+    await consumer.stop()
+
+    assert ("usage:events", "usage_consumers", "stale:1") in mock_redis.xgroup_delconsumer_calls
+    assert ("usage:events", "usage_consumers", "busy:1") not in mock_redis.xgroup_delconsumer_calls
+    assert ("usage:events", "usage_consumers", "fresh:1") not in mock_redis.xgroup_delconsumer_calls
+
+
+@pytest.mark.asyncio
+async def test_consumer_stop_removes_self_from_group(monkeypatch: Any) -> None:
+    """停机时应主动删除自身 consumer，避免 group 元数据累积。"""
+    mock_redis = MockRedisForConsumer()
+
+    async def _get_redis_client(require_redis: bool = False) -> Any:
+        return mock_redis
+
+    monkeypatch.setattr("src.services.usage.consumer_streams.get_redis_client", _get_redis_client)
+
+    consumer = UsageQueueConsumer()
+    consumer._run = AsyncMock()  # type: ignore[method-assign]
+
+    await consumer.start()
+    await consumer.stop()
+
+    assert (
+        config.usage_queue_stream_key,
+        config.usage_queue_stream_group,
+        consumer._consumer,
+    ) in mock_redis.xgroup_delconsumer_calls
+
+
+@pytest.mark.asyncio
 async def test_consumer_process_messages_success(monkeypatch: Any) -> None:
     """测试成功处理消息"""
     mock_redis = MockRedisForConsumer()
@@ -733,6 +805,27 @@ async def test_consumer_process_messages_success(monkeypatch: Any) -> None:
     call_messages = consumer._process_record_batch.call_args[0][1]
     assert len(call_messages) == 1
     assert call_messages[0][2].request_id == "req-test-1"
+
+
+@pytest.mark.asyncio
+async def test_consumer_process_streaming_batch_deletes_messages() -> None:
+    """STREAMING 事件处理成功后应立即从主队列删除。"""
+    mock_redis = MockRedisForConsumer()
+    consumer = UsageQueueConsumer()
+    consumer._apply_streaming_event = AsyncMock()  # type: ignore[method-assign]
+
+    event = build_usage_event(
+        event_type=UsageEventType.STREAMING,
+        request_id="req-stream-ok",
+        data={"provider": "test"},
+    )
+
+    await consumer._process_streaming_batch(mock_redis, [("stream-1", event)])
+
+    assert mock_redis.xack_calls == [
+        (config.usage_queue_stream_key, config.usage_queue_stream_group, "stream-1")
+    ]
+    assert mock_redis.xdel_calls == [(config.usage_queue_stream_key, "stream-1")]
 
 
 @pytest.mark.asyncio
@@ -804,6 +897,7 @@ async def test_consumer_process_messages_move_to_dlq(monkeypatch: Any) -> None:
 
         # 消息应该被 ack
         assert len(mock_redis.xack_calls) == 1
+        assert mock_redis.xdel_calls == [(config.usage_queue_stream_key, message_id)]
     finally:
         config.usage_queue_max_retries = old_max_retries
         config.usage_queue_dlq_maxlen = old_dlq_maxlen
@@ -1203,8 +1297,14 @@ async def test_consumer_process_record_batch_success(monkeypatch: Any) -> None:
     records = mock_record_batch.call_args[0][1]
     assert len(records) == 3
 
-    # 验证所有消息被 ACK
+    # 验证所有消息被 ACK 并从主队列删除
     assert len(mock_redis.xack_calls) == 3
+    assert len(mock_redis.xdel_calls) == 3
+    assert mock_redis.xdel_calls == [
+        (config.usage_queue_stream_key, "msg-0"),
+        (config.usage_queue_stream_key, "msg-1"),
+        (config.usage_queue_stream_key, "msg-2"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1243,8 +1343,9 @@ async def test_consumer_process_record_batch_fallback(monkeypatch: Any) -> None:
     fallback_records = mock_record_batch.call_args_list[1][0][1]
     assert len(fallback_records) == 1
     assert fallback_records[0]["request_id"] == "req-fallback"
-    # 消息被 ACK
+    # 消息被 ACK 并从主队列删除
     assert len(mock_redis.xack_calls) == 1
+    assert mock_redis.xdel_calls == [(config.usage_queue_stream_key, "msg-1")]
 
 
 @pytest.mark.asyncio

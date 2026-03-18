@@ -12,7 +12,6 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from src.core.logger import logger
-from src.services.provider.cache_fingerprint import build_request_cache_fingerprint
 from src.services.system.audit import audit_service
 from src.services.usage.service import UsageService
 
@@ -36,8 +35,6 @@ class MessageTelemetry:
         *,
         request_metadata: dict[str, Any] | None = None,
         response_metadata: dict[str, Any] | None = None,
-        provider_request_body: Any | None = None,
-        provider_api_format: str | None = None,
     ) -> dict[str, Any] | None:
         metadata: dict[str, Any] | None = None
 
@@ -47,23 +44,6 @@ class MessageTelemetry:
                 metadata.setdefault("response", response_metadata)
         elif response_metadata:
             metadata = dict(response_metadata)
-
-        fingerprint = build_request_cache_fingerprint(
-            provider_request_body,
-            provider_api_format=provider_api_format,
-        )
-        if fingerprint:
-            if metadata is None:
-                metadata = {}
-            metadata["cache_fingerprint"] = fingerprint
-            logger.debug(
-                "[Telemetry] cache fingerprint: request_id={}, format={}, payload_sha256={}, cache_sha256={}, prompt_cache_key_present={}",
-                self.request_id,
-                fingerprint.get("provider_api_format"),
-                str(fingerprint.get("payload_sha256") or "")[:12],
-                str(fingerprint.get("cache_relevant_sha256") or "")[:12],
-                bool(fingerprint.get("prompt_cache_key")),
-            )
 
         return metadata
 
@@ -136,8 +116,6 @@ class MessageTelemetry:
         metadata = self._build_usage_metadata(
             request_metadata=request_metadata,
             response_metadata=response_metadata,
-            provider_request_body=provider_request_body,
-            provider_api_format=endpoint_api_format or api_format,
         )
 
         usage = await UsageService.record_usage(
@@ -262,8 +240,6 @@ class MessageTelemetry:
 
         metadata = self._build_usage_metadata(
             request_metadata=request_metadata,
-            provider_request_body=provider_request_body,
-            provider_api_format=endpoint_api_format or api_format,
         )
 
         await UsageService.record_usage(
@@ -352,8 +328,6 @@ class MessageTelemetry:
         provider_name = provider or "unknown"
         metadata = self._build_usage_metadata(
             request_metadata=request_metadata,
-            provider_request_body=provider_request_body,
-            provider_api_format=endpoint_api_format or api_format,
         )
 
         await UsageService.record_usage(

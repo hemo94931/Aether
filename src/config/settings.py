@@ -231,7 +231,8 @@ class Config:
         # 最终写入 DB 前仍会按 SystemConfigService 做脱敏与截断。
         self.usage_queue_stream_key = os.getenv("USAGE_QUEUE_STREAM_KEY", "usage:events")
         self.usage_queue_stream_group = os.getenv("USAGE_QUEUE_STREAM_GROUP", "usage_consumers")
-        self.usage_queue_stream_maxlen = int(os.getenv("USAGE_QUEUE_STREAM_MAXLEN", "200000"))
+        # 主队列只做短暂缓冲；成功消费后会立即删除，不应把 Redis 当历史存储。
+        self.usage_queue_stream_maxlen = int(os.getenv("USAGE_QUEUE_STREAM_MAXLEN", "2000"))
         self.usage_queue_dlq_key = os.getenv("USAGE_QUEUE_DLQ_KEY", "usage:events:dlq")
         self.usage_queue_dlq_maxlen = int(os.getenv("USAGE_QUEUE_DLQ_MAXLEN", "5000"))
         self.usage_queue_consumer_batch = int(os.getenv("USAGE_QUEUE_CONSUMER_BATCH", "200"))

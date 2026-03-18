@@ -134,6 +134,9 @@ class UsageQueueConsumer:
         self._dlq_key = config.usage_queue_dlq_key
         self._dlq_maxlen = config.usage_queue_dlq_maxlen
         self._metrics_interval = config.usage_queue_metrics_interval_seconds
+        # 清理长期闲置的旧 consumer，避免 Redis consumer group 元数据持续累积。
+        # 仅清理 pending=0 且空闲时间足够长的 consumer，不影响正常重投递。
+        self._stale_consumer_idle_ms = max(self._claim_idle_ms * 10, 60 * 60 * 1000)
 
     @staticmethod
     def _is_duplicate_key_error(exc: IntegrityError) -> bool:
@@ -158,6 +161,9 @@ class UsageQueueConsumer:
     async def start(self) -> None:
         if self._running:
             return
+        redis_client = await get_redis_client(require_redis=False)
+        if redis_client:
+            await self._cleanup_stale_consumers(redis_client)
         self._running = True
         self._task = asyncio.create_task(self._run(), name="usage-queue-consumer")
         logger.info("[usage-queue] Consumer started: {}", self._consumer)
@@ -172,7 +178,80 @@ class UsageQueueConsumer:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        redis_client = await get_redis_client(require_redis=False)
+        if redis_client:
+            await self._delete_consumer(redis_client, self._consumer)
         logger.info("[usage-queue] Consumer stopped: {}", self._consumer)
+
+    async def _delete_consumer(self, redis_client: Any, consumer_name: str) -> None:
+        try:
+            await redis_client.xgroup_delconsumer(
+                self._stream_key,
+                self._stream_group,
+                consumer_name,
+            )
+        except ResponseError as exc:
+            # Group/stream may already be gone during shutdown; ignore in that case.
+            if "NOGROUP" in str(exc) or "ERR no such key" in str(exc):
+                return
+            logger.debug("[usage-queue] DELCONSUMER failed for {}: {}", consumer_name, exc)
+        except Exception as exc:
+            logger.debug("[usage-queue] DELCONSUMER failed for {}: {}", consumer_name, exc)
+
+    async def _cleanup_stale_consumers(self, redis_client: Any) -> None:
+        try:
+            consumers = await redis_client.xinfo_consumers(
+                self._stream_key,
+                self._stream_group,
+            )
+        except ResponseError as exc:
+            if "NOGROUP" in str(exc):
+                return
+            logger.debug("[usage-queue] XINFO CONSUMERS failed: {}", exc)
+            return
+        except Exception as exc:
+            logger.debug("[usage-queue] XINFO CONSUMERS failed: {}", exc)
+            return
+
+        deleted = 0
+        for consumer in consumers or []:
+            if not isinstance(consumer, dict):
+                continue
+            consumer_name = str(consumer.get("name") or "").strip()
+            if not consumer_name or consumer_name == self._consumer:
+                continue
+
+            pending = int(consumer.get("pending", 0) or 0)
+            idle_ms = int(consumer.get("idle", 0) or 0)
+            if pending > 0 or idle_ms < self._stale_consumer_idle_ms:
+                continue
+
+            await self._delete_consumer(redis_client, consumer_name)
+            deleted += 1
+
+        if deleted:
+            logger.info(
+                "[usage-queue] Cleaned up {} stale consumers from group {}",
+                deleted,
+                self._stream_group,
+            )
+
+    async def _ack_and_delete_messages(self, redis_client: Any, message_ids: list[str]) -> None:
+        """ACK messages and immediately delete them from the main stream.
+
+        usage:events is only meant to be a short-lived buffer. Once an event is
+        successfully persisted (or moved to DLQ), keeping it in Redis only
+        retains duplicate history and inflates memory.
+        """
+        if not message_ids:
+            return
+
+        pipe = redis_client.pipeline()
+        for message_id in message_ids:
+            pipe.xack(self._stream_key, self._stream_group, message_id)
+        for message_id in message_ids:
+            pipe.xdel(self._stream_key, message_id)
+        await pipe.execute()
 
     async def _run(self) -> None:
         while self._running:
@@ -284,10 +363,7 @@ class UsageQueueConsumer:
 
         # 使用 pipeline 批量 ACK 成功处理的消息
         if success_ids:
-            pipe = redis_client.pipeline()
-            for message_id in success_ids:
-                pipe.xack(self._stream_key, self._stream_group, message_id)
-            await pipe.execute()
+            await self._ack_and_delete_messages(redis_client, success_ids)
 
     async def _process_record_batch(
         self,
@@ -307,11 +383,8 @@ class UsageQueueConsumer:
             # 批量写入
             await self._record_usage_batch(records)
 
-            # 使用 pipeline 批量 ACK 提升性能
-            pipe = redis_client.pipeline()
-            for message_id in message_ids:
-                pipe.xack(self._stream_key, self._stream_group, message_id)
-            await pipe.execute()
+            # 写库成功后立即从主队列删除，避免 Redis 保留已入库历史。
+            await self._ack_and_delete_messages(redis_client, message_ids)
 
             logger.debug("[usage-queue] Batch processed {} records", len(records))
 
@@ -340,10 +413,7 @@ class UsageQueueConsumer:
                     )
             # 批量 ACK 成功处理的消息
             if success_ids:
-                pipe = redis_client.pipeline()
-                for message_id in success_ids:
-                    pipe.xack(self._stream_key, self._stream_group, message_id)
-                await pipe.execute()
+                await self._ack_and_delete_messages(redis_client, success_ids)
 
     async def _handle_processing_error(
         self,
@@ -367,7 +437,7 @@ class UsageQueueConsumer:
                     )
                 else:
                     await redis_client.xadd(self._dlq_key, dlq_fields)
-                await redis_client.xack(self._stream_key, self._stream_group, message_id)
+                await self._ack_and_delete_messages(redis_client, [message_id])
                 logger.error(
                     "[usage-queue] Message moved to DLQ after {} attempts: {}", retries, message_id
                 )
