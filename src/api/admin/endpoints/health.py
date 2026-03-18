@@ -93,6 +93,32 @@ def _format_str(api_format_enum: Any) -> str:
     return api_format_enum.value if hasattr(api_format_enum, "value") else str(api_format_enum)
 
 
+def _fetch_recent_attempts_for_api_format(
+    db: Session,
+    *,
+    api_format: str,
+    since: datetime,
+    per_format_limit: int,
+) -> list[RequestCandidate]:
+    """获取单个 API 格式最近的最终态请求，用于事件展示。"""
+    final_statuses = ["success", "failed", "skipped"]
+    return (
+        db.query(RequestCandidate)
+        .join(ProviderEndpoint, RequestCandidate.endpoint_id == ProviderEndpoint.id)
+        .join(Provider, ProviderEndpoint.provider_id == Provider.id)
+        .filter(
+            ProviderEndpoint.is_active.is_(True),
+            Provider.is_active.is_(True),
+            ProviderEndpoint.api_format == api_format,
+            RequestCandidate.created_at >= since,
+            RequestCandidate.status.in_(final_statuses),
+        )
+        .order_by(RequestCandidate.created_at.desc())
+        .limit(per_format_limit)
+        .all()
+    )
+
+
 pipeline = get_pipeline()
 
 
@@ -379,7 +405,10 @@ class AdminApiFormatHealthMonitorAdapter(AdminApiAdapter):
                 func.count(RequestCandidate.id).label("count"),
             )
             .join(RequestCandidate, ProviderEndpoint.id == RequestCandidate.endpoint_id)
+            .join(Provider, ProviderEndpoint.provider_id == Provider.id)
             .filter(
+                ProviderEndpoint.is_active.is_(True),
+                Provider.is_active.is_(True),
                 RequestCandidate.created_at >= since,
                 RequestCandidate.status.in_(final_statuses),
             )
@@ -395,40 +424,15 @@ class AdminApiFormatHealthMonitorAdapter(AdminApiAdapter):
                 status_counts[fmt] = {"success": 0, "failed": 0, "skipped": 0}
             status_counts[fmt][status] = count
 
-        # 3. 获取最近一段时间的 RequestCandidate（限制数量）
-        # 使用上面定义的 final_statuses，排除中间状态
-        limit_rows = max(500, self.per_format_limit * 10)
-        rows = (
-            db.query(
-                RequestCandidate,
-                ProviderEndpoint.api_format,
-                ProviderEndpoint.provider_id,
-            )
-            .join(ProviderEndpoint, RequestCandidate.endpoint_id == ProviderEndpoint.id)
-            .filter(
-                RequestCandidate.created_at >= since,
-                RequestCandidate.status.in_(final_statuses),
-            )
-            .order_by(RequestCandidate.created_at.desc())
-            .limit(limit_rows)
-            .all()
-        )
-
-        grouped_attempts: dict[str, list[RequestCandidate]] = {}
-
-        for attempt, api_format_enum, provider_id in rows:
-            fmt = _format_str(api_format_enum)
-            if fmt not in grouped_attempts:
-                grouped_attempts[fmt] = []
-
-            # 只保留每个 API 格式最近 per_format_limit 条记录
-            if len(grouped_attempts[fmt]) < self.per_format_limit:
-                grouped_attempts[fmt].append(attempt)
-
-        # 4. 为所有活跃格式生成监控数据（包括没有请求记录的）
+        # 3. 为所有活跃格式生成监控数据（包括没有请求记录的）
         monitors: list[ApiFormatHealthMonitor] = []
         for api_format in all_formats:
-            attempts = grouped_attempts.get(api_format, [])
+            attempts = _fetch_recent_attempts_for_api_format(
+                db=db,
+                api_format=api_format,
+                since=since,
+                per_format_limit=self.per_format_limit,
+            )
             # 获取窗口内的真实统计数据
             # 只统计最终状态：success, failed, skipped
             # 中间状态（available, pending, used, started）不计入统计

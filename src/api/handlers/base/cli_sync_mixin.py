@@ -75,7 +75,7 @@ class CliSyncMixin:
         sync_start_time = time.time()
 
         # 提前创建 pending 记录，让前端可以立即看到"处理中"
-        self._create_pending_usage(
+        pending_usage_created = self._create_pending_usage(
             model=model,
             is_stream=False,
             request_type="chat",
@@ -390,6 +390,8 @@ class CliSyncMixin:
                 request_body_state=request_state,
                 request_headers=original_headers,
                 request_body=original_request_body,
+                # 预创建失败时，回退到 TaskService 侧创建，避免丢失 pending 状态。
+                create_pending_usage=not pending_usage_created,
             )
             result = exec_result.response
             actual_provider_name = exec_result.provider_name or "unknown"

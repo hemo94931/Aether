@@ -126,6 +126,7 @@ class TaskService:
         supported_auth_types: set[str] | None = None,
         allow_format_conversion: bool = False,
         max_candidates: int | None = None,
+        create_pending_usage: bool = True,
     ) -> ExecutionResult:
         """兼容入口：默认绑定到 TaskService 内部执行路由。"""
         return await self._execute_facade_ops.execute(
@@ -146,6 +147,7 @@ class TaskService:
             supported_auth_types=supported_auth_types,
             allow_format_conversion=allow_format_conversion,
             max_candidates=max_candidates,
+            create_pending_usage=create_pending_usage,
         )
 
     async def _execute_internal(
@@ -168,6 +170,7 @@ class TaskService:
         supported_auth_types: set[str] | None = None,
         allow_format_conversion: bool = False,
         max_candidates: int | None = None,
+        create_pending_usage: bool = True,
     ) -> ExecutionResult:
         if task_mode == TaskMode.ASYNC:
             if extract_external_task_id is None:
@@ -250,6 +253,7 @@ class TaskService:
             request_body_state=request_body_state,
             request_headers=request_headers,
             request_body=request_body,
+            create_pending_usage=create_pending_usage,
         )
 
     async def execute_sync_candidates(

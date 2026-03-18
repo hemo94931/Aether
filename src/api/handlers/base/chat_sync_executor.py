@@ -113,7 +113,7 @@ class ChatSyncExecutor:
         api_format = handler.allowed_api_formats[0]
 
         # 提前创建 pending 记录，让前端可以立即看到"处理中"
-        handler._create_pending_usage(
+        pending_usage_created = handler._create_pending_usage(
             model=model,
             is_stream=False,
             request_type="chat",
@@ -176,6 +176,8 @@ class ChatSyncExecutor:
                 request_body_state=request_state,
                 request_headers=original_headers,
                 request_body=original_request_body,
+                # 预创建失败时，回退到 TaskService 侧创建，避免丢失 pending 状态。
+                create_pending_usage=not pending_usage_created,
             )
             actual_provider_name = exec_result.provider_name or "unknown"
             ctx.provider_id = exec_result.provider_id
