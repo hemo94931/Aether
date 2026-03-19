@@ -107,7 +107,8 @@
               <Input
                 id="old-password"
                 v-model="passwordForm.old_password"
-                type="password"
+                type="text"
+                masked
                 class="mt-1"
               />
             </div>
@@ -116,7 +117,8 @@
               <Input
                 id="new-password"
                 v-model="passwordForm.new_password"
-                type="password"
+                type="text"
+                masked
                 :placeholder="getPasswordPolicyPlaceholder(passwordPolicyLevel)"
                 class="mt-1"
               />
@@ -138,7 +140,8 @@
               <Input
                 id="confirm-password"
                 v-model="passwordForm.confirm_password"
-                type="password"
+                type="text"
+                masked
                 placeholder="再次输入密码"
                 class="mt-1"
               />

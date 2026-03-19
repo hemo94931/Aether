@@ -119,7 +119,8 @@
             <Input
               :id="`pwd-confirm-${formNonce}`"
               v-model="form.confirmPassword"
-              type="password"
+              type="text"
+              masked
               autocomplete="new-password"
               data-form-type="other"
               data-lpignore="true"
