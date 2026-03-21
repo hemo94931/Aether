@@ -31,6 +31,17 @@ from src.core.exceptions import (
     ThinkingSignatureException,
 )
 from src.core.logger import logger
+from src.services.request.executor_plan import (
+    ExecutionPlan,
+    ExecutionPlanTimeouts,
+    ExecutionProxySnapshot,
+    build_execution_plan_body,
+    is_remote_contract_eligible,
+)
+from src.services.request.rust_executor_client import (
+    RustExecutorClient,
+    RustExecutorClientError,
+)
 from src.services.scheduling.aware_scheduler import ProviderCandidate
 from src.services.task.request_state import MutableRequestBodyState
 
@@ -41,6 +52,54 @@ if TYPE_CHECKING:
 
 class CliSyncMixin:
     """同步处理相关方法的 Mixin"""
+
+    async def _aggregate_upstream_stream_sync_response(
+        self: CliHandlerProtocol,
+        *,
+        body_bytes: bytes,
+        provider_api_format: str,
+        client_api_format: str,
+        provider_name: str,
+        provider_type: str,
+        model: str,
+        request_id: str,
+        envelope: Any,
+    ) -> dict[str, Any]:
+        registry = get_format_converter_registry()
+        provider_parser = (
+            get_parser_for_format(provider_api_format) if provider_api_format else None
+        )
+
+        async def _byte_iter() -> Any:
+            yield body_bytes
+
+        byte_iter = _byte_iter()
+        if provider_type == "kiro" and envelope and envelope.force_stream_rewrite():
+            from src.services.provider.adapters.kiro.eventstream_rewriter import (
+                apply_kiro_stream_rewrite,
+            )
+
+            byte_iter = apply_kiro_stream_rewrite(byte_iter, model=str(model or ""))
+
+        internal_resp = await aggregate_upstream_stream_to_internal_response(
+            byte_iter,
+            provider_api_format=provider_api_format,
+            provider_name=provider_name,
+            model=model,
+            request_id=request_id,
+            envelope=envelope,
+            provider_parser=provider_parser,
+        )
+
+        tgt_norm = registry.get_normalizer(client_api_format) if client_api_format else None
+        if tgt_norm is None:
+            raise RuntimeError(f"未注册 Normalizer: {client_api_format}")
+
+        response_json = tgt_norm.response_from_internal(
+            internal_resp,
+            requested_model=model,
+        )
+        return response_json if isinstance(response_json, dict) else {}
 
     async def process_sync(
         self: CliHandlerProtocol,
@@ -179,6 +238,7 @@ class CliSyncMixin:
             from src.clients.http_client import HTTPClientPool
             from src.services.proxy_node.resolver import (
                 build_post_kwargs_async,
+                build_proxy_url_async,
                 build_stream_kwargs_async,
                 resolve_delegate_config_async,
             )
@@ -188,6 +248,141 @@ class CliSyncMixin:
             request_timeout = provider.request_timeout or config.http_request_timeout
 
             delegate_cfg = await resolve_delegate_config_async(_effective_proxy)
+            is_tunnel_delegate = bool(delegate_cfg and delegate_cfg.get("tunnel"))
+            proxy_url: str | None = None
+            if _effective_proxy and not is_tunnel_delegate:
+                proxy_url = await build_proxy_url_async(_effective_proxy)
+
+            rust_plan = ExecutionPlan(
+                request_id=str(self.request_id or ""),
+                candidate_id=str(
+                    getattr(candidate, "request_candidate_id", "")
+                    or getattr(candidate, "id", "")
+                    or ""
+                )
+                or None,
+                provider_name=str(provider.name),
+                provider_id=str(provider.id),
+                endpoint_id=str(endpoint.id),
+                key_id=str(key.id),
+                method="POST",
+                url=url,
+                headers=dict(provider_headers),
+                body=build_execution_plan_body(
+                    provider_payload,
+                    content_type=str(provider_headers.get("content-type") or "").strip() or None,
+                ),
+                stream=upstream_is_stream,
+                provider_api_format=provider_api_format,
+                client_api_format=client_api_format,
+                model_name=str(model or ""),
+                content_type=str(provider_headers.get("content-type") or "").strip() or None,
+                content_encoding=effective_client_content_encoding,
+                proxy=ExecutionProxySnapshot.from_proxy_info(
+                    sync_proxy_info,
+                    proxy_url=proxy_url,
+                    mode_override="tunnel" if is_tunnel_delegate else None,
+                    node_id_override=(
+                        str(delegate_cfg.get("node_id") or "").strip() or None
+                        if is_tunnel_delegate
+                        else None
+                    ),
+                ),
+                tls_profile=envelope_tls_profile,
+                timeouts=ExecutionPlanTimeouts(
+                    connect_ms=int(config.http_connect_timeout * 1000),
+                    read_ms=int(config.http_read_timeout * 1000),
+                    write_ms=int(config.http_write_timeout * 1000),
+                    pool_ms=int(config.http_pool_timeout * 1000),
+                    total_ms=int(request_timeout * 1000),
+                ),
+            )
+
+            if config.executor_backend == "rust" and is_remote_contract_eligible(rust_plan):
+                try:
+                    rust_result = await RustExecutorClient().execute_sync_json(rust_plan)
+                except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+                    logger.warning(
+                        "[{}] CLI Rust executor 不可用，回退 Python 执行: {}",
+                        self.request_id,
+                        exc,
+                    )
+                else:
+                    status_code = rust_result.status_code
+                    response_headers = dict(rust_result.headers)
+                    extract_proxy_timing(sync_proxy_info, response_headers)
+
+                    if envelope:
+                        envelope.on_http_status(
+                            base_url=selected_base_url_cached,
+                            status_code=status_code,
+                        )
+
+                    request = httpx.Request("POST", url, headers=provider_headers)
+                    synthetic_content = rust_result.response_body_bytes
+                    if synthetic_content is None:
+                        synthetic_content = json.dumps(
+                            rust_result.response_json or {},
+                            ensure_ascii=False,
+                        ).encode("utf-8")
+                    synthetic_response = httpx.Response(
+                        status_code,
+                        request=request,
+                        headers=response_headers,
+                        content=synthetic_content,
+                    )
+
+                    if status_code >= 400:
+                        error = httpx.HTTPStatusError(
+                            f"Upstream status error: {status_code}",
+                            request=request,
+                            response=synthetic_response,
+                        )
+                        error_body = ""
+                        try:
+                            if envelope and hasattr(envelope, "extract_error_text"):
+                                error_body = await envelope.extract_error_text(synthetic_response)
+                            else:
+                                error_body = (
+                                    synthetic_response.text[:4000]
+                                    if synthetic_response.text
+                                    else ""
+                                )
+                        except Exception:
+                            error_body = (
+                                synthetic_response.text[:4000] if synthetic_response.text else ""
+                            )
+                        error.upstream_response = error_body[:4000]  # type: ignore[attr-defined]
+                        raise error
+
+                    if upstream_is_stream:
+                        if rust_result.response_body_bytes is None:
+                            raise RustExecutorClientError(
+                                "Rust executor stream sync result must contain body bytes"
+                            )
+                        response_json = await self._aggregate_upstream_stream_sync_response(
+                            body_bytes=rust_result.response_body_bytes,
+                            provider_api_format=provider_api_format,
+                            client_api_format=client_api_format,
+                            provider_name=str(provider.name),
+                            provider_type=str(getattr(provider, "provider_type", "") or "").lower(),
+                            model=str(model or ""),
+                            request_id=str(self.request_id or ""),
+                            envelope=envelope,
+                        )
+                        response_metadata_result = self._extract_response_metadata(
+                            response_json or {}
+                        )
+                        return response_json if isinstance(response_json, dict) else {}
+
+                    response_json = rust_result.response_json or {}
+                    if envelope:
+                        response_json = envelope.unwrap_response(response_json)
+                        envelope.postprocess_unwrapped_response(model=model, data=response_json)
+
+                    response_metadata_result = self._extract_response_metadata(response_json)
+                    return response_json if isinstance(response_json, dict) else {}
+
             http_client = await HTTPClientPool.get_upstream_client(
                 delegate_cfg,
                 proxy_config=_effective_proxy,
@@ -218,11 +413,6 @@ class CliSyncMixin:
                     raise
             else:
                 # Forced upstream streaming: aggregate SSE to a sync JSON response.
-                registry = get_format_converter_registry()
-                provider_parser = (
-                    get_parser_for_format(provider_api_format) if provider_api_format else None
-                )
-
                 try:
                     _stream_args = await build_stream_kwargs_async(
                         delegate_cfg,
@@ -246,41 +436,16 @@ class CliSyncMixin:
                             )
 
                         stream_resp.raise_for_status()
-
-                        byte_iter = stream_resp.aiter_bytes()
-                        _provider_type = str(getattr(provider, "provider_type", "") or "").lower()
-                        if (
-                            _provider_type == "kiro"
-                            and envelope
-                            and envelope.force_stream_rewrite()
-                        ):
-                            from src.services.provider.adapters.kiro.eventstream_rewriter import (
-                                apply_kiro_stream_rewrite,
-                            )
-
-                            byte_iter = apply_kiro_stream_rewrite(byte_iter, model=str(model or ""))
-
-                        internal_resp = await aggregate_upstream_stream_to_internal_response(
-                            byte_iter,
+                        response_body = await stream_resp.aread()
+                        response_json = await self._aggregate_upstream_stream_sync_response(
+                            body_bytes=response_body,
                             provider_api_format=provider_api_format,
+                            client_api_format=client_api_format,
                             provider_name=str(provider.name),
+                            provider_type=str(getattr(provider, "provider_type", "") or "").lower(),
                             model=str(model or ""),
                             request_id=str(self.request_id or ""),
                             envelope=envelope,
-                            provider_parser=provider_parser,
-                        )
-
-                        tgt_norm = (
-                            registry.get_normalizer(client_api_format)
-                            if client_api_format
-                            else None
-                        )
-                        if tgt_norm is None:
-                            raise RuntimeError(f"未注册 Normalizer: {client_api_format}")
-
-                        response_json = tgt_norm.response_from_internal(
-                            internal_resp,
-                            requested_model=model,
                         )
                         response_json = response_json if isinstance(response_json, dict) else {}
 

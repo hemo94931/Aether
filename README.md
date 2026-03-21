@@ -82,6 +82,46 @@ uv sync
 cd frontend && npm install && npm run dev
 ```
 
+当前 `rust-pioneer` 分支下，`./dev.sh` 默认会并跑：
+
+- `aether-gateway`：作为本地主入口，监听 `http://localhost:8084`
+- Python app：退到内部端口 `127.0.0.1:18084`
+- `aether-executor`：作为 Rust 执行器 sidecar
+
+也就是本地默认链路已经变成：
+
+```text
+client -> aether-gateway -> python control/public app -> aether-executor
+```
+
+如需关闭 Rust gateway，可显式设置：
+
+```bash
+DEV_START_GATEWAY=false ./dev.sh
+```
+
+本地默认也会开启 gateway control API 探测，`aether-gateway` 会先对核心 AI 路由调用
+`/api/internal/gateway/resolve`，再决定是否继续代理到 Python public app。
+对于已成功认证的核心 AI 请求，gateway 还会把 trusted auth context 转发给 Python public pipeline，
+避免成功路径重复执行一次线程池 API Key 认证。
+
+在当前 `rust-pioneer` 分支下，只要 `aether-gateway` 处于开启状态，`./dev.sh` 会默认把
+`aether-executor` 切到 TCP 模式，并自动把 `AETHER_GATEWAY_EXECUTOR_URL` 指向 `EXECUTOR_BASE_URL`，
+这样 `aether-gateway` 可以直接命中 `aether-executor` 的窄路径直连逻辑。
+
+如果你只想保留 Python -> executor 的 Unix Socket 形态，可以显式设置：
+
+```bash
+EXECUTOR_TRANSPORT=unix_socket ./dev.sh
+```
+
+如果只想单独验证 Rust executor 本地链路，可以运行：
+
+```bash
+cargo build -p aether-executor
+uv run python tests/e2e_rust_executor.py
+```
+
 ## Aether Proxy (可选)
 
 Aether Proxy 是配套的正向代理节点，部署在海外 VPS 上，为墙内的 Aether 实例中转 API 流量。或者部署在其他服务器为指定的提供商、账号、Key使用不同的节点访问。支持 TUI 向导一键配置、systemd 服务管理、TLS 加密、DNS 缓存及连接池调优。

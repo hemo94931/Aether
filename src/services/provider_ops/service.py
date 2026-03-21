@@ -145,6 +145,123 @@ class ProviderOpsService:
         finally:
             self.db.expire_on_commit = original_expire_on_commit
 
+    @staticmethod
+    def _build_ops_proxy_snapshot(
+        proxy: Any,
+        tunnel_node_id: str | None,
+    ) -> Any:
+        from src.services.request.executor_plan import ExecutionProxySnapshot
+
+        if tunnel_node_id:
+            return ExecutionProxySnapshot(
+                enabled=True,
+                mode="tunnel",
+                node_id=str(tunnel_node_id).strip() or None,
+            )
+
+        if proxy is None:
+            return None
+
+        proxy_url = getattr(proxy, "url", None)
+        if proxy_url is not None:
+            proxy_url = str(proxy_url).strip()
+        else:
+            proxy_url = str(proxy).strip()
+        if not proxy_url:
+            return None
+
+        mode = proxy_url.split("://", 1)[0].strip().lower() or None
+        return ExecutionProxySnapshot(
+            enabled=True,
+            mode=mode,
+            url=proxy_url,
+        )
+
+    async def _try_rust_verify_response(
+        self,
+        *,
+        architecture_id: str,
+        verify_endpoint: str,
+        headers: dict[str, str],
+        proxy: Any,
+        tunnel_node_id: str | None,
+    ) -> Any:
+        import json
+
+        import httpx
+
+        from src.services.request.executor_plan import (
+            ExecutionPlan,
+            ExecutionPlanBody,
+            ExecutionPlanTimeouts,
+        )
+        from src.services.request.rust_executor_client import (
+            RustExecutorClient,
+            RustExecutorClientError,
+        )
+
+        if config.executor_backend != "rust":
+            return None
+
+        try:
+            result = await RustExecutorClient().execute_sync_json(
+                ExecutionPlan(
+                    request_id=f"provider-ops-verify:{architecture_id}",
+                    candidate_id=None,
+                    provider_name=architecture_id,
+                    provider_id="",
+                    endpoint_id="",
+                    key_id="",
+                    method="GET",
+                    url=verify_endpoint,
+                    headers=dict(headers),
+                    body=ExecutionPlanBody(),
+                    stream=False,
+                    provider_api_format="provider_ops:verify",
+                    client_api_format="provider_ops:verify",
+                    model_name="verify-auth",
+                    proxy=self._build_ops_proxy_snapshot(proxy, tunnel_node_id),
+                    timeouts=ExecutionPlanTimeouts(
+                        connect_ms=30_000,
+                        read_ms=30_000,
+                        write_ms=30_000,
+                        pool_ms=30_000,
+                        total_ms=30_000,
+                    ),
+                )
+            )
+        except (
+            RustExecutorClientError,
+            httpx.HTTPError,
+            json.JSONDecodeError,
+            ValueError,
+            AttributeError,
+            TypeError,
+        ) as exc:
+            logger.warning(
+                "Provider ops Rust verify fallback architecture={} endpoint={}: {}",
+                architecture_id,
+                verify_endpoint,
+                exc,
+            )
+            return None
+
+        response_headers = dict(result.headers)
+        if result.response_json is not None:
+            response_headers.setdefault("content-type", "application/json")
+            response_body = json.dumps(result.response_json, ensure_ascii=False).encode("utf-8")
+        elif result.response_body_bytes is not None:
+            response_body = result.response_body_bytes
+        else:
+            response_body = b""
+
+        return httpx.Response(
+            status_code=result.status_code,
+            request=httpx.Request("GET", verify_endpoint, headers=headers),
+            headers=response_headers,
+            content=response_body,
+        )
+
     # ==================== 配置管理 ====================
 
     def get_config(self, provider_id: str) -> ProviderOpsConfig | None:
@@ -1046,64 +1163,74 @@ class ProviderOpsService:
 
             proxy, tunnel_node_id = await resolve_ops_proxy_config_async(config)
 
-            # 构建 httpx client 参数
-            client_kwargs: dict[str, Any] = {
-                "timeout": 30.0,
-                "verify": get_ssl_context(),
-            }
-            if tunnel_node_id:
-                from src.services.proxy_node.tunnel_transport import create_tunnel_transport
+            response = await self._try_rust_verify_response(
+                architecture_id=architecture_id,
+                verify_endpoint=verify_endpoint,
+                headers=headers,
+                proxy=proxy,
+                tunnel_node_id=tunnel_node_id,
+            )
+            if response is None:
+                # 构建 httpx client 参数
+                client_kwargs: dict[str, Any] = {
+                    "timeout": 30.0,
+                    "verify": get_ssl_context(),
+                }
+                if tunnel_node_id:
+                    from src.services.proxy_node.tunnel_transport import create_tunnel_transport
 
-                client_kwargs["transport"] = create_tunnel_transport(tunnel_node_id, timeout=30.0)
-                logger.debug("使用 tunnel 代理: node_id={}", tunnel_node_id)
-            elif proxy:
-                client_kwargs["proxy"] = proxy
-                logger.debug("使用代理: {}", proxy)
-
-            async with httpx.AsyncClient(**client_kwargs) as client:
-                response = await client.get(verify_endpoint, headers=headers)
-
-                logger.debug(
-                    "验证响应: status={}, content_type={}",
-                    response.status_code,
-                    response.headers.get("content-type"),
-                )
-
-                # 尝试解析 JSON
-                try:
-                    data = response.json()
-                except Exception:
-                    data = {}
-
-                # 将预处理获取的额外数据合并到响应中
-                if "_combined_data" in merged_config:
-                    data["_combined_data"] = merged_config["_combined_data"]
-                elif "_balance_data" in merged_config:
-                    data["_balance_data"] = merged_config["_balance_data"]
-
-                # 使用架构的方法解析响应
-                result = architecture.parse_verify_response(response.status_code, data)
-                result_dict = result.to_dict()
-
-                # 将凭据更新信息附加到响应，供前端同步更新表单
-                # 过滤掉内部缓存字段（以 _ 开头），前端不需要这些
-                frontend_creds = {k: v for k, v in updated_creds.items() if not k.startswith("_")}
-                if frontend_creds:
-                    result_dict["updated_credentials"] = frontend_creds
-
-                # 验证成功且有 provider_id 时，缓存余额
-                if result.success and provider_id and result.quota is not None:
-                    # 从架构的默认配置获取 quota_divisor
-                    balance_config = architecture.default_action_configs.get(
-                        ProviderActionType.QUERY_BALANCE, {}
+                    client_kwargs["transport"] = create_tunnel_transport(
+                        tunnel_node_id, timeout=30.0
                     )
-                    quota_divisor = balance_config.get("quota_divisor", 1)
-                    # 转换为美元值后缓存
-                    quota_usd = result.quota / quota_divisor
-                    # 传入 extra 信息（如窗口限额）
-                    await self._cache_balance_from_verify(provider_id, quota_usd, result.extra)
+                    logger.debug("使用 tunnel 代理: node_id={}", tunnel_node_id)
+                elif proxy:
+                    client_kwargs["proxy"] = proxy
+                    logger.debug("使用代理: {}", proxy)
 
-                return result_dict
+                async with httpx.AsyncClient(**client_kwargs) as client:
+                    response = await client.get(verify_endpoint, headers=headers)
+
+            logger.debug(
+                "验证响应: status={}, content_type={}",
+                response.status_code,
+                response.headers.get("content-type"),
+            )
+
+            # 尝试解析 JSON
+            try:
+                data = response.json()
+            except Exception:
+                data = {}
+
+            # 将预处理获取的额外数据合并到响应中
+            if "_combined_data" in merged_config:
+                data["_combined_data"] = merged_config["_combined_data"]
+            elif "_balance_data" in merged_config:
+                data["_balance_data"] = merged_config["_balance_data"]
+
+            # 使用架构的方法解析响应
+            result = architecture.parse_verify_response(response.status_code, data)
+            result_dict = result.to_dict()
+
+            # 将凭据更新信息附加到响应，供前端同步更新表单
+            # 过滤掉内部缓存字段（以 _ 开头），前端不需要这些
+            frontend_creds = {k: v for k, v in updated_creds.items() if not k.startswith("_")}
+            if frontend_creds:
+                result_dict["updated_credentials"] = frontend_creds
+
+            # 验证成功且有 provider_id 时，缓存余额
+            if result.success and provider_id and result.quota is not None:
+                # 从架构的默认配置获取 quota_divisor
+                balance_config = architecture.default_action_configs.get(
+                    ProviderActionType.QUERY_BALANCE, {}
+                )
+                quota_divisor = balance_config.get("quota_divisor", 1)
+                # 转换为美元值后缓存
+                quota_usd = result.quota / quota_divisor
+                # 传入 extra 信息（如窗口限额）
+                await self._cache_balance_from_verify(provider_id, quota_usd, result.extra)
+
+            return result_dict
 
         except ValueError as e:
             return {"success": False, "message": str(e)}

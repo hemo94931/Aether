@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from src.config.settings import config
 from src.core.logger import logger
 from src.models.database import ProviderAPIKey, ProviderEndpoint
 from src.services.usage.service import UsageService
@@ -29,8 +30,10 @@ class VideoTaskCancelService:
         - None on success
         - upstream httpx.Response when upstream returns an error (status >= 400)
         """
+        import json
         from datetime import datetime, timezone
 
+        import httpx
         from fastapi import HTTPException
 
         from src.clients.http_client import HTTPClientPool
@@ -94,12 +97,100 @@ class VideoTaskCancelService:
             header_rules=getattr(endpoint, "header_rules", None),
         )
 
-        client = await HTTPClientPool.get_default_client_async()
+        async def _try_rust_cancel_response(
+            *,
+            method: str,
+            url: str,
+            request_headers: dict[str, str],
+            body: Any,
+            content_type: str | None = None,
+        ) -> httpx.Response | None:
+            from src.services.request.executor_plan import (
+                ExecutionPlan,
+                ExecutionPlanTimeouts,
+                build_execution_plan_body,
+            )
+            from src.services.request.rust_executor_client import (
+                RustExecutorClient,
+                RustExecutorClientError,
+            )
+
+            if config.executor_backend != "rust":
+                return None
+
+            final_headers = dict(request_headers)
+            if (
+                body is not None
+                and content_type
+                and not any(str(key).lower() == "content-type" for key in final_headers)
+            ):
+                final_headers["content-type"] = content_type
+
+            try:
+                result = await RustExecutorClient().execute_sync_json(
+                    ExecutionPlan(
+                        request_id=str(getattr(task, "request_id", "") or task_id),
+                        candidate_id=None,
+                        provider_name=provider_format_norm.split(":", 1)[0],
+                        provider_id=str(getattr(endpoint, "provider_id", "") or ""),
+                        endpoint_id=str(getattr(endpoint, "id", "") or ""),
+                        key_id=str(getattr(key, "id", "") or ""),
+                        method=method,
+                        url=url,
+                        headers=final_headers,
+                        body=build_execution_plan_body(body, content_type=content_type),
+                        stream=False,
+                        provider_api_format=provider_format,
+                        client_api_format=provider_format,
+                        model_name=str(getattr(task, "model", "") or ""),
+                        content_type=content_type,
+                        timeouts=ExecutionPlanTimeouts(
+                            connect_ms=30_000,
+                            read_ms=300_000,
+                            write_ms=300_000,
+                            pool_ms=30_000,
+                            total_ms=300_000,
+                        ),
+                    )
+                )
+            except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "[VideoCancel] Rust executor unavailable task={} method={} url={}: {}",
+                    getattr(task, "id", task_id),
+                    method,
+                    url,
+                    str(exc),
+                )
+                return None
+
+            response_headers = dict(result.headers)
+            if result.response_json is not None:
+                response_headers.setdefault("content-type", "application/json")
+                response_body = json.dumps(result.response_json, ensure_ascii=False).encode("utf-8")
+            elif result.response_body_bytes is not None:
+                response_body = result.response_body_bytes
+            else:
+                response_body = b""
+
+            return httpx.Response(
+                status_code=result.status_code,
+                request=httpx.Request(method, url, headers=final_headers),
+                headers=response_headers,
+                content=response_body,
+            )
 
         if provider_format_norm.startswith("openai:"):
             upstream_url = build_provider_url(endpoint, is_stream=False, key=key)
             upstream_url = f"{upstream_url.rstrip('/')}/{str(external_task_id).lstrip('/')}"
-            response = await client.delete(upstream_url, headers=headers)
+            response = await _try_rust_cancel_response(
+                method="DELETE",
+                url=upstream_url,
+                request_headers=headers,
+                body=None,
+            )
+            if response is None:
+                client = await HTTPClientPool.get_default_client_async()
+                response = await client.delete(upstream_url, headers=headers)
             if response.status_code >= 400:
                 return response
 
@@ -125,7 +216,16 @@ class VideoTaskCancelService:
                 headers.pop("x-goog-api-key", None)
                 headers[auth_info.auth_header] = auth_info.auth_value
 
-            response = await client.post(upstream_url, headers=headers, json={})
+            response = await _try_rust_cancel_response(
+                method="POST",
+                url=upstream_url,
+                request_headers=headers,
+                body={},
+                content_type="application/json",
+            )
+            if response is None:
+                client = await HTTPClientPool.get_default_client_async()
+                response = await client.post(upstream_url, headers=headers, json={})
             if response.status_code >= 400:
                 return response
 

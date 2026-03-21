@@ -5,9 +5,11 @@ import sys
 import types
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
+from src.config import config as app_config
 from src.services.provider_keys.codex_usage_parser import (
     CodexUsageParseError,
     parse_codex_wham_usage_response,
@@ -17,6 +19,7 @@ from src.services.provider_keys.quota_refresh.antigravity_refresher import (
 )
 from src.services.provider_keys.quota_refresh.codex_refresher import refresh_codex_key_quota
 from src.services.provider_keys.quota_refresh.kiro_refresher import refresh_kiro_key_quota
+from src.services.request.rust_executor_client import RustExecutorSyncResult
 
 
 class _FakeDB:
@@ -147,6 +150,73 @@ async def test_codex_refresher_http_non_200_returns_error(
 
     assert result["status"] == "error"
     assert result["status_code"] == 503
+
+
+@pytest.mark.asyncio
+async def test_codex_refresher_prefers_rust_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.services.provider_keys.quota_refresh import codex_refresher as module
+    from src.services.request import rust_executor_client as rust_module
+
+    monkeypatch.setattr(app_config, "executor_backend", "rust")
+
+    key = SimpleNamespace(
+        id="k1", name="K1", api_key="enc", auth_type="api_key", auth_config=None, proxy=None
+    )
+    provider = SimpleNamespace(id="provider-1", proxy=None)
+    endpoint = SimpleNamespace(id="endpoint-1")
+    metadata_updates: dict[str, dict[str, Any]] = {}
+    state_updates: dict[str, dict[str, Any]] = {}
+    captured: dict[str, Any] = {}
+
+    async def _fake_auth_info(_endpoint: Any, _key: Any) -> Any:
+        return None
+
+    _install_module(
+        monkeypatch,
+        "src.services.proxy_node.resolver",
+        {
+            "resolve_effective_proxy": lambda provider_proxy, key_proxy: {"enabled": True, "url": "http://proxy.test:8080"},
+            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
+            "get_system_proxy_config_async": AsyncMock(return_value=None),
+            "resolve_delegate_config_async": AsyncMock(return_value=None),
+            "build_proxy_url_async": AsyncMock(return_value="http://proxy.test:8080"),
+            "resolve_proxy_info_async": AsyncMock(return_value={"mode": "http", "label": "proxy"}),
+        },
+    )
+    monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
+    monkeypatch.setattr(module.crypto_service, "decrypt", lambda _v: "sk-test")
+    monkeypatch.setattr(
+        module, "parse_codex_wham_usage_response", lambda _data: {"used_percent": 12.5}
+    )
+
+    async def _fake_execute_sync_json(self: object, plan: Any) -> RustExecutorSyncResult:
+        captured["plan"] = plan
+        return RustExecutorSyncResult(
+            status_code=200,
+            response_json={"ok": True},
+            headers={"content-type": "application/json"},
+        )
+
+    monkeypatch.setattr(rust_module.RustExecutorClient, "execute_sync_json", _fake_execute_sync_json)
+
+    result = await refresh_codex_key_quota(
+        db=cast(Any, _FakeDB()),
+        provider=cast(Any, provider),
+        key=cast(Any, key),
+        endpoint=cast(Any, endpoint),
+        codex_wham_usage_url="https://example.test/wham/usage",
+        metadata_updates=metadata_updates,
+        state_updates=state_updates,
+    )
+
+    assert result["status"] == "success"
+    assert captured["plan"].method == "GET"
+    assert captured["plan"].url == "https://example.test/wham/usage"
+    assert captured["plan"].proxy is not None
+    assert captured["plan"].proxy.url == "http://proxy.test:8080"
+    assert metadata_updates["k1"]["codex"]["used_percent"] == 12.5
 
 
 @pytest.mark.asyncio

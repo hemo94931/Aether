@@ -37,6 +37,7 @@ from src.core.video_utils import (
 from src.database import create_session
 from src.models.database import ProviderAPIKey, ProviderEndpoint, VideoTask
 from src.services.provider.auth import get_provider_auth
+from src.services.provider.provider_context import resolve_provider_proxy
 
 
 @dataclass(slots=True)
@@ -55,6 +56,9 @@ class VideoPollContext:
     poll_interval_seconds: int
     max_poll_count: int
     current_status: str
+    proxy_config: dict[str, Any] | None = None
+    delegate_config: dict[str, Any] | None = None
+    proxy_snapshot: Any = None
 
 
 # 永久性错误指示词（用于降级判断，不应重试）
@@ -200,6 +204,10 @@ class VideoTaskPollerAdapter:
         else:
             auth_info = None
         headers = self._build_headers(provider_format, upstream_key, endpoint, auth_info)
+        proxy_config, delegate_config, proxy_snapshot = await self._build_transport_context(
+            endpoint=endpoint,
+            key=key,
+        )
 
         return VideoPollContext(
             task_id=task.id,
@@ -213,6 +221,9 @@ class VideoTaskPollerAdapter:
             poll_interval_seconds=task.poll_interval_seconds,
             max_poll_count=task.max_poll_count,
             current_status=task.status,
+            proxy_config=proxy_config,
+            delegate_config=delegate_config,
+            proxy_snapshot=proxy_snapshot,
         )
 
     async def poll_task_http(self, ctx: VideoPollContext) -> InternalVideoPollResult:
@@ -351,13 +362,18 @@ class VideoTaskPollerAdapter:
         """使用上下文进行 OpenAI 轮询（不需要数据库）"""
         url = self._build_openai_url(ctx.base_url, ctx.external_task_id)
 
-        client = await HTTPClientPool.get_default_client_async()
-        response = await client.get(url, headers=ctx.headers)
-        if response.status_code >= 400:
-            error_message = self._extract_error_message(response.text, response.status_code)
-            raise PollHTTPError(response.status_code, error_message)
+        payload = await self._try_rust_poll_payload(ctx=ctx, url=url)
+        if payload is None:
+            client = await HTTPClientPool.get_upstream_client(
+                ctx.delegate_config,
+                proxy_config=ctx.proxy_config,
+            )
+            response = await client.get(url, headers=ctx.headers)
+            if response.status_code >= 400:
+                error_message = self._extract_error_message(response.text, response.status_code)
+                raise PollHTTPError(response.status_code, error_message)
+            payload = response.json()
 
-        payload = response.json()
         return self._openai_normalizer.video_poll_to_internal(payload)
 
     async def _poll_gemini_with_context(self, ctx: VideoPollContext) -> InternalVideoPollResult:
@@ -372,20 +388,110 @@ class VideoTaskPollerAdapter:
             url,
         )
 
-        client = await HTTPClientPool.get_default_client_async()
-        response = await client.get(url, headers=ctx.headers)
-        if response.status_code >= 400:
-            logger.warning(
-                "[VideoPoller] Gemini poll failed: task={} status={} response={}",
-                ctx.task_id,
-                response.status_code,
-                response.text[:500] if response.text else "(empty)",
+        payload = await self._try_rust_poll_payload(ctx=ctx, url=url)
+        if payload is None:
+            client = await HTTPClientPool.get_upstream_client(
+                ctx.delegate_config,
+                proxy_config=ctx.proxy_config,
             )
-            error_message = self._extract_error_message(response.text, response.status_code)
-            raise PollHTTPError(response.status_code, error_message)
+            response = await client.get(url, headers=ctx.headers)
+            if response.status_code >= 400:
+                logger.warning(
+                    "[VideoPoller] Gemini poll failed: task={} status={} response={}",
+                    ctx.task_id,
+                    response.status_code,
+                    response.text[:500] if response.text else "(empty)",
+                )
+                error_message = self._extract_error_message(response.text, response.status_code)
+                raise PollHTTPError(response.status_code, error_message)
+            payload = response.json()
 
-        payload = response.json()
         return self._gemini_normalizer.video_poll_to_internal(payload)
+
+    async def _try_rust_poll_payload(
+        self,
+        *,
+        ctx: VideoPollContext,
+        url: str,
+    ) -> dict[str, Any] | None:
+        import httpx
+
+        from src.services.request.executor_plan import (
+            ExecutionPlan,
+            ExecutionPlanBody,
+            ExecutionPlanTimeouts,
+        )
+        from src.services.request.rust_executor_client import (
+            RustExecutorClient,
+            RustExecutorClientError,
+        )
+
+        if config.executor_backend != "rust":
+            return None
+
+        try:
+            result = await RustExecutorClient().execute_sync_json(
+                ExecutionPlan(
+                    request_id=f"video-poll-{ctx.task_id}",
+                    candidate_id=None,
+                    provider_name=ctx.provider_api_format.split(":", 1)[0],
+                    provider_id="",
+                    endpoint_id="",
+                    key_id="",
+                    method="GET",
+                    url=url,
+                    headers=dict(ctx.headers),
+                    body=ExecutionPlanBody(),
+                    stream=False,
+                    provider_api_format=ctx.provider_api_format,
+                    client_api_format=ctx.provider_api_format,
+                    model_name="video-poll",
+                    proxy=ctx.proxy_snapshot,
+                    timeouts=ExecutionPlanTimeouts(
+                        connect_ms=30_000,
+                        read_ms=300_000,
+                        write_ms=300_000,
+                        pool_ms=30_000,
+                        total_ms=300_000,
+                    ),
+                )
+            )
+        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+            logger.warning(
+                "[VideoPoller] Rust poll fallback task={} url={} error={}",
+                ctx.task_id,
+                url,
+                sanitize_error_message(str(exc)),
+            )
+            return None
+
+        if result.status_code >= 400:
+            response_text = ""
+            if result.response_json is not None:
+                response_text = json.dumps(result.response_json, ensure_ascii=False)
+            elif result.response_body_bytes is not None:
+                response_text = result.response_body_bytes.decode("utf-8", errors="replace")
+            raise PollHTTPError(
+                result.status_code,
+                self._extract_error_message(response_text, result.status_code),
+            )
+
+        if isinstance(result.response_json, dict):
+            return result.response_json
+
+        if result.response_body_bytes is not None:
+            try:
+                payload = json.loads(result.response_body_bytes.decode("utf-8"))
+                if isinstance(payload, dict):
+                    return payload
+            except Exception:
+                logger.warning(
+                    "[VideoPoller] Rust poll returned non-json body task={} url={}",
+                    ctx.task_id,
+                    url,
+                )
+
+        return None
 
     # ==================== 旧版方法（保留兼容性）====================
 
@@ -590,6 +696,55 @@ class VideoTaskPollerAdapter:
             headers.pop("x-goog-api-key", None)
             headers[auth_info.auth_header] = auth_info.auth_value
         return headers
+
+    async def _build_transport_context(
+        self,
+        *,
+        endpoint: ProviderEndpoint,
+        key: ProviderAPIKey,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, Any]:
+        from src.services.proxy_node.resolver import (
+            build_proxy_url_async,
+            get_system_proxy_config_async,
+            resolve_delegate_config_async,
+            resolve_effective_proxy,
+            resolve_proxy_info_async,
+        )
+        from src.services.request.executor_plan import ExecutionProxySnapshot
+
+        try:
+            effective_proxy = resolve_effective_proxy(
+                resolve_provider_proxy(endpoint=endpoint, key=key),
+                getattr(key, "proxy", None),
+            )
+            if not effective_proxy or not effective_proxy.get("enabled", True):
+                effective_proxy = await get_system_proxy_config_async()
+
+            delegate_cfg = await resolve_delegate_config_async(effective_proxy)
+            proxy_url: str | None = None
+            if effective_proxy and not (delegate_cfg and delegate_cfg.get("tunnel")):
+                proxy_url = await build_proxy_url_async(effective_proxy)
+
+            proxy_info = await resolve_proxy_info_async(effective_proxy)
+            proxy_snapshot = ExecutionProxySnapshot.from_proxy_info(
+                proxy_info,
+                proxy_url=proxy_url,
+                mode_override="tunnel" if delegate_cfg and delegate_cfg.get("tunnel") else None,
+                node_id_override=(
+                    str(delegate_cfg.get("node_id") or "").strip() or None
+                    if delegate_cfg and delegate_cfg.get("tunnel")
+                    else None
+                ),
+            )
+            return effective_proxy, delegate_cfg, proxy_snapshot
+        except Exception as exc:
+            logger.warning(
+                "[VideoPoller] Failed to build transport context endpoint={} key={}: {}",
+                getattr(endpoint, "id", None),
+                getattr(key, "id", None),
+                sanitize_error_message(str(exc)),
+            )
+            return None, None, None
 
     def _get_endpoint(self, db: Session, endpoint_id: str) -> ProviderEndpoint:
         endpoint = db.query(ProviderEndpoint).filter(ProviderEndpoint.id == endpoint_id).first()

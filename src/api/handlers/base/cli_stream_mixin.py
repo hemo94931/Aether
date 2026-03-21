@@ -38,6 +38,17 @@ from src.core.exceptions import (
 )
 from src.core.logger import logger
 from src.services.provider.behavior import get_provider_behavior
+from src.services.request.executor_plan import (
+    ExecutionPlan,
+    ExecutionPlanTimeouts,
+    ExecutionProxySnapshot,
+    build_execution_plan_body,
+    is_remote_contract_eligible,
+)
+from src.services.request.rust_executor_client import (
+    RustExecutorClient,
+    RustExecutorClientError,
+)
 from src.services.scheduling.aware_scheduler import ProviderCandidate
 from src.services.system.config import SystemConfigService
 from src.services.task.request_state import MutableRequestBodyState
@@ -52,6 +63,67 @@ if TYPE_CHECKING:
 
 class CliStreamMixin:
     """流式处理核心方法的 Mixin"""
+
+    def _streamify_sync_response(
+        self: CliHandlerProtocol,
+        *,
+        ctx: StreamContext,
+        response_json: dict[str, Any],
+        client_api_format: str,
+        provider_api_format: str,
+    ) -> AsyncGenerator[bytes]:
+        registry = get_format_converter_registry()
+        src_norm = registry.get_normalizer(provider_api_format) if provider_api_format else None
+        if src_norm is None:
+            raise RuntimeError(f"未注册 Normalizer: {provider_api_format}")
+
+        internal_resp = src_norm.response_to_internal(
+            response_json if isinstance(response_json, dict) else {}
+        )
+        internal_resp.model = str(ctx.model or internal_resp.model or "")
+        if internal_resp.id:
+            ctx.response_id = internal_resp.id
+
+        if internal_resp.usage:
+            ctx.input_tokens = int(internal_resp.usage.input_tokens or 0)
+            ctx.output_tokens = int(internal_resp.usage.output_tokens or 0)
+            ctx.cached_tokens = int(internal_resp.usage.cache_read_tokens or 0)
+            ctx.cache_creation_tokens = int(internal_resp.usage.cache_write_tokens or 0)
+
+        from src.core.api_format.conversion.stream_state import StreamState
+
+        tgt_norm = registry.get_normalizer(client_api_format) if client_api_format else None
+        if tgt_norm is None:
+            raise RuntimeError(f"未注册 Normalizer: {client_api_format}")
+
+        state = StreamState(
+            model=str(ctx.model or ""),
+            message_id=str(ctx.response_id or ctx.request_id or self.request_id or ""),
+        )
+        output_state = {"first_yield": True, "streaming_updated": False}
+
+        async def _streamified() -> AsyncGenerator[bytes]:
+            for ev in iter_internal_response_as_stream_events(internal_resp):
+                converted_events = tgt_norm.stream_event_from_internal(ev, state)
+                if not converted_events:
+                    continue
+                self._record_converted_chunks(ctx, converted_events)
+                for sse_line in _format_converted_events_to_sse(
+                    converted_events, client_api_format
+                ):
+                    if not sse_line:
+                        continue
+                    ctx.chunk_count += 1
+                    self._mark_first_output(ctx, output_state)
+                    yield (sse_line + "\n").encode("utf-8")
+
+            if str(client_api_format or "").strip().lower() == "openai:chat":
+                ctx.chunk_count += 1
+                self._mark_first_output(ctx, output_state)
+                yield b"data: [DONE]\n\n"
+                ctx.has_completion = True
+
+        return _streamified()
 
     async def process_stream(
         self: CliHandlerProtocol,
@@ -341,24 +413,156 @@ class CliStreamMixin:
         ctx.selected_base_url = upstream_request.selected_base_url
 
         # 解析有效代理（Key 级别优先于 Provider 级别）
+        from src.services.proxy_node.resolver import build_proxy_url_async as _bpua
         from src.services.proxy_node.resolver import get_proxy_label as _gpl
+        from src.services.proxy_node.resolver import resolve_delegate_config_async as _rda
         from src.services.proxy_node.resolver import resolve_effective_proxy as _rep
         from src.services.proxy_node.resolver import resolve_proxy_info_async as _rpi_async
 
         effective_proxy = _rep(provider.proxy, getattr(key, "proxy", None))
         ctx.proxy_info = await _rpi_async(effective_proxy)
+        delegate_cfg = await _rda(effective_proxy)
+        is_tunnel_delegate = bool(delegate_cfg and delegate_cfg.get("tunnel"))
+        proxy_url: str | None = None
+        if effective_proxy and not is_tunnel_delegate:
+            proxy_url = await _bpua(effective_proxy)
+        proxy_snapshot = ExecutionProxySnapshot.from_proxy_info(
+            ctx.proxy_info,
+            proxy_url=proxy_url,
+            mode_override="tunnel" if is_tunnel_delegate else None,
+            node_id_override=(
+                str(delegate_cfg.get("node_id") or "").strip() or None
+                if is_tunnel_delegate
+                else None
+            ),
+        )
 
         # If upstream is forced to non-stream mode, we execute a sync request and then
         # simulate streaming to the client (sync -> stream bridge).
         if not upstream_is_stream:
             from src.clients.http_client import HTTPClientPool
-            from src.services.proxy_node.resolver import (
-                build_post_kwargs_async,
-                resolve_delegate_config_async,
-            )
+            from src.services.proxy_node.resolver import build_post_kwargs_async
 
             request_timeout_sync = provider.request_timeout or config.http_request_timeout
-            delegate_cfg = await resolve_delegate_config_async(effective_proxy)
+
+            rust_plan = ExecutionPlan(
+                request_id=str(self.request_id or ""),
+                candidate_id=str(
+                    getattr(candidate, "request_candidate_id", "")
+                    or getattr(candidate, "id", "")
+                    or ""
+                )
+                or None,
+                provider_name=str(provider.name),
+                provider_id=str(provider.id),
+                endpoint_id=str(endpoint.id),
+                key_id=str(key.id),
+                method="POST",
+                url=url,
+                headers=dict(provider_headers),
+                body=build_execution_plan_body(
+                    provider_payload,
+                    content_type=str(provider_headers.get("content-type") or "").strip() or None,
+                ),
+                stream=False,
+                provider_api_format=provider_api_format,
+                client_api_format=client_api_format,
+                model_name=str(ctx.model or ""),
+                content_type=str(provider_headers.get("content-type") or "").strip() or None,
+                content_encoding=client_content_encoding,
+                proxy=proxy_snapshot,
+                tls_profile=envelope_tls_profile,
+                timeouts=ExecutionPlanTimeouts(
+                    connect_ms=int(config.http_connect_timeout * 1000),
+                    read_ms=int(config.http_read_timeout * 1000),
+                    write_ms=int(config.http_write_timeout * 1000),
+                    pool_ms=int(config.http_pool_timeout * 1000),
+                    total_ms=int(request_timeout_sync * 1000),
+                ),
+            )
+
+            if config.executor_backend == "rust" and is_remote_contract_eligible(rust_plan):
+                try:
+                    rust_result = await RustExecutorClient().execute_sync_json(rust_plan)
+                except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+                    logger.warning(
+                        "[{}] CLI Rust executor(sync->stream) 不可用，回退 Python 执行: {}",
+                        self.request_id,
+                        exc,
+                    )
+                else:
+                    ctx.status_code = rust_result.status_code
+                    ctx.response_headers = dict(rust_result.headers)
+                    ctx.set_proxy_timing(ctx.response_headers)
+                    if envelope:
+                        envelope.on_http_status(
+                            base_url=ctx.selected_base_url,
+                            status_code=ctx.status_code,
+                        )
+
+                    request = httpx.Request("POST", url, headers=provider_headers)
+                    synthetic_content = rust_result.response_body_bytes
+                    if synthetic_content is None:
+                        synthetic_content = json.dumps(
+                            rust_result.response_json or {},
+                            ensure_ascii=False,
+                        ).encode("utf-8")
+                    synthetic_response = httpx.Response(
+                        ctx.status_code,
+                        request=request,
+                        headers=ctx.response_headers,
+                        content=synthetic_content,
+                    )
+
+                    if ctx.status_code >= 400:
+                        error = httpx.HTTPStatusError(
+                            f"Upstream status error: {ctx.status_code}",
+                            request=request,
+                            response=synthetic_response,
+                        )
+                        error_body = ""
+                        try:
+                            if envelope and hasattr(envelope, "extract_error_text"):
+                                error_body = await envelope.extract_error_text(synthetic_response)
+                            else:
+                                error_body = (
+                                    synthetic_response.text[:4000]
+                                    if synthetic_response.text
+                                    else ""
+                                )
+                        except Exception:
+                            error_body = (
+                                synthetic_response.text[:4000] if synthetic_response.text else ""
+                            )
+                        error.upstream_response = error_body  # type: ignore[attr-defined]
+                        raise error
+
+                    response_json = rust_result.response_json or {}
+                    if envelope:
+                        response_json = envelope.unwrap_response(response_json)
+                        envelope.postprocess_unwrapped_response(model=ctx.model, data=response_json)
+
+                    if isinstance(response_json, dict) and provider_api_format:
+                        parser = get_parser_for_format(provider_api_format)
+                        if parser.is_error_response(response_json):
+                            parsed = parser.parse_response(response_json, 200)
+                            raise EmbeddedErrorException(
+                                provider_name=str(provider.name),
+                                error_code=parsed.embedded_status_code,
+                                error_message=parsed.error_message,
+                                error_status=parsed.error_type,
+                            )
+
+                    if isinstance(response_json, dict):
+                        ctx.response_metadata = self._extract_response_metadata(response_json)
+
+                    return self._streamify_sync_response(
+                        ctx=ctx,
+                        response_json=response_json if isinstance(response_json, dict) else {},
+                        client_api_format=client_api_format,
+                        provider_api_format=provider_api_format,
+                    )
+
             http_client = await HTTPClientPool.get_upstream_client(
                 delegate_cfg,
                 proxy_config=effective_proxy,
@@ -488,60 +692,12 @@ class CliStreamMixin:
             if isinstance(response_json, dict):
                 ctx.response_metadata = self._extract_response_metadata(response_json)
 
-            # Convert sync JSON -> InternalResponse, then InternalResponse -> client stream events.
-            registry = get_format_converter_registry()
-            src_norm = registry.get_normalizer(provider_api_format) if provider_api_format else None
-            if src_norm is None:
-                raise RuntimeError(f"未注册 Normalizer: {provider_api_format}")
-
-            internal_resp = src_norm.response_to_internal(
-                response_json if isinstance(response_json, dict) else {}
+            return self._streamify_sync_response(
+                ctx=ctx,
+                response_json=response_json if isinstance(response_json, dict) else {},
+                client_api_format=client_api_format,
+                provider_api_format=provider_api_format,
             )
-            internal_resp.model = str(ctx.model or internal_resp.model or "")
-            if internal_resp.id:
-                ctx.response_id = internal_resp.id
-
-            if internal_resp.usage:
-                ctx.input_tokens = int(internal_resp.usage.input_tokens or 0)
-                ctx.output_tokens = int(internal_resp.usage.output_tokens or 0)
-                ctx.cached_tokens = int(internal_resp.usage.cache_read_tokens or 0)
-                ctx.cache_creation_tokens = int(internal_resp.usage.cache_write_tokens or 0)
-
-            from src.core.api_format.conversion.stream_state import StreamState
-
-            tgt_norm = registry.get_normalizer(client_api_format) if client_api_format else None
-            if tgt_norm is None:
-                raise RuntimeError(f"未注册 Normalizer: {client_api_format}")
-
-            state = StreamState(
-                model=str(ctx.model or ""),
-                message_id=str(ctx.response_id or ctx.request_id or self.request_id or ""),
-            )
-            output_state = {"first_yield": True, "streaming_updated": False}
-
-            async def _streamified() -> AsyncGenerator[bytes]:
-                for ev in iter_internal_response_as_stream_events(internal_resp):
-                    converted_events = tgt_norm.stream_event_from_internal(ev, state)
-                    if not converted_events:
-                        continue
-                    self._record_converted_chunks(ctx, converted_events)
-                    for sse_line in _format_converted_events_to_sse(
-                        converted_events, client_api_format
-                    ):
-                        if not sse_line:
-                            continue
-                        ctx.chunk_count += 1
-                        self._mark_first_output(ctx, output_state)
-                        yield (sse_line + "\n").encode("utf-8")
-
-                # OpenAI chat clients expect a final [DONE] marker.
-                if str(client_api_format or "").strip().lower() == "openai:chat":
-                    ctx.chunk_count += 1
-                    self._mark_first_output(ctx, output_state)
-                    yield b"data: [DONE]\n\n"
-                    ctx.has_completion = True
-
-            return _streamified()
 
         # 流式请求使用 stream_first_byte_timeout 作为首字节超时
         # 优先使用 Provider 配置，否则使用全局配置
@@ -560,12 +716,106 @@ class CliStreamMixin:
         # 获取 HTTP 客户端（支持代理配置，Key 级别优先于 Provider 级别）
         # 使用连接池复用客户端，避免每次流式请求都新建 TCP/TLS 连接
         from src.clients.http_client import HTTPClientPool
-        from src.services.proxy_node.resolver import (
-            build_stream_kwargs_async,
-            resolve_delegate_config_async,
+        from src.services.proxy_node.resolver import build_stream_kwargs_async
+
+        rust_plan = ExecutionPlan(
+            request_id=str(self.request_id or ""),
+            candidate_id=str(
+                getattr(candidate, "request_candidate_id", "") or getattr(candidate, "id", "") or ""
+            )
+            or None,
+            provider_name=str(provider.name),
+            provider_id=str(provider.id),
+            endpoint_id=str(endpoint.id),
+            key_id=str(key.id),
+            method="POST",
+            url=url,
+            headers=dict(provider_headers),
+            body=build_execution_plan_body(
+                provider_payload,
+                content_type=str(provider_headers.get("content-type") or "").strip() or None,
+            ),
+            stream=True,
+            provider_api_format=provider_api_format,
+            client_api_format=client_api_format,
+            model_name=str(ctx.model or ""),
+            content_type=str(provider_headers.get("content-type") or "").strip() or None,
+            content_encoding=client_content_encoding,
+            proxy=proxy_snapshot,
+            tls_profile=envelope_tls_profile,
+            timeouts=ExecutionPlanTimeouts(
+                connect_ms=int(config.http_connect_timeout * 1000),
+                read_ms=int(config.http_read_timeout * 1000),
+                write_ms=int(config.http_write_timeout * 1000),
+                pool_ms=int(config.http_pool_timeout * 1000),
+                total_ms=None,
+            ),
         )
 
-        delegate_cfg = await resolve_delegate_config_async(effective_proxy)
+        if config.executor_backend == "rust" and is_remote_contract_eligible(rust_plan):
+            try:
+                rust_stream = await RustExecutorClient().execute_stream(rust_plan)
+            except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "[{}] CLI Rust executor stream 不可用，回退 Python 执行: {}",
+                    self.request_id,
+                    exc,
+                )
+            else:
+                ctx.status_code = rust_stream.status_code
+                ctx.response_headers = dict(rust_stream.headers)
+                ctx.set_proxy_timing(ctx.response_headers)
+
+                if envelope:
+                    envelope.on_http_status(
+                        base_url=ctx.selected_base_url,
+                        status_code=ctx.status_code,
+                    )
+
+                try:
+                    if ctx.status_code >= 400:
+                        error_chunks: list[bytes] = []
+                        async for chunk in rust_stream.byte_iterator:
+                            if chunk:
+                                error_chunks.append(chunk)
+                            if sum(len(item) for item in error_chunks) >= 4000:
+                                break
+                        error_body = b"".join(error_chunks)[:4000].decode(
+                            "utf-8",
+                            errors="replace",
+                        )
+                        request = httpx.Request("POST", url, headers=provider_headers)
+                        response = httpx.Response(
+                            ctx.status_code,
+                            request=request,
+                            headers=rust_stream.headers,
+                            content=b"".join(error_chunks),
+                        )
+                        error = httpx.HTTPStatusError(
+                            f"Upstream status error: {ctx.status_code}",
+                            request=request,
+                            response=response,
+                        )
+                        error.upstream_response = error_body  # type: ignore[attr-defined]
+                        raise error
+
+                    prefetched_chunks = await self._prefetch_and_check_embedded_error(
+                        rust_stream.byte_iterator,
+                        provider,
+                        endpoint,
+                        ctx,
+                    )
+                except Exception:
+                    await rust_stream.response_ctx.__aexit__(None, None, None)
+                    raise
+
+                return self._create_response_stream_with_prefetch(
+                    ctx,
+                    rust_stream.byte_iterator,
+                    rust_stream.response_ctx,
+                    prefetched_chunks,
+                )
+
         http_client = await HTTPClientPool.get_upstream_client(
             delegate_cfg,
             proxy_config=effective_proxy,

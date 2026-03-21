@@ -13,6 +13,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from src.core.crypto import crypto_service
+from src.core.logger import logger
 from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint
 from src.services.provider.auth import get_provider_auth
 from src.services.provider.oauth_token import looks_like_token_invalidated
@@ -68,6 +69,138 @@ def _extract_error_message_from_response(response: httpx.Response) -> str:
         pass
     text = str(getattr(response, "text", "") or "").strip()
     return text[:300] if text else ""
+
+
+async def _build_codex_proxy_snapshot(
+    effective_proxy: dict[str, Any] | None,
+) -> Any:
+    from importlib import import_module
+
+    from src.services.request.executor_plan import ExecutionProxySnapshot
+
+    resolver_module = import_module("src.services.proxy_node.resolver")
+    build_proxy_url_async = getattr(resolver_module, "build_proxy_url_async", None)
+    get_system_proxy_config_async = getattr(resolver_module, "get_system_proxy_config_async", None)
+    resolve_delegate_config_async = getattr(resolver_module, "resolve_delegate_config_async", None)
+    resolve_proxy_info_async = getattr(resolver_module, "resolve_proxy_info_async", None)
+
+    proxy_config = effective_proxy
+    if (not proxy_config or not proxy_config.get("enabled", True)) and callable(
+        get_system_proxy_config_async
+    ):
+        proxy_config = await get_system_proxy_config_async()
+    if not proxy_config:
+        return None
+
+    try:
+        delegate_cfg = (
+            await resolve_delegate_config_async(proxy_config)
+            if callable(resolve_delegate_config_async)
+            else None
+        )
+        proxy_url: str | None = None
+        if (
+            proxy_config
+            and not (delegate_cfg and delegate_cfg.get("tunnel"))
+            and callable(build_proxy_url_async)
+        ):
+            proxy_url = await build_proxy_url_async(proxy_config)
+        proxy_info = (
+            await resolve_proxy_info_async(proxy_config)
+            if callable(resolve_proxy_info_async)
+            else {"url": proxy_url}
+        )
+        return ExecutionProxySnapshot.from_proxy_info(
+            proxy_info,
+            proxy_url=proxy_url,
+            mode_override="tunnel" if delegate_cfg and delegate_cfg.get("tunnel") else None,
+            node_id_override=(
+                str(delegate_cfg.get("node_id") or "").strip() or None
+                if delegate_cfg and delegate_cfg.get("tunnel")
+                else None
+            ),
+        )
+    except Exception as exc:
+        logger.warning("Codex quota proxy snapshot build failed: {}", exc)
+        return None
+
+
+async def _try_rust_codex_quota_response(
+    *,
+    key: ProviderAPIKey,
+    provider: Provider,
+    endpoint: ProviderEndpoint,
+    url: str,
+    headers: dict[str, str],
+    proxy_snapshot: Any,
+) -> httpx.Response | None:
+    from src.config import config
+    from src.services.request.executor_plan import (
+        ExecutionPlan,
+        ExecutionPlanBody,
+        ExecutionPlanTimeouts,
+    )
+    from src.services.request.rust_executor_client import (
+        RustExecutorClient,
+        RustExecutorClientError,
+    )
+
+    if config.executor_backend != "rust":
+        return None
+
+    try:
+        result = await RustExecutorClient().execute_sync_json(
+            ExecutionPlan(
+                request_id=f"codex-quota:{key.id}",
+                candidate_id=None,
+                provider_name="codex",
+                provider_id=str(getattr(provider, "id", "") or ""),
+                endpoint_id=str(getattr(endpoint, "id", "") or ""),
+                key_id=str(getattr(key, "id", "") or ""),
+                method="GET",
+                url=url,
+                headers=dict(headers),
+                body=ExecutionPlanBody(),
+                stream=False,
+                provider_api_format="openai:cli",
+                client_api_format="openai:cli",
+                model_name="codex-wham-usage",
+                proxy=proxy_snapshot,
+                timeouts=ExecutionPlanTimeouts(
+                    connect_ms=30_000,
+                    read_ms=30_000,
+                    write_ms=30_000,
+                    pool_ms=30_000,
+                    total_ms=30_000,
+                ),
+            )
+        )
+    except (
+        RustExecutorClientError,
+        httpx.HTTPError,
+        json.JSONDecodeError,
+        ValueError,
+        AttributeError,
+        TypeError,
+    ) as exc:
+        logger.warning("Codex quota Rust fallback key_id={} url={}: {}", key.id, url, exc)
+        return None
+
+    response_headers = dict(result.headers)
+    if result.response_json is not None:
+        response_headers.setdefault("content-type", "application/json")
+        response_body = json.dumps(result.response_json, ensure_ascii=False).encode("utf-8")
+    elif result.response_body_bytes is not None:
+        response_body = result.response_body_bytes
+    else:
+        response_body = b""
+
+    return httpx.Response(
+        status_code=result.status_code,
+        request=httpx.Request("GET", url, headers=headers),
+        headers=response_headers,
+        content=response_body,
+    )
 
 
 def _looks_like_account_deactivated(message: str | None) -> bool:
@@ -212,12 +345,22 @@ async def refresh_codex_key_quota(
         getattr(provider, "proxy", None),
         getattr(key, "proxy", None),
     )
+    proxy_snapshot = await _build_codex_proxy_snapshot(effective_proxy)
 
     # 使用 wham/usage API 获取限额信息
-    async with httpx.AsyncClient(
-        **build_proxy_client_kwargs(effective_proxy, timeout=30.0)
-    ) as client:
-        response = await client.get(codex_wham_usage_url, headers=headers)
+    response = await _try_rust_codex_quota_response(
+        key=key,
+        provider=provider,
+        endpoint=endpoint,
+        url=codex_wham_usage_url,
+        headers=headers,
+        proxy_snapshot=proxy_snapshot,
+    )
+    if response is None:
+        async with httpx.AsyncClient(
+            **build_proxy_client_kwargs(effective_proxy, timeout=30.0)
+        ) as client:
+            response = await client.get(codex_wham_usage_url, headers=headers)
 
     if response.status_code != 200:
         status_code = int(response.status_code)

@@ -183,6 +183,25 @@ class GeminiVeoHandler(VideoHandlerBase):
                     original_body=original_request_body,
                 )
 
+                rust_response = await self._try_rust_sync_http_response(
+                    method="POST",
+                    url=upstream_url,
+                    headers=headers,
+                    body=converted_body,
+                    provider_name=str(candidate.provider.name),
+                    provider_id=str(candidate.provider.id),
+                    endpoint_id=str(endpoint.id),
+                    key_id=str(_key.id),
+                    provider_api_format=provider_format,
+                    client_api_format=self.FORMAT_ID,
+                    model_name=internal_request.model,
+                    content_type=str(headers.get("content-type") or "").strip()
+                    or "application/json",
+                    log_label="GeminiVideoCreate",
+                )
+                if rust_response is not None:
+                    return rust_response
+
                 client = await HTTPClientPool.get_default_client_async()
                 return await client.post(upstream_url, headers=headers, json=converted_body)
             else:
@@ -206,6 +225,25 @@ class GeminiVeoHandler(VideoHandlerBase):
                     body=request_body,
                     original_body=original_request_body,
                 )
+                rust_response = await self._try_rust_sync_http_response(
+                    method="POST",
+                    url=upstream_url,
+                    headers=headers,
+                    body=request_body,
+                    provider_name=str(candidate.provider.name),
+                    provider_id=str(candidate.provider.id),
+                    endpoint_id=str(endpoint.id),
+                    key_id=str(_key.id),
+                    provider_api_format=provider_format,
+                    client_api_format=self.FORMAT_ID,
+                    model_name=internal_request.model,
+                    content_type=str(headers.get("content-type") or "").strip()
+                    or "application/json",
+                    log_label="GeminiVideoCreate",
+                )
+                if rust_response is not None:
+                    return rust_response
+
                 client = await HTTPClientPool.get_default_client_async()
                 return await client.post(upstream_url, headers=headers, json=request_body)
 
@@ -470,6 +508,17 @@ class GeminiVeoHandler(VideoHandlerBase):
 
         # 代理下载而非直接重定向，避免暴露上游存储 URL
         # 使用 httpx 支持重定向（Gemini 视频 URL 会重定向到实际存储位置）
+        rust_response = await self._try_rust_download_stream(
+            url=task.video_url,
+            headers=download_headers,
+            task_id=str(task.id),
+            endpoint=endpoint,
+            key=key,
+            model_name=str(getattr(task, "model", "") or "") or None,
+        )
+        if rust_response is not None:
+            return rust_response
+
         import httpx
 
         try:
@@ -514,6 +563,125 @@ class GeminiVeoHandler(VideoHandlerBase):
             status_code=response.status_code,
             headers=safe_headers,
             media_type=response.headers.get("content-type", "video/mp4"),
+        )
+
+    async def _try_rust_download_stream(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        task_id: str,
+        endpoint: ProviderEndpoint,
+        key: ProviderAPIKey,
+        model_name: str | None = None,
+    ) -> Response | StreamingResponse | None:
+        import httpx
+
+        from src.services.proxy_node.resolver import (
+            build_proxy_url_async,
+            get_system_proxy_config_async,
+            resolve_delegate_config_async,
+            resolve_effective_proxy,
+            resolve_proxy_info_async,
+        )
+        from src.services.request.executor_plan import (
+            ExecutionPlan,
+            ExecutionPlanBody,
+            ExecutionPlanTimeouts,
+            ExecutionProxySnapshot,
+        )
+        from src.services.request.rust_executor_client import (
+            RustExecutorClient,
+            RustExecutorClientError,
+        )
+
+        if config.executor_backend != "rust":
+            return None
+
+        effective_proxy = resolve_effective_proxy(
+            resolve_provider_proxy(endpoint=endpoint, key=key),
+            getattr(key, "proxy", None),
+        )
+        if not effective_proxy or not effective_proxy.get("enabled", True):
+            effective_proxy = await get_system_proxy_config_async()
+
+        delegate_cfg = await resolve_delegate_config_async(effective_proxy)
+        proxy_url: str | None = None
+        if effective_proxy and not (delegate_cfg and delegate_cfg.get("tunnel")):
+            proxy_url = await build_proxy_url_async(effective_proxy)
+
+        proxy_info = await resolve_proxy_info_async(effective_proxy)
+        proxy_snapshot = ExecutionProxySnapshot.from_proxy_info(
+            proxy_info,
+            proxy_url=proxy_url,
+            mode_override="tunnel" if delegate_cfg and delegate_cfg.get("tunnel") else None,
+            node_id_override=(
+                str(delegate_cfg.get("node_id") or "").strip() or None
+                if delegate_cfg and delegate_cfg.get("tunnel")
+                else None
+            ),
+        )
+
+        try:
+            rust_stream = await RustExecutorClient().execute_stream(
+                ExecutionPlan(
+                    request_id=str(self.request_id or ""),
+                    candidate_id=None,
+                    provider_name="gemini",
+                    provider_id=str(getattr(endpoint, "provider_id", "") or ""),
+                    endpoint_id=str(getattr(endpoint, "id", "") or ""),
+                    key_id=str(getattr(key, "id", "") or ""),
+                    method="GET",
+                    url=url,
+                    headers=dict(headers),
+                    body=ExecutionPlanBody(),
+                    stream=True,
+                    provider_api_format=self.FORMAT_ID,
+                    client_api_format=self.FORMAT_ID,
+                    model_name=str(model_name or ""),
+                    proxy=proxy_snapshot,
+                    timeouts=ExecutionPlanTimeouts(
+                        connect_ms=30_000,
+                        read_ms=300_000,
+                        write_ms=300_000,
+                        pool_ms=30_000,
+                        total_ms=None,
+                    ),
+                )
+            )
+        except (RustExecutorClientError, httpx.HTTPError, ValueError) as exc:
+            logger.warning(
+                "[VideoDownload] Rust executor unavailable task={} url={}: {}",
+                task_id,
+                url,
+                sanitize_error_message(str(exc)),
+            )
+            return None
+
+        safe_headers = {
+            k: v for k, v in rust_stream.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS
+        }
+
+        if rust_stream.status_code >= 400:
+            try:
+                async for _ in rust_stream.byte_iterator:
+                    pass
+            finally:
+                await rust_stream.response_ctx.__aexit__(None, None, None)
+            raise HTTPException(status_code=rust_stream.status_code, detail="Upstream error")
+
+        async def _iter_bytes() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in rust_stream.byte_iterator:
+                    yield chunk
+            finally:
+                await rust_stream.response_ctx.__aexit__(None, None, None)
+
+        return StreamingResponse(
+            _iter_bytes(),
+            status_code=rust_stream.status_code,
+            headers=safe_headers,
+            media_type=safe_headers.get("content-type", "video/mp4"),
         )
 
     # ------------------------------------------------------------------

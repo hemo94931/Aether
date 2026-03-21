@@ -1,0 +1,17 @@
+pub(crate) const TRACE_ID_HEADER: &str = "x-trace-id";
+pub(crate) const FORWARDED_HOST_HEADER: &str = "x-forwarded-host";
+pub(crate) const FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
+pub(crate) const FORWARDED_PROTO_HEADER: &str = "x-forwarded-proto";
+pub(crate) const GATEWAY_HEADER: &str = "x-aether-gateway";
+pub(crate) const CONTROL_ROUTE_CLASS_HEADER: &str = "x-aether-control-route-class";
+pub(crate) const CONTROL_ROUTE_FAMILY_HEADER: &str = "x-aether-control-route-family";
+pub(crate) const CONTROL_ROUTE_KIND_HEADER: &str = "x-aether-control-route-kind";
+pub(crate) const CONTROL_EXECUTOR_HEADER: &str = "x-aether-control-executor-candidate";
+pub(crate) const CONTROL_ENDPOINT_SIGNATURE_HEADER: &str = "x-aether-control-endpoint-signature";
+pub(crate) const CONTROL_EXECUTED_HEADER: &str = "x-aether-control-executed";
+pub(crate) const CONTROL_ACTION_HEADER: &str = "x-aether-control-action";
+pub(crate) const CONTROL_ACTION_PROXY_PUBLIC: &str = "proxy_public";
+pub(crate) const TRUSTED_AUTH_USER_ID_HEADER: &str = "x-aether-auth-user-id";
+pub(crate) const TRUSTED_AUTH_API_KEY_ID_HEADER: &str = "x-aether-auth-api-key-id";
+pub(crate) const TRUSTED_AUTH_BALANCE_HEADER: &str = "x-aether-auth-balance-remaining";
+pub(crate) const TRUSTED_AUTH_ACCESS_ALLOWED_HEADER: &str = "x-aether-auth-access-allowed";

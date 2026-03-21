@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
 import time
 import uuid
@@ -26,6 +27,7 @@ from typing import Any
 
 import httpx
 
+from src.config.settings import config
 from src.core.api_format import (
     CORE_REDACT_HEADERS,
     merge_headers_with_protection,
@@ -655,6 +657,16 @@ class HttpRequestExecutor:
                     is_stream = True
 
         try:
+            rust_result = await self._execute_via_rust(
+                request=request,
+                request_id=request_id,
+                is_stream=is_stream,
+                start_time=start_time,
+                effective_timeout=effective_timeout,
+            )
+            if rust_result is not None:
+                return rust_result
+
             from src.services.proxy_node.resolver import build_proxy_client_kwargs
 
             # 统一通过 build_proxy_client_kwargs 构建（支持 tunnel 模式 + 普通代理 + 系统默认回退）
@@ -758,111 +770,349 @@ class HttpRequestExecutor:
             async with client.stream(
                 "POST", request.url, json=request.json_body, headers=request.headers
             ) as response:
-                headers = dict(response.headers)
-
-                if response.status_code != 200:
-                    # 读取上限 16KB 用于 debug response_body；
-                    # error 字段仅取前 500 字符，避免日志/展示过长
-                    error_body = ""
-                    async for chunk in response.aiter_text():
-                        error_body += chunk
-                        if len(error_body) > 16384:
-                            break
-                    logger.debug(
-                        "[{}] check_endpoint | stream error | {}",
-                        request.api_format,
-                        error_body[:500],
-                    )
-                    return {
-                        "error": f"HTTP {response.status_code}: {error_body[:500]}",
-                        "status_code": response.status_code,
-                        "headers": headers,
-                        "response_body": error_body,
-                    }
-
-                # 收集 SSE 事件（兼容多种 API 格式）
-                final_response: dict[str, Any] = {}
-                collected_text = ""
-
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-
-                    data_str = line[5:].strip()
-                    if data_str == "[DONE]":
-                        break
-
-                    try:
-                        event = json.loads(data_str)
-                        if "/v1internal:" in (request.url or ""):
-                            event = self._unwrap_gemini_cli_response_wrapper(event)
-                        event_type = event.get("type", "")
-
-                        # OpenAI Responses API 事件
-                        if event_type == "response.output_text.delta":
-                            delta = event.get("delta", "")
-                            if isinstance(delta, str):
-                                collected_text += delta
-                        elif event_type == "response.completed":
-                            final_response = event.get("response", {})
-                            break
-
-                        # OpenAI Chat Completions 格式
-                        elif "choices" in event:
-                            for choice in event.get("choices", []):
-                                delta = choice.get("delta", {})
-                                content = delta.get("content")
-                                if content:
-                                    collected_text += content
-                                if choice.get("finish_reason"):
-                                    final_response = event
-                                    break
-
-                        # Claude Messages API 格式
-                        elif event_type == "content_block_delta":
-                            delta = event.get("delta", {})
-                            text = delta.get("text", "")
-                            if text:
-                                collected_text += text
-                        elif event_type == "message_stop":
-                            break
-
-                        # Gemini SSE 格式
-                        elif "candidates" in event:
-                            for candidate in event.get("candidates", []):
-                                content = candidate.get("content", {})
-                                for part in content.get("parts", []):
-                                    text = part.get("text", "")
-                                    if text:
-                                        collected_text += text
-
-                    except json.JSONDecodeError:
-                        continue
-
-                # 如果没有收到最终响应事件，构建一个基本响应
-                if not final_response:
-                    final_response = {
-                        "status": "completed",
-                        "output": [
-                            {
-                                "type": "message",
-                                "role": "assistant",
-                                "content": [{"type": "output_text", "text": collected_text}],
-                            }
-                        ],
-                    }
-
-                logger.debug(
-                    "[{}] check_endpoint | stream completed | text_length={}",
-                    request.api_format,
-                    len(collected_text),
+                return await self._consume_stream_lines(
+                    line_iter=response.aiter_lines(),
+                    request=request,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    error_text_iter=response.aiter_text(),
                 )
-
-                return {"final_response": final_response, "headers": headers}
 
         except Exception as e:
             logger.warning("[{}] check_endpoint | stream error | {}", request.api_format, e)
             return {"error": str(e), "status_code": 500, "headers": {}, "response_body": None}
+
+    async def _execute_via_rust(
+        self,
+        *,
+        request: EndpointCheckRequest,
+        request_id: str,
+        is_stream: bool,
+        start_time: float,
+        effective_timeout: float,
+    ) -> EndpointCheckResult | None:
+        from src.services.request.executor_plan import (
+            ExecutionPlan,
+            ExecutionPlanTimeouts,
+            build_execution_plan_body,
+        )
+        from src.services.request.rust_executor_client import (
+            RustExecutorClient,
+            RustExecutorClientError,
+        )
+
+        if config.executor_backend != "rust":
+            return None
+
+        proxy_snapshot = await self._build_rust_proxy_snapshot(request.proxy_config)
+        plan = ExecutionPlan(
+            request_id=f"endpoint-check-{request_id}",
+            candidate_id=None,
+            provider_name=str(request.provider_name or request.api_format or ""),
+            provider_id=str(request.provider_id or ""),
+            endpoint_id="",
+            key_id=str(request.api_key_id or ""),
+            method="POST",
+            url=request.url,
+            headers=dict(request.headers),
+            body=build_execution_plan_body(request.json_body, content_type="application/json"),
+            stream=is_stream,
+            provider_api_format=str(request.api_format or ""),
+            client_api_format=str(request.api_format or ""),
+            model_name=str(request.model_name or ""),
+            content_type="application/json",
+            proxy=proxy_snapshot,
+            timeouts=ExecutionPlanTimeouts(
+                connect_ms=min(int(effective_timeout * 1000), 30_000),
+                read_ms=(None if is_stream else int(effective_timeout * 1000)),
+                write_ms=int(effective_timeout * 1000),
+                pool_ms=min(int(effective_timeout * 1000), 30_000),
+                total_ms=(None if is_stream else int(effective_timeout * 1000)),
+            ),
+        )
+
+        try:
+            if is_stream:
+                rust_stream = await RustExecutorClient().execute_stream(plan)
+                try:
+                    if rust_stream.status_code >= 400:
+                        error_bytes = await self._read_limited_bytes(rust_stream.byte_iterator)
+                        return await ErrorHandler.handle_error(
+                            httpx.HTTPStatusError(
+                                message=f"HTTP {rust_stream.status_code}",
+                                request=httpx.Request("POST", request.url, headers=request.headers),
+                                response=httpx.Response(
+                                    rust_stream.status_code,
+                                    request=httpx.Request(
+                                        "POST", request.url, headers=request.headers
+                                    ),
+                                    headers=rust_stream.headers,
+                                    content=error_bytes,
+                                ),
+                            ),
+                            request,
+                        )
+
+                    stream_result = await self._consume_stream_lines(
+                        line_iter=self._aiter_lines_from_bytes(rust_stream.byte_iterator),
+                        request=request,
+                        status_code=rust_stream.status_code,
+                        headers=dict(rust_stream.headers),
+                    )
+                finally:
+                    await rust_stream.response_ctx.__aexit__(None, None, None)
+
+                response_time_ms = int((time.time() - start_time) * 1000)
+                if stream_result.get("error"):
+                    return EndpointCheckResult(
+                        status_code=stream_result.get("status_code", 500),
+                        headers=stream_result.get("headers", {}),
+                        response_time_ms=response_time_ms,
+                        request_id=request_id,
+                        response_data=None,
+                        error_message=stream_result.get("error"),
+                        raw_response_body=stream_result.get("response_body"),
+                    )
+                return EndpointCheckResult(
+                    status_code=rust_stream.status_code,
+                    headers=stream_result.get("headers", {}),
+                    response_time_ms=response_time_ms,
+                    request_id=request_id,
+                    response_data=stream_result.get("final_response"),
+                    raw_response_body=stream_result.get("final_response"),
+                )
+
+            result = await RustExecutorClient().execute_sync_json(plan)
+        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+            logger.warning(
+                "[{}] endpoint check rust fallback | provider={} model={} error={}",
+                request.api_format,
+                request.provider_name,
+                request.model_name,
+                exc,
+            )
+            return None
+
+        response = self._build_httpx_response_from_rust(
+            method="POST",
+            url=request.url,
+            request_headers=request.headers,
+            status_code=result.status_code,
+            headers=result.headers,
+            response_json=result.response_json,
+            response_body_bytes=result.response_body_bytes,
+        )
+        if result.status_code >= 400:
+            return await ErrorHandler.handle_error(
+                httpx.HTTPStatusError(
+                    message=f"HTTP {result.status_code}",
+                    request=response.request,
+                    response=response,
+                ),
+                request,
+            )
+
+        response_time_ms = int((time.time() - start_time) * 1000)
+        response_data: dict[str, Any] | None
+        if isinstance(result.response_json, dict):
+            response_data = result.response_json
+        else:
+            try:
+                parsed_body = response.json()
+                response_data = parsed_body if isinstance(parsed_body, dict) else None
+            except Exception:
+                response_data = None
+
+        return EndpointCheckResult(
+            status_code=result.status_code,
+            headers=dict(result.headers),
+            response_time_ms=response_time_ms,
+            request_id=request_id,
+            response_data=response_data,
+            raw_response_body=response_data if response_data is not None else response.text,
+        )
+
+    async def _build_rust_proxy_snapshot(
+        self,
+        proxy_config: dict[str, Any] | None,
+    ) -> Any:
+        from src.services.proxy_node.resolver import (
+            build_proxy_url_async,
+            get_system_proxy_config_async,
+            resolve_delegate_config_async,
+            resolve_proxy_info_async,
+        )
+        from src.services.request.executor_plan import ExecutionProxySnapshot
+
+        effective_proxy = proxy_config
+        if not effective_proxy or not effective_proxy.get("enabled", True):
+            effective_proxy = await get_system_proxy_config_async()
+        if not effective_proxy:
+            return None
+
+        try:
+            delegate_cfg = await resolve_delegate_config_async(effective_proxy)
+            proxy_url: str | None = None
+            if effective_proxy and not (delegate_cfg and delegate_cfg.get("tunnel")):
+                proxy_url = await build_proxy_url_async(effective_proxy)
+            proxy_info = await resolve_proxy_info_async(effective_proxy)
+            return ExecutionProxySnapshot.from_proxy_info(
+                proxy_info,
+                proxy_url=proxy_url,
+                mode_override="tunnel" if delegate_cfg and delegate_cfg.get("tunnel") else None,
+                node_id_override=(
+                    str(delegate_cfg.get("node_id") or "").strip() or None
+                    if delegate_cfg and delegate_cfg.get("tunnel")
+                    else None
+                ),
+            )
+        except Exception as exc:
+            logger.warning("endpoint check proxy snapshot build failed: {}", exc)
+            return None
+
+    async def _consume_stream_lines(
+        self,
+        *,
+        line_iter: Any,
+        request: EndpointCheckRequest,
+        status_code: int,
+        headers: dict[str, str],
+        error_text_iter: Any | None = None,
+    ) -> dict[str, Any]:
+        if status_code != 200:
+            error_body = ""
+            if error_text_iter is not None:
+                async for chunk in error_text_iter:
+                    error_body += chunk
+                    if len(error_body) > 16384:
+                        break
+            logger.debug(
+                "[{}] check_endpoint | stream error | {}",
+                request.api_format,
+                error_body[:500],
+            )
+            return {
+                "error": f"HTTP {status_code}: {error_body[:500]}",
+                "status_code": status_code,
+                "headers": headers,
+                "response_body": error_body,
+            }
+
+        final_response: dict[str, Any] = {}
+        collected_text = ""
+
+        async for line in line_iter:
+            if not line or not line.startswith("data:"):
+                continue
+
+            data_str = line[5:].strip()
+            if data_str == "[DONE]":
+                break
+
+            try:
+                event = json.loads(data_str)
+                if "/v1internal:" in (request.url or ""):
+                    event = self._unwrap_gemini_cli_response_wrapper(event)
+                event_type = event.get("type", "")
+
+                if event_type == "response.output_text.delta":
+                    delta = event.get("delta", "")
+                    if isinstance(delta, str):
+                        collected_text += delta
+                elif event_type == "response.completed":
+                    final_response = event.get("response", {})
+                    break
+                elif "choices" in event:
+                    for choice in event.get("choices", []):
+                        delta = choice.get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            collected_text += content
+                        if choice.get("finish_reason"):
+                            final_response = event
+                            break
+                elif event_type == "content_block_delta":
+                    delta = event.get("delta", {})
+                    text = delta.get("text", "")
+                    if text:
+                        collected_text += text
+                elif event_type == "message_stop":
+                    break
+                elif "candidates" in event:
+                    for candidate in event.get("candidates", []):
+                        content = candidate.get("content", {})
+                        for part in content.get("parts", []):
+                            text = part.get("text", "")
+                            if text:
+                                collected_text += text
+            except json.JSONDecodeError:
+                continue
+
+        if not final_response:
+            final_response = {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": collected_text}],
+                    }
+                ],
+            }
+
+        logger.debug(
+            "[{}] check_endpoint | stream completed | text_length={}",
+            request.api_format,
+            len(collected_text),
+        )
+
+        return {"final_response": final_response, "headers": headers}
+
+    async def _aiter_lines_from_bytes(self, byte_iter: Any) -> Any:
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        buffer = ""
+        async for chunk in byte_iter:
+            buffer += decoder.decode(chunk)
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                yield line.rstrip("\r")
+        buffer += decoder.decode(b"", final=True)
+        if buffer:
+            yield buffer.rstrip("\r")
+
+    async def _read_limited_bytes(self, byte_iter: Any, limit: int = 16_384) -> bytes:
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in byte_iter:
+            if not chunk:
+                continue
+            chunks.append(chunk)
+            total += len(chunk)
+            if total >= limit:
+                break
+        return b"".join(chunks)
+
+    @staticmethod
+    def _build_httpx_response_from_rust(
+        *,
+        method: str,
+        url: str,
+        request_headers: dict[str, str],
+        status_code: int,
+        headers: dict[str, str],
+        response_json: Any,
+        response_body_bytes: bytes | None,
+    ) -> httpx.Response:
+        if response_json is not None:
+            content = json.dumps(response_json, ensure_ascii=False).encode("utf-8")
+        else:
+            content = response_body_bytes or b""
+        return httpx.Response(
+            status_code=status_code,
+            request=httpx.Request(method, url, headers=request_headers),
+            headers=headers,
+            content=content,
+        )
 
 
 class UsageCalculator:

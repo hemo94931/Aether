@@ -92,6 +92,17 @@ from src.services.provider.transport import (
     build_provider_url,
 )
 from src.services.provider.upstream_headers import build_upstream_extra_headers
+from src.services.request.executor_plan import (
+    ExecutionPlan,
+    ExecutionPlanTimeouts,
+    ExecutionProxySnapshot,
+    build_execution_plan_body,
+    is_remote_contract_eligible,
+)
+from src.services.request.rust_executor_client import (
+    RustExecutorClient,
+    RustExecutorClientError,
+)
 from src.services.scheduling.aware_scheduler import ProviderCandidate
 from src.services.system.config import SystemConfigService
 from src.services.task.request_state import MutableRequestBodyState
@@ -958,7 +969,10 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
         # 解析有效代理（Key 级别优先于 Provider 级别）
         from src.services.proxy_node.resolver import (
+            build_proxy_url_async,
             get_proxy_label,
+            get_system_proxy_config_async,
+            resolve_delegate_config_async,
             resolve_effective_proxy,
             resolve_proxy_info_async,
         )
@@ -971,6 +985,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             f"  [{self.request_id}] 发送流式请求: Provider={provider.name}, "
             f"模型={ctx.model} -> {mapped_model or '无映射'}, 代理={proxy_label}"
         )
+        delegate_cfg = await resolve_delegate_config_async(effective_proxy)
 
         # If upstream is forced to non-stream mode, we execute a sync request and then
         # simulate streaming to the client (sync -> stream bridge).
@@ -978,11 +993,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             from src.clients.http_client import HTTPClientPool
             from src.services.proxy_node.resolver import (
                 build_post_kwargs_async,
-                resolve_delegate_config_async,
             )
 
             request_timeout_sync = provider.request_timeout or config.http_request_timeout
-            delegate_cfg = await resolve_delegate_config_async(effective_proxy)
             http_client = await HTTPClientPool.get_upstream_client(
                 delegate_cfg,
                 proxy_config=effective_proxy,
@@ -1179,19 +1192,142 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             return _streamified()
 
+        if config.executor_backend == "rust":
+            effective_proxy_for_contract = effective_proxy
+            if not effective_proxy_for_contract or not effective_proxy_for_contract.get(
+                "enabled", True
+            ):
+                effective_proxy_for_contract = await get_system_proxy_config_async()
+            is_tunnel_delegate = bool(delegate_cfg and delegate_cfg.get("tunnel"))
+
+            proxy_url: str | None = None
+            if effective_proxy_for_contract and not is_tunnel_delegate:
+                proxy_url = await build_proxy_url_async(effective_proxy_for_contract)
+
+            proxy_snapshot = ExecutionProxySnapshot.from_proxy_info(
+                ctx.proxy_info,
+                proxy_url=proxy_url,
+                mode_override="tunnel" if is_tunnel_delegate else None,
+                node_id_override=(
+                    str(delegate_cfg.get("node_id") or "").strip() or None
+                    if is_tunnel_delegate
+                    else None
+                ),
+            )
+            rust_plan = ExecutionPlan(
+                request_id=str(self.request_id or ""),
+                candidate_id=str(
+                    getattr(candidate, "request_candidate_id", "")
+                    or getattr(candidate, "id", "")
+                    or ""
+                )
+                or None,
+                provider_name=str(provider.name),
+                provider_id=str(provider.id),
+                endpoint_id=str(endpoint.id),
+                key_id=str(key.id),
+                method="POST",
+                url=url,
+                headers=dict(provider_headers),
+                body=build_execution_plan_body(
+                    provider_payload,
+                    content_type=str(provider_headers.get("content-type") or "").strip() or None,
+                ),
+                stream=True,
+                provider_api_format=provider_api_format,
+                client_api_format=client_api_format,
+                model_name=str(ctx.model or ""),
+                content_type=str(provider_headers.get("content-type") or "").strip() or None,
+                content_encoding=client_content_encoding,
+                proxy=proxy_snapshot,
+                tls_profile=tls_profile,
+                timeouts=ExecutionPlanTimeouts(
+                    connect_ms=int(config.http_connect_timeout * 1000),
+                    read_ms=int(config.http_read_timeout * 1000),
+                    write_ms=int(config.http_write_timeout * 1000),
+                    pool_ms=int(config.http_pool_timeout * 1000),
+                    total_ms=None,
+                ),
+            )
+
+            if is_remote_contract_eligible(rust_plan):
+                try:
+                    rust_stream = await RustExecutorClient().execute_stream(rust_plan)
+                except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+                    logger.warning(
+                        "[{}] Rust executor stream 不可用，回退 Python 执行: {}",
+                        self.request_id,
+                        exc,
+                    )
+                else:
+                    ctx.status_code = rust_stream.status_code
+                    ctx.response_headers = dict(rust_stream.headers)
+                    ctx.set_proxy_timing(ctx.response_headers)
+                    if envelope:
+                        envelope.on_http_status(
+                            base_url=ctx.selected_base_url,
+                            status_code=ctx.status_code,
+                        )
+
+                    try:
+                        if ctx.status_code >= 400:
+                            error_chunks: list[bytes] = []
+                            async for chunk in rust_stream.byte_iterator:
+                                if chunk:
+                                    error_chunks.append(chunk)
+                                if sum(len(item) for item in error_chunks) >= 4000:
+                                    break
+                            error_body = b"".join(error_chunks)[:4000].decode(
+                                "utf-8",
+                                errors="replace",
+                            )
+                            request = httpx.Request("POST", url, headers=provider_headers)
+                            response = httpx.Response(
+                                ctx.status_code,
+                                request=request,
+                                headers=rust_stream.headers,
+                                content=b"".join(error_chunks),
+                            )
+                            error = httpx.HTTPStatusError(
+                                f"Upstream status error: {ctx.status_code}",
+                                request=request,
+                                response=response,
+                            )
+                            error.upstream_response = error_body  # type: ignore[attr-defined]
+                            raise error
+
+                        prefetched_chunks = await stream_processor.prefetch_and_check_error(
+                            rust_stream.byte_iterator,
+                            provider,
+                            endpoint,
+                            ctx,
+                            max_prefetch_lines=config.stream_prefetch_lines,
+                        )
+                    except Exception:
+                        await rust_stream.response_ctx.__aexit__(None, None, None)
+                        raise
+
+                    return stream_processor.create_response_stream(
+                        ctx,
+                        rust_stream.byte_iterator,
+                        rust_stream.response_ctx,
+                        prefetched_chunks,
+                        start_time=self.start_time,
+                    )
+
         # 流式请求使用 stream_first_byte_timeout 作为首字节超时
         # 优先使用 Provider 配置，否则使用全局配置
-        request_timeout = provider.stream_first_byte_timeout or config.stream_first_byte_timeout
+        request_timeout = (
+            getattr(provider, "stream_first_byte_timeout", None) or config.stream_first_byte_timeout
+        )
 
         # 获取 HTTP 客户端（支持代理配置，Key 级别优先于 Provider 级别）
         # 使用连接池复用客户端，避免每次流式请求都新建 TCP/TLS 连接
         from src.clients.http_client import HTTPClientPool
         from src.services.proxy_node.resolver import (
             build_stream_kwargs_async,
-            resolve_delegate_config_async,
         )
 
-        delegate_cfg = await resolve_delegate_config_async(effective_proxy)
         http_client = await HTTPClientPool.get_upstream_client(
             delegate_cfg,
             proxy_config=effective_proxy,

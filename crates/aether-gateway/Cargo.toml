@@ -1,0 +1,26 @@
+[package]
+name = "aether-gateway"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust ingress gateway for Aether phase 3a transparent proxy"
+
+[dependencies]
+aether-contracts.workspace = true
+async-stream.workspace = true
+axum = { version = "0.8" }
+base64.workspace = true
+bytes.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+futures-util.workspace = true
+http.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid.workspace = true

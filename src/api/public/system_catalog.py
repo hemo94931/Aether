@@ -19,13 +19,15 @@ from src.api.handlers.base.request_builder import (
     build_test_request_body,
     get_provider_auth,
 )
+from src.clients.http_client import HTTPClientPool
 from src.clients.redis_client import get_redis_client
+from src.config.settings import config
 from src.core.logger import logger
 from src.database import get_db
 from src.database.database import get_pool_status
 from src.models.database import GlobalModel, Model, Provider, ProviderAPIKey, ProviderEndpoint
+from src.services.provider.provider_context import resolve_provider_proxy
 from src.services.provider.transport import build_provider_url
-from src.utils.ssl_utils import get_ssl_context
 
 router = APIRouter(tags=["System Catalog"])
 
@@ -96,6 +98,132 @@ def _select_provider(db: Session, provider_name: str | None) -> Provider | None:
 
     # 按优先级选择（provider_priority 最小的优先）
     return query.order_by(Provider.provider_priority.asc()).first()
+
+
+async def _build_test_connection_transport_context(
+    endpoint: ProviderEndpoint,
+    key: ProviderAPIKey,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, Any]:
+    from src.services.proxy_node.resolver import (
+        build_proxy_url_async,
+        get_system_proxy_config_async,
+        resolve_delegate_config_async,
+        resolve_effective_proxy,
+        resolve_proxy_info_async,
+    )
+    from src.services.request.executor_plan import ExecutionProxySnapshot
+
+    try:
+        effective_proxy = resolve_effective_proxy(
+            resolve_provider_proxy(endpoint=endpoint, key=key),
+            getattr(key, "proxy", None),
+        )
+        if not effective_proxy or not effective_proxy.get("enabled", True):
+            effective_proxy = await get_system_proxy_config_async()
+
+        delegate_cfg = await resolve_delegate_config_async(effective_proxy)
+        proxy_url: str | None = None
+        if effective_proxy and not (delegate_cfg and delegate_cfg.get("tunnel")):
+            proxy_url = await build_proxy_url_async(effective_proxy)
+
+        proxy_info = await resolve_proxy_info_async(effective_proxy)
+        proxy_snapshot = ExecutionProxySnapshot.from_proxy_info(
+            proxy_info,
+            proxy_url=proxy_url,
+            mode_override="tunnel" if delegate_cfg and delegate_cfg.get("tunnel") else None,
+            node_id_override=(
+                str(delegate_cfg.get("node_id") or "").strip() or None
+                if delegate_cfg and delegate_cfg.get("tunnel")
+                else None
+            ),
+        )
+        return effective_proxy, delegate_cfg, proxy_snapshot
+    except Exception as exc:
+        logger.warning(
+            "Failed to build test-connection transport context endpoint={} key={}: {}",
+            getattr(endpoint, "id", None),
+            getattr(key, "id", None),
+            exc,
+        )
+        return None, None, None
+
+
+async def _try_rust_test_connection_response(
+    *,
+    request_id: str,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    provider_name: str,
+    provider_id: str | None,
+    endpoint_id: str | None,
+    key_id: str | None,
+    api_format: str,
+    model_name: str,
+    proxy_snapshot: Any,
+) -> httpx.Response | None:
+    import json
+
+    from src.services.request.executor_plan import (
+        ExecutionPlan,
+        ExecutionPlanTimeouts,
+        build_execution_plan_body,
+    )
+    from src.services.request.rust_executor_client import (
+        RustExecutorClient,
+        RustExecutorClientError,
+    )
+
+    if config.executor_backend != "rust":
+        return None
+
+    try:
+        result = await RustExecutorClient().execute_sync_json(
+            ExecutionPlan(
+                request_id=request_id,
+                candidate_id=None,
+                provider_name=provider_name,
+                provider_id=str(provider_id or ""),
+                endpoint_id=str(endpoint_id or ""),
+                key_id=str(key_id or ""),
+                method="POST",
+                url=url,
+                headers=dict(headers),
+                body=build_execution_plan_body(body, content_type="application/json"),
+                stream=False,
+                provider_api_format=api_format,
+                client_api_format=api_format,
+                model_name=model_name,
+                content_type="application/json",
+                proxy=proxy_snapshot,
+                timeouts=ExecutionPlanTimeouts(
+                    connect_ms=30_000,
+                    read_ms=30_000,
+                    write_ms=30_000,
+                    pool_ms=30_000,
+                    total_ms=30_000,
+                ),
+            )
+        )
+    except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+        logger.warning("Rust test-connection fallback url={}: {}", url, exc)
+        return None
+
+    response_headers = dict(result.headers)
+    if result.response_json is not None:
+        response_headers.setdefault("content-type", "application/json")
+        response_body = json.dumps(result.response_json, ensure_ascii=False).encode("utf-8")
+    elif result.response_body_bytes is not None:
+        response_body = result.response_body_bytes
+    else:
+        response_body = b""
+
+    return httpx.Response(
+        status_code=result.status_code,
+        request=httpx.Request("POST", url, headers=headers),
+        headers=response_headers,
+        content=response_body,
+    )
 
 
 # ============== 端点 ==============
@@ -375,11 +503,33 @@ async def test_connection(
             key=key,
             decrypted_auth_config=auth_info.decrypted_auth_config if auth_info else None,
         )
+        proxy_config, delegate_cfg, proxy_snapshot = await _build_test_connection_transport_context(
+            endpoint,
+            key,
+        )
 
-        async with httpx.AsyncClient(timeout=30.0, verify=get_ssl_context()) as client:
+        resp = await _try_rust_test_connection_response(
+            request_id=f"test-connection:{selected_provider.id}:{model}",
+            url=url,
+            headers=provider_headers,
+            body=provider_payload,
+            provider_name=selected_provider.name,
+            provider_id=getattr(selected_provider, "id", None),
+            endpoint_id=getattr(endpoint, "id", None),
+            key_id=getattr(key, "id", None),
+            api_format=format_value,
+            model_name=model,
+            proxy_snapshot=proxy_snapshot,
+        )
+        if resp is None:
+            client = await HTTPClientPool.get_upstream_client(
+                delegate_cfg,
+                proxy_config=proxy_config,
+            )
             resp = await client.post(url, json=provider_payload, headers=provider_headers)
-            resp.raise_for_status()
-            response = resp.json()
+
+        resp.raise_for_status()
+        response = resp.json()
 
         return {
             "status": "success",

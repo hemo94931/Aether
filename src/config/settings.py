@@ -192,6 +192,20 @@ class Config:
         # HTTP_REQUEST_TIMEOUT: 非流式请求整体超时（秒），默认 300 秒
         self.http_request_timeout = float(os.getenv("HTTP_REQUEST_TIMEOUT", "300.0"))
 
+        # 内部 executor 配置
+        # EXECUTOR_BACKEND:
+        # - rust: 当前 pioneer 分支默认，优先将可序列化的执行计划转发给 Rust executor
+        # - python: 显式回退到现有 httpx 路径
+        self.executor_backend = os.getenv("EXECUTOR_BACKEND", "rust").strip().lower()
+        self.executor_transport = os.getenv("EXECUTOR_TRANSPORT", "unix_socket").strip().lower()
+        self.executor_socket_path = os.getenv(
+            "EXECUTOR_SOCKET_PATH", "/tmp/aether-executor.sock"
+        ).strip()
+        self.executor_base_url = os.getenv("EXECUTOR_BASE_URL", "http://127.0.0.1:5219").strip()
+        self.executor_request_timeout = float(
+            os.getenv("EXECUTOR_REQUEST_TIMEOUT", str(self.http_request_timeout))
+        )
+
         # HTTP 连接池配置
         # HTTP_MAX_CONNECTIONS: 最大连接数，影响并发能力
         #   - 每个连接占用一个 socket，过多会耗尽系统资源

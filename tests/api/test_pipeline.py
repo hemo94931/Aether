@@ -529,6 +529,101 @@ class TestPipelineAuthentication:
         assert exc_info.value.status_code == 403
         assert "锁定" in str(exc_info.value.detail)
 
+    @pytest.mark.asyncio
+    async def test_authenticate_client_reuses_trusted_gateway_auth_context(
+        self, pipeline: ApiRequestPipeline
+    ) -> None:
+        mock_request = MagicMock()
+        mock_request.headers = {
+            "x-aether-gateway": "rust-phase3b",
+            "x-aether-auth-user-id": "user-123",
+            "x-aether-auth-api-key-id": "key-123",
+            "x-aether-auth-balance-remaining": "42.5",
+            "x-aether-auth-access-allowed": "true",
+        }
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.state = MagicMock()
+
+        db_user = MagicMock()
+        db_user.id = "user-123"
+        db_user.is_active = True
+        db_user.is_deleted = False
+        db_api_key = MagicMock()
+        db_api_key.id = "key-123"
+        db_api_key.user_id = "user-123"
+        db_api_key.is_active = True
+        db_api_key.is_locked = False
+        db_api_key.is_standalone = False
+        db_api_key.expires_at = None
+
+        mock_db = MagicMock()
+        user_query = MagicMock()
+        user_query.filter.return_value.first.return_value = db_user
+        api_key_query = MagicMock()
+        api_key_query.filter.return_value.first.return_value = db_api_key
+        mock_db.query.side_effect = [user_query, api_key_query]
+
+        mock_adapter = MagicMock()
+        mock_adapter.extract_api_key.side_effect = AssertionError("trusted auth should short-circuit")
+
+        with patch.object(
+            pipeline.auth_service,
+            "authenticate_api_key_threadsafe",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("threadsafe auth should not be called"),
+        ):
+            user, api_key = await pipeline._authenticate_client(mock_request, mock_db, mock_adapter)
+
+        assert user == db_user
+        assert api_key == db_api_key
+        assert mock_request.state.user_id == "user-123"
+        assert mock_request.state.api_key_id == "key-123"
+        assert mock_request.state.prefetched_balance_remaining == 42.5
+
+    @pytest.mark.asyncio
+    async def test_authenticate_client_trusted_gateway_balance_denied(
+        self, pipeline: ApiRequestPipeline
+    ) -> None:
+        mock_request = MagicMock()
+        mock_request.headers = {
+            "x-aether-gateway": "rust-phase3b",
+            "x-aether-auth-user-id": "user-123",
+            "x-aether-auth-api-key-id": "key-123",
+            "x-aether-auth-balance-remaining": "0",
+            "x-aether-auth-access-allowed": "false",
+        }
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.state = MagicMock()
+
+        db_user = MagicMock()
+        db_user.id = "user-123"
+        db_user.is_active = True
+        db_user.is_deleted = False
+        db_api_key = MagicMock()
+        db_api_key.id = "key-123"
+        db_api_key.user_id = "user-123"
+        db_api_key.is_active = True
+        db_api_key.is_locked = False
+        db_api_key.is_standalone = False
+        db_api_key.expires_at = None
+
+        mock_db = MagicMock()
+        user_query = MagicMock()
+        user_query.filter.return_value.first.return_value = db_user
+        api_key_query = MagicMock()
+        api_key_query.filter.return_value.first.return_value = db_api_key
+        mock_db.query.side_effect = [user_query, api_key_query]
+
+        mock_adapter = MagicMock()
+        mock_adapter.extract_api_key.side_effect = AssertionError("trusted auth should short-circuit")
+
+        from src.core.exceptions import BalanceInsufficientException
+
+        with pytest.raises(BalanceInsufficientException):
+            await pipeline._authenticate_client(mock_request, mock_db, mock_adapter)
+
 
 class TestPipelineUserRateLimit:
     @pytest.fixture

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from src.services.proxy_node.service import ProxyNodeService, build_heartbeat_ack
+
+from .common import ensure_loopback
 
 router = APIRouter(prefix="/api/internal/hub", tags=["Internal - Hub"], include_in_schema=False)
 
@@ -31,18 +32,9 @@ class HubNodeStatusRequest(BaseModel):
     conn_count: int = Field(0, ge=0)
 
 
-def _ensure_loopback(request: Request) -> None:
-    host = request.client.host if request.client else ""
-    try:
-        if not ipaddress.ip_address(host).is_loopback:
-            raise ValueError(host)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail="loopback access only") from exc
-
-
 @router.post("/heartbeat")
 async def hub_heartbeat(request: Request, payload: HubHeartbeatRequest) -> dict[str, Any]:
-    _ensure_loopback(request)
+    ensure_loopback(request)
 
     def _sync_apply() -> dict[str, Any]:
         from src.database import create_session
@@ -74,7 +66,7 @@ async def hub_heartbeat(request: Request, payload: HubHeartbeatRequest) -> dict[
 
 @router.post("/node-status")
 async def hub_node_status(request: Request, payload: HubNodeStatusRequest) -> dict[str, Any]:
-    _ensure_loopback(request)
+    ensure_loopback(request)
 
     def _sync_apply() -> dict[str, Any]:
         from src.database import create_session

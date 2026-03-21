@@ -6,10 +6,12 @@ Video Handler 基类
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
@@ -28,8 +30,6 @@ from src.services.billing.rule_service import BillingRuleLookupResult
 from src.services.scheduling.aware_scheduler import ProviderCandidate
 
 if TYPE_CHECKING:
-    import httpx
-
     from src.services.candidate.submit import SubmitOutcome
 
 
@@ -165,6 +165,109 @@ class VideoHandlerBase(ABC):
         return JSONResponse(
             status_code=response.status_code,
             content={"error": fallback_payload},
+        )
+
+    async def _try_rust_sync_http_response(
+        self,
+        *,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: Any = None,
+        provider_name: str | None = None,
+        provider_id: str | None = None,
+        endpoint_id: str | None = None,
+        key_id: str | None = None,
+        provider_api_format: str | None = None,
+        client_api_format: str | None = None,
+        model_name: str | None = None,
+        content_type: str | None = None,
+        content_encoding: str | None = None,
+        proxy: Any = None,
+        tls_profile: str | None = None,
+        request_timeout_ms: int = 300_000,
+        connect_timeout_ms: int = 30_000,
+        pool_timeout_ms: int = 30_000,
+        log_label: str = "VideoRequest",
+    ) -> httpx.Response | None:
+        from src.services.request.executor_plan import (
+            ExecutionPlan,
+            ExecutionPlanTimeouts,
+            build_execution_plan_body,
+        )
+        from src.services.request.rust_executor_client import (
+            RustExecutorClient,
+            RustExecutorClientError,
+        )
+
+        if config.executor_backend != "rust":
+            return None
+
+        request_headers = dict(headers)
+        if (
+            body is not None
+            and content_type
+            and not any(str(key).lower() == "content-type" for key in request_headers)
+        ):
+            request_headers["content-type"] = content_type
+
+        plan = ExecutionPlan(
+            request_id=str(self.request_id or ""),
+            candidate_id=None,
+            provider_name=str(provider_name or ""),
+            provider_id=str(provider_id or ""),
+            endpoint_id=str(endpoint_id or ""),
+            key_id=str(key_id or ""),
+            method=str(method or "POST").upper(),
+            url=url,
+            headers=request_headers,
+            body=build_execution_plan_body(body, content_type=content_type),
+            stream=False,
+            provider_api_format=str(provider_api_format or self.FORMAT_ID),
+            client_api_format=str(client_api_format or self.FORMAT_ID),
+            model_name=str(model_name or ""),
+            content_type=content_type,
+            content_encoding=content_encoding,
+            proxy=proxy,
+            tls_profile=tls_profile,
+            timeouts=ExecutionPlanTimeouts(
+                connect_ms=connect_timeout_ms,
+                read_ms=request_timeout_ms,
+                write_ms=request_timeout_ms,
+                pool_ms=pool_timeout_ms,
+                total_ms=request_timeout_ms,
+            ),
+        )
+
+        try:
+            rust_result = await RustExecutorClient().execute_sync_json(plan)
+        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "[{}] Rust executor unavailable request_id={} method={} url={}: {}",
+                log_label,
+                self.request_id,
+                method,
+                url,
+                sanitize_error_message(str(exc)),
+            )
+            return None
+
+        response_headers = dict(rust_result.headers)
+        if rust_result.response_json is not None:
+            response_headers.setdefault("content-type", "application/json")
+            response_body = json.dumps(rust_result.response_json, ensure_ascii=False).encode(
+                "utf-8"
+            )
+        elif rust_result.response_body_bytes is not None:
+            response_body = rust_result.response_body_bytes
+        else:
+            response_body = b""
+
+        return httpx.Response(
+            status_code=rust_result.status_code,
+            request=httpx.Request(str(method or "POST").upper(), url, headers=request_headers),
+            headers=response_headers,
+            content=response_body,
         )
 
     def _format_error_payload(self, error: dict[str, Any], status_code: int) -> dict[str, Any]:

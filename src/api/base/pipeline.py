@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import time
 from datetime import datetime, timezone
 from enum import Enum
@@ -42,6 +43,12 @@ QUIET_POLLING_PATHS: set[str] = {
     "/api/admin/health/status",
     "/api/wallet/today-cost",
 }
+
+TRUSTED_GATEWAY_HEADER = "x-aether-gateway"
+TRUSTED_AUTH_USER_ID_HEADER = "x-aether-auth-user-id"
+TRUSTED_AUTH_API_KEY_ID_HEADER = "x-aether-auth-api-key-id"
+TRUSTED_AUTH_BALANCE_HEADER = "x-aether-auth-balance-remaining"
+TRUSTED_AUTH_ACCESS_ALLOWED_HEADER = "x-aether-auth-access-allowed"
 
 
 class ApiRequestPipeline:
@@ -349,6 +356,10 @@ class ApiRequestPipeline:
     async def _authenticate_client(
         self, request: Request, db: Session, adapter: ApiAdapter, **_kw: object
     ) -> tuple[User, ApiKey]:
+        trusted_auth = self._try_trusted_gateway_auth(request, db)
+        if trusted_auth is not None:
+            return trusted_auth
+
         client_api_key = adapter.extract_api_key(request)
         if not client_api_key:
             raise HTTPException(status_code=401, detail="请提供API密钥")
@@ -392,6 +403,86 @@ class ApiRequestPipeline:
             raise BalanceInsufficientException(balance_type="USD", remaining=remaining)
 
         return db_user, db_api_key
+
+    def _try_trusted_gateway_auth(
+        self,
+        request: Request,
+        db: Session,
+    ) -> tuple[User, ApiKey] | None:
+        if not self._is_trusted_gateway_request(request):
+            return None
+
+        user_id = str(request.headers.get(TRUSTED_AUTH_USER_ID_HEADER) or "").strip()
+        api_key_id = str(request.headers.get(TRUSTED_AUTH_API_KEY_ID_HEADER) or "").strip()
+        if not user_id or not api_key_id:
+            return None
+
+        db_user = db.query(User).filter(User.id == user_id).first()
+        db_api_key = db.query(ApiKey).filter(ApiKey.id == api_key_id).first()
+        if not db_user or not db_api_key:
+            return None
+        if not db_user.is_active or db_user.is_deleted:
+            return None
+        if not db_api_key.is_active:
+            return None
+        if db_api_key.is_locked and not db_api_key.is_standalone:
+            raise HTTPException(status_code=403, detail="该密钥已被管理员锁定，请联系管理员")
+        if db_api_key.user_id != db_user.id:
+            return None
+        if db_api_key.expires_at:
+            expires_at = db_api_key.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at < datetime.now(timezone.utc):
+                return None
+
+        balance_remaining = self._parse_trusted_balance_remaining(
+            request.headers.get(TRUSTED_AUTH_BALANCE_HEADER)
+        )
+        access_allowed = self._parse_trusted_bool_header(
+            request.headers.get(TRUSTED_AUTH_ACCESS_ALLOWED_HEADER),
+            default=True,
+        )
+
+        request.state.user_id = db_user.id
+        request.state.api_key_id = db_api_key.id
+        request.state.prefetched_balance_remaining = balance_remaining
+
+        if not access_allowed:
+            raise BalanceInsufficientException(balance_type="USD", remaining=balance_remaining)
+
+        return db_user, db_api_key
+
+    @staticmethod
+    def _is_trusted_gateway_request(request: Request) -> bool:
+        gateway_marker = str(request.headers.get(TRUSTED_GATEWAY_HEADER) or "").strip().lower()
+        if not gateway_marker.startswith("rust-phase3"):
+            return False
+
+        host = request.client.host if request.client else ""
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _parse_trusted_balance_remaining(value: str | None) -> float | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_trusted_bool_header(value: str | None, *, default: bool) -> bool:
+        raw = str(value or "").strip().lower()
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off"}:
+            return False
+        return default
 
     async def _try_token_prefix_auth(
         self, token: str, request: Request, db: Session
