@@ -81,7 +81,7 @@ class FailoverEngine:
         """将同步 DB 操作放到线程池执行，避免阻塞 asyncio 事件循环。
 
         当事件循环被同步 db.commit() / db.execute() 阻塞时，
-        Hub PING 心跳无法发送，导致 worker idle timeout 断连，整个服务不可用。
+        tunnel relay PING 心跳无法发送，导致 worker idle timeout 断连，整个服务不可用。
         """
         return await asyncio.to_thread(func)
 

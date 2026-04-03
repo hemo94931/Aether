@@ -14,7 +14,7 @@ from src.services.provider_ops.types import (
     ProviderActionType,
     ProviderOpsConfig,
 )
-from src.services.request.rust_executor_client import RustExecutorSyncResult
+from src.services.request.execution_runtime_client import ExecutionRuntimeSyncResult
 
 
 class _FakeDB:
@@ -133,7 +133,7 @@ async def test_verify_auth_prefers_rust_executor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from src.services.provider_ops import service as module
-    from src.services.request import rust_executor_client as rust_module
+    from src.services.request import execution_runtime_client as runtime_module
 
     service = ProviderOpsService(_FakeDB())
     architecture = _SuccessArchitecture()
@@ -154,15 +154,19 @@ async def test_verify_auth_prefers_rust_executor(
 
     captured: dict[str, Any] = {}
 
-    async def _fake_execute_sync_json(self: object, plan: Any) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: Any) -> ExecutionRuntimeSyncResult:
         captured["plan"] = plan
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"ok": True},
             headers={"content-type": "application/json"},
         )
 
-    monkeypatch.setattr(rust_module.RustExecutorClient, "execute_sync_json", _fake_execute_sync_json)
+    monkeypatch.setattr(
+        runtime_module.ExecutionRuntimeClient,
+        "execute_sync_json",
+        _fake_execute_sync_json,
+    )
 
     result = await service.verify_auth(
         base_url="https://example.com",

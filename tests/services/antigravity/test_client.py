@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 import src.services.provider.adapters.antigravity.rust_http as antigravity_rust_http_mod
-import src.services.request.rust_executor_client as rust_client_mod
+import src.services.request.execution_runtime_client as runtime_client_mod
 from src.services.provider.adapters.antigravity.client import (
     fetch_available_models,
     load_code_assist,
@@ -19,7 +19,7 @@ from src.services.provider.adapters.antigravity.constants import (
     PROD_BASE_URL,
     SANDBOX_BASE_URL,
 )
-from src.services.request.rust_executor_client import RustExecutorSyncResult
+from src.services.request.execution_runtime_client import ExecutionRuntimeSyncResult
 
 # ---------------------------------------------------------------------------
 # load_code_assist
@@ -88,10 +88,10 @@ async def test_load_code_assist_uses_rust_executor(
 ) -> None:
     monkeypatch.setattr(antigravity_rust_http_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         AsyncMock(
-            return_value=RustExecutorSyncResult(
+            return_value=ExecutionRuntimeSyncResult(
                 status_code=200,
                 headers={"content-type": "application/json"},
                 response_json={"cloudaicompanionProject": "project-rust"},
@@ -110,7 +110,7 @@ async def test_load_code_assist_uses_rust_executor(
     data = await load_code_assist("tok", proxy_config=None, timeout_seconds=1.0)
 
     assert data["cloudaicompanionProject"] == "project-rust"
-    plan = rust_client_mod.RustExecutorClient.execute_sync_json.await_args.args[0]
+    plan = runtime_client_mod.ExecutionRuntimeClient.execute_sync_json.await_args.args[0]
     assert plan.url == f"{SANDBOX_BASE_URL}/v1internal:loadCodeAssist"
     assert plan.provider_api_format == "antigravity:load_code_assist"
 
@@ -176,10 +176,10 @@ async def test_fetch_available_models_uses_rust_executor(
 ) -> None:
     monkeypatch.setattr(antigravity_rust_http_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         AsyncMock(
-            return_value=RustExecutorSyncResult(
+            return_value=ExecutionRuntimeSyncResult(
                 status_code=200,
                 headers={"content-type": "application/json"},
                 response_json={"models": {"claude-sonnet-4": {"displayName": "Claude Sonnet 4"}}},
@@ -203,7 +203,7 @@ async def test_fetch_available_models_uses_rust_executor(
     )
 
     assert "models" in data
-    plan = rust_client_mod.RustExecutorClient.execute_sync_json.await_args.args[0]
+    plan = runtime_client_mod.ExecutionRuntimeClient.execute_sync_json.await_args.args[0]
     assert plan.url == f"{DAILY_BASE_URL}/v1internal:fetchAvailableModels"
     assert plan.provider_api_format == "antigravity:fetch_available_models"
     assert plan.body.json_body == {"project": "project-1"}
@@ -215,10 +215,10 @@ async def test_onboard_user_uses_rust_executor(
 ) -> None:
     monkeypatch.setattr(antigravity_rust_http_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         AsyncMock(
-            return_value=RustExecutorSyncResult(
+            return_value=ExecutionRuntimeSyncResult(
                 status_code=200,
                 headers={"content-type": "application/json"},
                 response_json={
@@ -246,7 +246,7 @@ async def test_onboard_user_uses_rust_executor(
     )
 
     assert project_id == "project-onboard"
-    plan = rust_client_mod.RustExecutorClient.execute_sync_json.await_args.args[0]
+    plan = runtime_client_mod.ExecutionRuntimeClient.execute_sync_json.await_args.args[0]
     assert plan.url == f"{PROD_BASE_URL}/v1internal:onboardUser"
     assert plan.provider_api_format == "antigravity:onboard_user"
 

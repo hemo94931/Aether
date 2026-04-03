@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 use aether_contracts::{ExecutionPlan, ExecutionTimeouts, RequestBody};
 use aether_runtime::{DistributedConcurrencyGate, RedisDistributedConcurrencyConfig};
 use aether_testkit::{
-    init_test_runtime_for, run_multi_url_http_load_probe, ExecutorHarness, ExecutorHarnessConfig,
-    GatewayHarness, GatewayHarnessConfig, HttpLoadProbeConfig, HttpLoadProbeResponseMode,
-    HubHarness, HubHarnessConfig, ManagedRedisServer, MultiUrlHttpLoadProbeResult, SpawnedServer,
+    init_test_runtime_for, run_multi_url_http_load_probe, ExecutionRuntimeHarness,
+    ExecutionRuntimeHarnessConfig, GatewayHarness, GatewayHarnessConfig, HttpLoadProbeConfig,
+    HttpLoadProbeResponseMode, ManagedRedisServer, MultiUrlHttpLoadProbeResult, SpawnedServer,
+    TunnelHarness, TunnelHarnessConfig,
 };
 use axum::body::to_bytes;
 use axum::extract::Request;
@@ -22,18 +23,20 @@ use serde_json::json;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
+const PROXY_TUNNEL_PATH: &str = "/api/internal/proxy-tunnel";
+
 #[derive(Debug, Clone)]
 struct MultiInstanceAdmissionBaselineConfig {
     gateway_requests: usize,
     gateway_concurrency: usize,
-    executor_requests: usize,
-    executor_concurrency: usize,
-    hub_attempts: usize,
-    hub_concurrency: usize,
-    hub_hold: Duration,
+    execution_runtime_requests: usize,
+    execution_runtime_concurrency: usize,
+    tunnel_attempts: usize,
+    tunnel_concurrency: usize,
+    tunnel_hold: Duration,
     upstream_delay: Duration,
     request_limit: usize,
-    hub_request_limit: usize,
+    tunnel_request_limit: usize,
     timeout: Duration,
     output_path: Option<PathBuf>,
     redis_url: Option<String>,
@@ -44,14 +47,14 @@ impl Default for MultiInstanceAdmissionBaselineConfig {
         Self {
             gateway_requests: 200,
             gateway_concurrency: 20,
-            executor_requests: 200,
-            executor_concurrency: 20,
-            hub_attempts: 40,
-            hub_concurrency: 10,
-            hub_hold: Duration::from_millis(100),
+            execution_runtime_requests: 200,
+            execution_runtime_concurrency: 20,
+            tunnel_attempts: 40,
+            tunnel_concurrency: 10,
+            tunnel_hold: Duration::from_millis(100),
             upstream_delay: Duration::from_millis(100),
             request_limit: 8,
-            hub_request_limit: 4,
+            tunnel_request_limit: 4,
             timeout: Duration::from_secs(10),
             output_path: None,
             redis_url: None,
@@ -64,8 +67,8 @@ struct MultiInstanceAdmissionBaselineReport {
     suite: &'static str,
     redis_url: String,
     gateway_sync: MultiUrlHttpLoadProbeResult,
-    executor_sync: MultiUrlHttpLoadProbeResult,
-    hub_proxy: WebSocketAdmissionProbeResult,
+    execution_runtime_sync: MultiUrlHttpLoadProbeResult,
+    tunnel_proxy: WebSocketAdmissionProbeResult,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,9 +126,9 @@ async fn run_suite(
 
     let (gateway_urls, _gateways) =
         start_gateway_pair(&redis_url, upstream.base_url(), config).await?;
-    let (executor_urls, _executors) =
-        start_executor_pair(&redis_url, upstream.base_url(), config).await?;
-    let (hub_urls, _hubs) = start_hub_pair(&redis_url, config).await?;
+    let (execution_runtime_urls, _runtimes) =
+        start_execution_runtime_pair(&redis_url, upstream.base_url(), config).await?;
+    let (tunnel_urls, _tunnels) = start_tunnel_pair(&redis_url, config).await?;
 
     let gateway_sync = run_multi_url_http_load_probe(
         &gateway_sync_probe_config(&gateway_urls, config),
@@ -133,13 +136,13 @@ async fn run_suite(
     )
     .await
     .map_err(std::io::Error::other)?;
-    let executor_sync = run_multi_url_http_load_probe(
-        &executor_sync_probe_config(&executor_urls, upstream.base_url(), config),
-        &executor_urls,
+    let execution_runtime_sync = run_multi_url_http_load_probe(
+        &execution_runtime_sync_probe_config(&execution_runtime_urls, upstream.base_url(), config),
+        &execution_runtime_urls,
     )
     .await
     .map_err(std::io::Error::other)?;
-    let hub_proxy = run_hub_proxy_connection_probe(&hub_urls, config)
+    let tunnel_proxy = run_tunnel_proxy_connection_probe(&tunnel_urls, config)
         .await
         .map_err(std::io::Error::other)?;
 
@@ -147,8 +150,8 @@ async fn run_suite(
         suite: "multi_instance_admission_baseline",
         redis_url,
         gateway_sync,
-        executor_sync,
-        hub_proxy,
+        execution_runtime_sync,
+        tunnel_proxy,
     })
 }
 
@@ -171,18 +174,20 @@ async fn start_gateway_pair(
     )?;
     let gateway_a = GatewayHarness::start(GatewayHarnessConfig {
         upstream_base_url: upstream_base_url.to_string(),
-        control_base_url: None,
-        executor_base_url: None,
+        data_config: None,
         max_in_flight_requests: None,
         distributed_request_gate: Some(gate_a),
+        tunnel_instance_id: None,
+        tunnel_relay_base_url: None,
     })
     .await?;
     let gateway_b = GatewayHarness::start(GatewayHarnessConfig {
         upstream_base_url: upstream_base_url.to_string(),
-        control_base_url: None,
-        executor_base_url: None,
+        data_config: None,
         max_in_flight_requests: None,
         distributed_request_gate: Some(gate_b),
+        tunnel_instance_id: None,
+        tunnel_relay_base_url: None,
     })
     .await?;
     Ok((
@@ -194,29 +199,29 @@ async fn start_gateway_pair(
     ))
 }
 
-async fn start_executor_pair(
+async fn start_execution_runtime_pair(
     redis_url: &str,
     upstream_base_url: &str,
     config: &MultiInstanceAdmissionBaselineConfig,
-) -> Result<(Vec<String>, Vec<ExecutorHarness>), Box<dyn std::error::Error>> {
+) -> Result<(Vec<String>, Vec<ExecutionRuntimeHarness>), Box<dyn std::error::Error>> {
     let gate_a = distributed_request_gate(
-        "executor_requests_distributed",
+        "execution_runtime_requests_distributed",
         config.request_limit,
         redis_url,
-        "executor-a",
+        "execution-runtime-a",
     )?;
     let gate_b = distributed_request_gate(
-        "executor_requests_distributed",
+        "execution_runtime_requests_distributed",
         config.request_limit,
         redis_url,
-        "executor-a",
+        "execution-runtime-a",
     )?;
-    let executor_a = ExecutorHarness::start(ExecutorHarnessConfig {
+    let runtime_a = ExecutionRuntimeHarness::start(ExecutionRuntimeHarnessConfig {
         max_in_flight_requests: None,
         distributed_request_gate: Some(gate_a),
     })
     .await?;
-    let executor_b = ExecutorHarness::start(ExecutorHarnessConfig {
+    let runtime_b = ExecutionRuntimeHarness::start(ExecutionRuntimeHarnessConfig {
         max_in_flight_requests: None,
         distributed_request_gate: Some(gate_b),
     })
@@ -224,45 +229,53 @@ async fn start_executor_pair(
     let _ = upstream_base_url;
     Ok((
         vec![
-            format!("{}/v1/execute/sync", executor_a.base_url()),
-            format!("{}/v1/execute/sync", executor_b.base_url()),
+            format!("{}/v1/execute/sync", runtime_a.base_url()),
+            format!("{}/v1/execute/sync", runtime_b.base_url()),
         ],
-        vec![executor_a, executor_b],
+        vec![runtime_a, runtime_b],
     ))
 }
 
-async fn start_hub_pair(
+async fn start_tunnel_pair(
     redis_url: &str,
     config: &MultiInstanceAdmissionBaselineConfig,
-) -> Result<(Vec<String>, Vec<HubHarness>), Box<dyn std::error::Error>> {
+) -> Result<(Vec<String>, Vec<TunnelHarness>), Box<dyn std::error::Error>> {
     let gate_a = distributed_request_gate(
-        "hub_requests_distributed",
-        config.hub_request_limit,
+        "tunnel_requests_distributed",
+        config.tunnel_request_limit,
         redis_url,
-        "hub-a",
+        "tunnel-a",
     )?;
     let gate_b = distributed_request_gate(
-        "hub_requests_distributed",
-        config.hub_request_limit,
+        "tunnel_requests_distributed",
+        config.tunnel_request_limit,
         redis_url,
-        "hub-a",
+        "tunnel-a",
     )?;
-    let hub_a = HubHarness::start(HubHarnessConfig {
+    let tunnel_a = TunnelHarness::start(TunnelHarnessConfig {
         distributed_request_gate: Some(gate_a),
-        ..HubHarnessConfig::default()
+        ..TunnelHarnessConfig::default()
     })
     .await?;
-    let hub_b = HubHarness::start(HubHarnessConfig {
+    let tunnel_b = TunnelHarness::start(TunnelHarnessConfig {
         distributed_request_gate: Some(gate_b),
-        ..HubHarnessConfig::default()
+        ..TunnelHarnessConfig::default()
     })
     .await?;
     Ok((
         vec![
-            format!("{}/proxy", hub_a.base_url().replace("http://", "ws://")),
-            format!("{}/proxy", hub_b.base_url().replace("http://", "ws://")),
+            format!(
+                "{}{}",
+                tunnel_a.base_url().replace("http://", "ws://"),
+                PROXY_TUNNEL_PATH
+            ),
+            format!(
+                "{}{}",
+                tunnel_b.base_url().replace("http://", "ws://"),
+                PROXY_TUNNEL_PATH
+            ),
         ],
-        vec![hub_a, hub_b],
+        vec![tunnel_a, tunnel_b],
     ))
 }
 
@@ -302,7 +315,7 @@ fn gateway_sync_probe_config(
     probe
 }
 
-fn executor_sync_probe_config(
+fn execution_runtime_sync_probe_config(
     urls: &[String],
     upstream_base_url: &str,
     config: &MultiInstanceAdmissionBaselineConfig,
@@ -318,8 +331,8 @@ fn executor_sync_probe_config(
             )))
             .expect("execution plan should serialize"),
         ),
-        total_requests: config.executor_requests,
-        concurrency: config.executor_concurrency,
+        total_requests: config.execution_runtime_requests,
+        concurrency: config.execution_runtime_concurrency,
         timeout: config.timeout,
         response_mode: HttpLoadProbeResponseMode::FullBody,
     }
@@ -409,16 +422,16 @@ fn build_delayed_upstream(delay: Duration) -> Router {
     )
 }
 
-async fn run_hub_proxy_connection_probe(
+async fn run_tunnel_proxy_connection_probe(
     urls: &[String],
     config: &MultiInstanceAdmissionBaselineConfig,
 ) -> Result<WebSocketAdmissionProbeResult, String> {
     if urls.is_empty() {
-        return Err("hub proxy connection probe requires at least one target url".to_string());
+        return Err("tunnel proxy connection probe requires at least one target url".to_string());
     }
     let next_attempt = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let latencies_ms = Arc::new(tokio::sync::Mutex::new(Vec::with_capacity(
-        config.hub_attempts,
+        config.tunnel_attempts,
     )));
     let target_attempt_counts = Arc::new(tokio::sync::Mutex::new(BTreeMap::<String, usize>::new()));
     let status_counts = Arc::new(tokio::sync::Mutex::new(BTreeMap::<u16, usize>::new()));
@@ -428,7 +441,7 @@ async fn run_hub_proxy_connection_probe(
     let completed_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let mut workers = tokio::task::JoinSet::new();
-    for worker_index in 0..config.hub_concurrency {
+    for worker_index in 0..config.tunnel_concurrency {
         let urls = urls.to_vec();
         let next_attempt = Arc::clone(&next_attempt);
         let latencies_ms = Arc::clone(&latencies_ms);
@@ -439,8 +452,8 @@ async fn run_hub_proxy_connection_probe(
         let successful_attempts = Arc::clone(&successful_attempts);
         let completed_attempts = Arc::clone(&completed_attempts);
         let timeout = config.timeout;
-        let hold = config.hub_hold;
-        let total_attempts = config.hub_attempts;
+        let hold = config.tunnel_hold;
+        let total_attempts = config.tunnel_attempts;
 
         workers.spawn(async move {
             loop {
@@ -524,8 +537,8 @@ async fn run_hub_proxy_connection_probe(
 
     while let Some(result) = workers.join_next().await {
         result
-            .map_err(|err| format!("hub admission worker task failed: {err}"))?
-            .map_err(|err| format!("hub admission worker failed: {err}"))?;
+            .map_err(|err| format!("tunnel admission worker task failed: {err}"))?
+            .map_err(|err| format!("tunnel admission worker failed: {err}"))?;
     }
 
     let mut latencies = latencies_ms.lock().await.clone();
@@ -537,8 +550,8 @@ async fn run_hub_proxy_connection_probe(
     Ok(WebSocketAdmissionProbeResult {
         target_urls: urls.to_vec(),
         target_attempt_counts,
-        total_attempts: config.hub_attempts,
-        concurrency: config.hub_concurrency,
+        total_attempts: config.tunnel_attempts,
+        concurrency: config.tunnel_concurrency,
         completed_attempts: completed_attempts.load(std::sync::atomic::Ordering::Acquire),
         failed_attempts: failed_attempts.load(std::sync::atomic::Ordering::Acquire),
         rejected_attempts: rejected_attempts.load(std::sync::atomic::Ordering::Acquire),
@@ -585,22 +598,23 @@ fn parse_args(
                 config.gateway_concurrency =
                     next_value(&mut iter, "--gateway-concurrency")?.parse()?
             }
-            "--executor-requests" => {
-                config.executor_requests = next_value(&mut iter, "--executor-requests")?.parse()?
+            "--execution-runtime-requests" | "--executor-requests" => {
+                config.execution_runtime_requests = next_value(&mut iter, arg.as_str())?.parse()?
             }
-            "--executor-concurrency" => {
-                config.executor_concurrency =
-                    next_value(&mut iter, "--executor-concurrency")?.parse()?
+            "--execution-runtime-concurrency" | "--executor-concurrency" => {
+                config.execution_runtime_concurrency =
+                    next_value(&mut iter, arg.as_str())?.parse()?
             }
-            "--hub-attempts" => {
-                config.hub_attempts = next_value(&mut iter, "--hub-attempts")?.parse()?
+            "--tunnel-attempts" => {
+                config.tunnel_attempts = next_value(&mut iter, "--tunnel-attempts")?.parse()?
             }
-            "--hub-concurrency" => {
-                config.hub_concurrency = next_value(&mut iter, "--hub-concurrency")?.parse()?
+            "--tunnel-concurrency" => {
+                config.tunnel_concurrency =
+                    next_value(&mut iter, "--tunnel-concurrency")?.parse()?
             }
-            "--hub-hold-ms" => {
-                config.hub_hold =
-                    Duration::from_millis(next_value(&mut iter, "--hub-hold-ms")?.parse()?)
+            "--tunnel-hold-ms" => {
+                config.tunnel_hold =
+                    Duration::from_millis(next_value(&mut iter, "--tunnel-hold-ms")?.parse()?)
             }
             "--upstream-delay-ms" => {
                 config.upstream_delay =
@@ -609,8 +623,9 @@ fn parse_args(
             "--request-limit" => {
                 config.request_limit = next_value(&mut iter, "--request-limit")?.parse()?
             }
-            "--hub-request-limit" => {
-                config.hub_request_limit = next_value(&mut iter, "--hub-request-limit")?.parse()?
+            "--tunnel-request-limit" => {
+                config.tunnel_request_limit =
+                    next_value(&mut iter, "--tunnel-request-limit")?.parse()?
             }
             "--timeout-ms" => {
                 config.timeout =
@@ -651,6 +666,6 @@ fn next_value(
 
 fn print_usage() {
     eprintln!(
-        "usage: cargo run -p aether-testkit --bin multi_instance_admission_baseline -- [--gateway-requests 200] [--gateway-concurrency 20] [--executor-requests 200] [--executor-concurrency 20] [--hub-attempts 40] [--hub-concurrency 10] [--hub-hold-ms 100] [--upstream-delay-ms 100] [--request-limit 8] [--hub-request-limit 4] [--redis-url redis://127.0.0.1:6379/0] [--output /tmp/multi_instance_admission_baseline.json]"
+        "usage: cargo run -p aether-testkit --bin multi_instance_admission_baseline -- [--gateway-requests 200] [--gateway-concurrency 20] [--execution-runtime-requests 200] [--execution-runtime-concurrency 20] [--tunnel-attempts 40] [--tunnel-concurrency 10] [--tunnel-hold-ms 100] [--upstream-delay-ms 100] [--request-limit 8] [--tunnel-request-limit 4] [--redis-url redis://127.0.0.1:6379/0] [--output /tmp/multi_instance_admission_baseline.json]"
     );
 }

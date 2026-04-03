@@ -23,19 +23,19 @@ async def execute_kiro_rust_http_request(
     content_type: str | None = None,
     timeout_seconds: float = 30.0,
 ) -> httpx.Response | None:
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanBody,
         ExecutionPlanTimeouts,
         build_execution_plan_body,
         build_proxy_snapshot,
     )
-    from src.services.request.rust_executor_client import (
-        RustExecutorClient,
-        RustExecutorClientError,
+    from src.services.request.execution_runtime_client import (
+        ExecutionRuntimeClient,
+        ExecutionRuntimeClientError,
     )
 
-    if config.executor_backend != "rust":
+    if config.execution_runtime_backend != "rust":
         return None
 
     final_headers = dict(headers)
@@ -50,7 +50,7 @@ async def execute_kiro_rust_http_request(
 
     try:
         proxy_snapshot = await build_proxy_snapshot(proxy_config, label="Kiro")
-        result = await RustExecutorClient().execute_sync_json(
+        result = await ExecutionRuntimeClient().execute_sync_json(
             ExecutionPlan(
                 request_id=request_id,
                 candidate_id=None,
@@ -81,7 +81,7 @@ async def execute_kiro_rust_http_request(
                 ),
             )
         )
-    except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+    except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
         logger.warning("Kiro Rust HTTP fallback {} {}: {}", method, url, exc)
         return None
     except Exception as exc:

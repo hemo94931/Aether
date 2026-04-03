@@ -63,7 +63,7 @@ from src.database import get_db
 from src.models.database import Base, RequestCandidate
 from src.services.orchestration.candidate_resolver import CandidateResolver
 from src.services.scheduling.schemas import PoolCandidate, ProviderCandidate
-from src.services.request.executor_plan import ExecutionPlan, ExecutionPlanBody, PreparedExecutionPlan
+from src.services.request.execution_runtime_plan import ExecutionPlan, ExecutionPlanBody, PreparedExecutionPlan
 
 
 def _wait_until(predicate: Any, *, timeout: float = 1.0, interval: float = 0.01) -> None:
@@ -919,7 +919,7 @@ def test_execute_sync_route_handles_openai_video_remix_with_original_request(
     assert response.json() == {"video": True}
 
 
-def test_plan_stream_route_returns_executor_plan_for_gemini_files_download(
+def test_plan_stream_route_returns_execution_runtime_plan_for_gemini_files_download(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -983,7 +983,7 @@ def test_plan_stream_route_returns_executor_plan_for_gemini_files_download(
     }
 
 
-def test_plan_stream_route_returns_executor_plan_for_openai_video_content(
+def test_plan_stream_route_returns_execution_runtime_plan_for_openai_video_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -1047,7 +1047,7 @@ def test_plan_stream_route_returns_executor_plan_for_openai_video_content(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_gemini_files_get(
+def test_plan_sync_route_returns_execution_runtime_plan_for_gemini_files_get(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -1113,7 +1113,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_files_get(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_openai_chat(
+def test_plan_sync_route_returns_execution_runtime_plan_for_openai_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -1179,7 +1179,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_chat(
     }
 
 
-def test_decision_sync_route_returns_executor_decision_for_openai_chat(
+def test_decision_sync_route_returns_execution_runtime_decision_for_openai_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -1262,7 +1262,7 @@ def test_decision_sync_route_returns_executor_decision_for_openai_chat(
     }
 
 
-def test_decision_stream_route_returns_executor_decision_for_openai_chat(
+def test_decision_stream_route_returns_execution_runtime_decision_for_openai_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -1411,7 +1411,7 @@ def test_decision_stream_route_requires_legacy_header(monkeypatch: pytest.Monkey
         ),
     ],
 )
-def test_decision_stream_route_returns_executor_decision_for_claude_and_gemini_chat(
+def test_decision_stream_route_returns_execution_runtime_decision_for_claude_and_gemini_chat(
     monkeypatch: pytest.MonkeyPatch,
     path: str,
     headers: dict[str, str],
@@ -1572,7 +1572,7 @@ def test_decision_stream_route_returns_executor_decision_for_claude_and_gemini_c
         ),
     ],
 )
-def test_decision_stream_route_returns_executor_decision_for_cli_variants(
+def test_decision_stream_route_returns_execution_runtime_decision_for_cli_variants(
     monkeypatch: pytest.MonkeyPatch,
     path: str,
     headers: dict[str, str],
@@ -1681,7 +1681,7 @@ def test_decision_stream_route_returns_executor_decision_for_cli_variants(
         ("/v1/responses/compact", "openai_compact_sync", "openai:compact"),
     ],
 )
-def test_decision_sync_route_returns_executor_decision_for_openai_cli_variants(
+def test_decision_sync_route_returns_execution_runtime_decision_for_openai_cli_variants(
     monkeypatch: pytest.MonkeyPatch,
     path: str,
     decision_kind: str,
@@ -1788,7 +1788,7 @@ def test_decision_sync_route_returns_executor_decision_for_openai_cli_variants(
         ),
     ],
 )
-def test_decision_sync_route_returns_executor_decision_for_claude_variants(
+def test_decision_sync_route_returns_execution_runtime_decision_for_claude_variants(
     monkeypatch: pytest.MonkeyPatch,
     headers: dict[str, str],
     decision_kind: str,
@@ -1914,7 +1914,7 @@ def test_decision_sync_route_returns_executor_decision_for_claude_variants(
         ),
     ],
 )
-def test_decision_sync_route_returns_executor_decision_for_gemini_variants(
+def test_decision_sync_route_returns_execution_runtime_decision_for_gemini_variants(
     monkeypatch: pytest.MonkeyPatch,
     path: str,
     headers: dict[str, str],
@@ -2020,7 +2020,7 @@ def test_decision_sync_route_returns_executor_decision_for_gemini_variants(
     }
 
 
-def test_decision_sync_route_returns_executor_decision_for_gemini_files_get(
+def test_decision_sync_route_returns_execution_runtime_decision_for_gemini_files_get(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -2181,7 +2181,7 @@ def test_decision_sync_route_returns_executor_decision_for_gemini_files_get(
         ),
     ],
 )
-def test_decision_sync_route_returns_executor_decision_for_video_variants(
+def test_decision_sync_route_returns_execution_runtime_decision_for_video_variants(
     monkeypatch: pytest.MonkeyPatch,
     method: str,
     path: str,
@@ -2274,7 +2274,7 @@ def test_decision_sync_route_returns_executor_decision_for_video_variants(
     assert response.json() == expected
 
 
-def test_decision_stream_route_returns_executor_decision_for_gemini_files_download(
+def test_decision_stream_route_returns_execution_runtime_decision_for_gemini_files_download(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -2345,7 +2345,7 @@ def test_decision_stream_route_returns_executor_decision_for_gemini_files_downlo
     assert response.json()["decision_kind"] == "gemini_files_download"
 
 
-def test_decision_stream_route_returns_executor_decision_for_openai_video_content(
+def test_decision_stream_route_returns_execution_runtime_decision_for_openai_video_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -2478,7 +2478,7 @@ def test_plan_sync_route_resolves_auth_context_when_missing(
     assert build_plan.await_args.kwargs["auth_context"].api_key_id == "key-123"
 
 
-def test_plan_sync_route_returns_executor_plan_for_openai_video_create(
+def test_plan_sync_route_returns_execution_runtime_plan_for_openai_video_create(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -2544,7 +2544,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_video_create(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_openai_video_remix(
+def test_plan_sync_route_returns_execution_runtime_plan_for_openai_video_remix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -2610,7 +2610,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_video_remix(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_gemini_video_create(
+def test_plan_sync_route_returns_execution_runtime_plan_for_gemini_video_create(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -2676,7 +2676,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_video_create(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_openai_video_cancel(
+def test_plan_sync_route_returns_execution_runtime_plan_for_openai_video_cancel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -2740,7 +2740,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_video_cancel(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_openai_video_delete(
+def test_plan_sync_route_returns_execution_runtime_plan_for_openai_video_delete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -2804,7 +2804,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_video_delete(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_gemini_video_cancel(
+def test_plan_sync_route_returns_execution_runtime_plan_for_gemini_video_cancel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -2869,7 +2869,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_video_cancel(
     }
 
 
-def test_plan_stream_route_returns_executor_plan_for_openai_chat(
+def test_plan_stream_route_returns_execution_runtime_plan_for_openai_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3011,7 +3011,7 @@ def test_plan_stream_route_resolves_auth_context_when_missing(
     assert build_plan.await_args.kwargs["auth_context"].api_key_id == "key-123"
 
 
-def test_plan_stream_route_returns_executor_plan_for_claude_chat(
+def test_plan_stream_route_returns_execution_runtime_plan_for_claude_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3087,7 +3087,7 @@ def test_plan_stream_route_returns_executor_plan_for_claude_chat(
     }
 
 
-def test_plan_stream_route_returns_executor_plan_for_gemini_chat(
+def test_plan_stream_route_returns_execution_runtime_plan_for_gemini_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3157,7 +3157,7 @@ def test_plan_stream_route_returns_executor_plan_for_gemini_chat(
     }
 
 
-def test_plan_stream_route_returns_executor_plan_for_openai_cli(
+def test_plan_stream_route_returns_execution_runtime_plan_for_openai_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3227,7 +3227,7 @@ def test_plan_stream_route_returns_executor_plan_for_openai_cli(
     }
 
 
-def test_plan_stream_route_returns_executor_plan_for_claude_cli(
+def test_plan_stream_route_returns_execution_runtime_plan_for_claude_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3308,7 +3308,7 @@ def test_plan_stream_route_returns_executor_plan_for_claude_cli(
     }
 
 
-def test_plan_stream_route_returns_executor_plan_for_gemini_cli(
+def test_plan_stream_route_returns_execution_runtime_plan_for_gemini_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3379,7 +3379,7 @@ def test_plan_stream_route_returns_executor_plan_for_gemini_cli(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_openai_cli(
+def test_plan_sync_route_returns_execution_runtime_plan_for_openai_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3445,7 +3445,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_cli(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_openai_compact(
+def test_plan_sync_route_returns_execution_runtime_plan_for_openai_compact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3511,7 +3511,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_compact(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_claude_chat(
+def test_plan_sync_route_returns_execution_runtime_plan_for_claude_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3577,7 +3577,7 @@ def test_plan_sync_route_returns_executor_plan_for_claude_chat(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_gemini_chat(
+def test_plan_sync_route_returns_execution_runtime_plan_for_gemini_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3643,7 +3643,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_chat(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_claude_cli(
+def test_plan_sync_route_returns_execution_runtime_plan_for_claude_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3709,7 +3709,7 @@ def test_plan_sync_route_returns_executor_plan_for_claude_cli(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_gemini_cli(
+def test_plan_sync_route_returns_execution_runtime_plan_for_gemini_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3776,7 +3776,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_cli(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_gemini_files_list(
+def test_plan_sync_route_returns_execution_runtime_plan_for_gemini_files_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3842,7 +3842,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_files_list(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_gemini_files_upload(
+def test_plan_sync_route_returns_execution_runtime_plan_for_gemini_files_upload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -3912,7 +3912,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_files_upload(
     }
 
 
-def test_plan_sync_route_returns_executor_plan_for_gemini_files_delete(
+def test_plan_sync_route_returns_execution_runtime_plan_for_gemini_files_delete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()

@@ -384,7 +384,7 @@ async def _enrich_upstream_context_proxy(ctx: UpstreamContext) -> UpstreamContex
         resolve_effective_proxy,
         resolve_proxy_info_async,
     )
-    from src.services.request.executor_plan import ExecutionProxySnapshot
+    from src.services.request.execution_runtime_plan import ExecutionProxySnapshot
 
     effective_proxy = resolve_effective_proxy(ctx.provider_proxy, ctx.key_proxy)
     if not effective_proxy or not effective_proxy.get("enabled", True):
@@ -529,17 +529,17 @@ async def _try_rust_sync_proxy_request(
     proxy: Any = None,
 ) -> Response:
     from src.config.settings import config
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanTimeouts,
         build_execution_plan_body,
     )
-    from src.services.request.rust_executor_client import (
-        RustExecutorClient,
-        RustExecutorClientError,
+    from src.services.request.execution_runtime_client import (
+        ExecutionRuntimeClient,
+        ExecutionRuntimeClientError,
     )
 
-    if config.executor_backend != "rust":
+    if config.execution_runtime_backend != "rust":
         logger.error(
             "Gemini Files Rust sync proxy unavailable, rejecting request: {} {}",
             method.upper(),
@@ -552,7 +552,7 @@ async def _try_rust_sync_proxy_request(
     request_body = json_body if json_body is not None else content
 
     try:
-        result = await RustExecutorClient().execute_sync_json(
+        result = await ExecutionRuntimeClient().execute_sync_json(
             ExecutionPlan(
                 request_id=f"gemini-files-{uuid4().hex}",
                 candidate_id=None,
@@ -579,7 +579,7 @@ async def _try_rust_sync_proxy_request(
                 ),
             )
         )
-    except (RustExecutorClientError, HTTPException, json.JSONDecodeError, ValueError) as exc:
+    except (ExecutionRuntimeClientError, HTTPException, json.JSONDecodeError, ValueError) as exc:
         logger.warning("Gemini Files Rust proxy unavailable: {}", redact_url_for_log(str(exc)))
         return _build_rust_unavailable_response()
 
@@ -918,15 +918,15 @@ async def _download_file_response(file_id: str, request: Request) -> Any:
     优化：HTTP 下载期间不持有数据库连接
     """
     from src.config.settings import config
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanBody,
         ExecutionPlanTimeouts,
         ExecutionProxySnapshot,
     )
-    from src.services.request.rust_executor_client import (
-        RustExecutorClient,
-        RustExecutorClientError,
+    from src.services.request.execution_runtime_client import (
+        ExecutionRuntimeClient,
+        ExecutionRuntimeClientError,
     )
 
     # ========== 阶段 1：数据库操作（短暂持有连接）==========
@@ -1018,7 +1018,7 @@ async def _download_file_response(file_id: str, request: Request) -> Any:
     if regular_file_ctx is not None:
         proxy_snapshot = ctx.proxy_snapshot
 
-    if config.executor_backend != "rust":
+    if config.execution_runtime_backend != "rust":
         logger.error(
             "Gemini Files download rejected because Rust backend is disabled: {}",
             redact_url_for_log(upstream_url),
@@ -1054,7 +1054,7 @@ async def _download_file_response(file_id: str, request: Request) -> Any:
         logger.warning("Gemini Files download proxy snapshot build failed: {}", exc)
 
     try:
-        rust_stream = await RustExecutorClient().execute_stream(
+        rust_stream = await ExecutionRuntimeClient().execute_stream(
             ExecutionPlan(
                 request_id=f"gemini-files-download-{uuid4().hex}",
                 candidate_id=None,
@@ -1080,7 +1080,7 @@ async def _download_file_response(file_id: str, request: Request) -> Any:
                 ),
             )
         )
-    except (RustExecutorClientError, ValueError) as exc:
+    except (ExecutionRuntimeClientError, ValueError) as exc:
         logger.warning("Gemini Files Rust download unavailable: {}", exc)
         return _build_rust_unavailable_response()
 

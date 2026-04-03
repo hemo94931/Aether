@@ -88,16 +88,16 @@ from src.services.provider.transport import (
     build_provider_url,
 )
 from src.services.provider.upstream_headers import build_upstream_extra_headers
-from src.services.request.executor_plan import (
+from src.services.request.execution_runtime_plan import (
     ExecutionPlan,
     ExecutionPlanTimeouts,
     ExecutionProxySnapshot,
     build_execution_plan_body,
-    is_remote_contract_eligible,
+    is_remote_execution_runtime_contract_eligible,
 )
-from src.services.request.rust_executor_client import (
-    RustExecutorClient,
-    RustExecutorClientError,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeClient,
+    ExecutionRuntimeClientError,
 )
 from src.services.scheduling.aware_scheduler import ProviderCandidate
 from src.services.system.config import SystemConfigService
@@ -1117,7 +1117,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 ),
             )
 
-            if not is_remote_contract_eligible(rust_plan):
+            if not is_remote_execution_runtime_contract_eligible(rust_plan):
                 raise ProviderNotAvailableException(
                     "执行器暂时不可用，请稍后重试",
                     provider_name=str(provider.name),
@@ -1125,8 +1125,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 )
 
             try:
-                rust_result = await RustExecutorClient().execute_sync_json(rust_plan)
-            except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+                rust_result = await ExecutionRuntimeClient().execute_sync_json(rust_plan)
+            except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
                 logger.warning(
                     "[{}] Rust executor(sync->stream) unavailable: {}",
                     self.request_id,
@@ -1180,7 +1180,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
             response_json = rust_result.response_json
             if response_json is None:
-                raise RustExecutorClientError("Rust executor sync result must contain response_json")
+                raise ExecutionRuntimeClientError("Rust executor sync result must contain response_json")
 
             if envelope:
                 response_json = envelope.unwrap_response(response_json)
@@ -1241,7 +1241,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             ),
         )
 
-        if not is_remote_contract_eligible(rust_plan):
+        if not is_remote_execution_runtime_contract_eligible(rust_plan):
             raise ProviderNotAvailableException(
                 "执行器暂时不可用，请稍后重试",
                 provider_name=str(provider.name),
@@ -1249,8 +1249,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             )
 
         try:
-            rust_stream = await RustExecutorClient().execute_stream(rust_plan)
-        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+            rust_stream = await ExecutionRuntimeClient().execute_stream(rust_plan)
+        except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning(
                 "[{}] Rust executor stream unavailable: {}",
                 self.request_id,

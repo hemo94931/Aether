@@ -1,0 +1,175 @@
+use crate::gateway::ai_pipeline::planner::common::{
+    CLAUDE_CHAT_STREAM_PLAN_KIND, CLAUDE_CHAT_SYNC_PLAN_KIND, CLAUDE_CLI_STREAM_PLAN_KIND,
+    CLAUDE_CLI_SYNC_PLAN_KIND, EXECUTION_RUNTIME_STREAM_ACTION, EXECUTION_RUNTIME_SYNC_ACTION,
+    GEMINI_CHAT_STREAM_PLAN_KIND, GEMINI_CHAT_SYNC_PLAN_KIND, GEMINI_CLI_STREAM_PLAN_KIND,
+    GEMINI_CLI_SYNC_PLAN_KIND, GEMINI_FILES_DELETE_PLAN_KIND, GEMINI_FILES_DOWNLOAD_PLAN_KIND,
+    GEMINI_FILES_GET_PLAN_KIND, GEMINI_FILES_LIST_PLAN_KIND, GEMINI_VIDEO_CANCEL_SYNC_PLAN_KIND,
+    GEMINI_VIDEO_CREATE_SYNC_PLAN_KIND, OPENAI_CHAT_STREAM_PLAN_KIND, OPENAI_CHAT_SYNC_PLAN_KIND,
+    OPENAI_CLI_STREAM_PLAN_KIND, OPENAI_CLI_SYNC_PLAN_KIND, OPENAI_COMPACT_STREAM_PLAN_KIND,
+    OPENAI_COMPACT_SYNC_PLAN_KIND, OPENAI_VIDEO_CANCEL_SYNC_PLAN_KIND,
+    OPENAI_VIDEO_CONTENT_PLAN_KIND, OPENAI_VIDEO_CREATE_SYNC_PLAN_KIND,
+    OPENAI_VIDEO_DELETE_SYNC_PLAN_KIND, OPENAI_VIDEO_REMIX_SYNC_PLAN_KIND,
+};
+use crate::gateway::ai_pipeline::planner::plan_builders::{
+    build_gemini_stream_plan_from_decision, build_gemini_sync_plan_from_decision,
+    build_openai_chat_stream_plan_from_decision, build_openai_chat_sync_plan_from_decision,
+    build_openai_cli_stream_plan_from_decision, build_openai_cli_sync_plan_from_decision,
+    build_passthrough_stream_plan_from_decision, build_passthrough_sync_plan_from_decision,
+    build_standard_stream_plan_from_decision, build_standard_sync_plan_from_decision,
+    LocalStreamPlanAndReport, LocalSyncPlanAndReport,
+};
+use crate::gateway::{
+    AppState, GatewayControlAuthContext, GatewayControlDecision, GatewayControlPlanResponse,
+    GatewayControlSyncDecisionResponse, GatewayError,
+};
+
+pub(crate) async fn maybe_build_sync_plan_payload_impl(
+    state: &AppState,
+    parts: &http::request::Parts,
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    body_json: &serde_json::Value,
+    body_base64: Option<&str>,
+    body_is_empty: bool,
+) -> Result<Option<GatewayControlPlanResponse>, GatewayError> {
+    let Some(plan_kind) = super::resolve_sync_plan_kind(parts, decision) else {
+        return Ok(None);
+    };
+    let Some(payload) = super::maybe_build_sync_decision_payload(
+        state,
+        parts,
+        trace_id,
+        decision,
+        body_json,
+        body_base64,
+        body_is_empty,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    build_sync_plan_payload_from_decision(parts, body_json, plan_kind, payload)
+}
+
+pub(crate) async fn maybe_build_stream_plan_payload_impl(
+    state: &AppState,
+    parts: &http::request::Parts,
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    body_json: &serde_json::Value,
+) -> Result<Option<GatewayControlPlanResponse>, GatewayError> {
+    let Some(plan_kind) = super::resolve_stream_plan_kind(parts, decision) else {
+        return Ok(None);
+    };
+    let Some(payload) =
+        super::maybe_build_stream_decision_payload(state, parts, trace_id, decision, body_json)
+            .await?
+    else {
+        return Ok(None);
+    };
+
+    build_stream_plan_payload_from_decision(parts, body_json, plan_kind, payload)
+}
+
+fn build_sync_plan_payload_from_decision(
+    parts: &http::request::Parts,
+    body_json: &serde_json::Value,
+    plan_kind: &str,
+    payload: GatewayControlSyncDecisionResponse,
+) -> Result<Option<GatewayControlPlanResponse>, GatewayError> {
+    let auth_context = payload.auth_context.clone();
+    let plan_and_report = match plan_kind {
+        OPENAI_CHAT_SYNC_PLAN_KIND => {
+            build_openai_chat_sync_plan_from_decision(parts, body_json, payload)?
+        }
+        OPENAI_CLI_SYNC_PLAN_KIND => {
+            build_openai_cli_sync_plan_from_decision(parts, body_json, payload, false)?
+        }
+        OPENAI_COMPACT_SYNC_PLAN_KIND => {
+            build_openai_cli_sync_plan_from_decision(parts, body_json, payload, true)?
+        }
+        CLAUDE_CHAT_SYNC_PLAN_KIND | CLAUDE_CLI_SYNC_PLAN_KIND => {
+            build_standard_sync_plan_from_decision(parts, body_json, payload)?
+        }
+        GEMINI_CHAT_SYNC_PLAN_KIND | GEMINI_CLI_SYNC_PLAN_KIND => {
+            build_gemini_sync_plan_from_decision(parts, body_json, payload)?
+        }
+        OPENAI_VIDEO_CREATE_SYNC_PLAN_KIND
+        | OPENAI_VIDEO_REMIX_SYNC_PLAN_KIND
+        | OPENAI_VIDEO_CANCEL_SYNC_PLAN_KIND
+        | OPENAI_VIDEO_DELETE_SYNC_PLAN_KIND
+        | GEMINI_VIDEO_CREATE_SYNC_PLAN_KIND
+        | GEMINI_VIDEO_CANCEL_SYNC_PLAN_KIND
+        | GEMINI_FILES_LIST_PLAN_KIND
+        | GEMINI_FILES_GET_PLAN_KIND
+        | GEMINI_FILES_DELETE_PLAN_KIND => {
+            build_passthrough_sync_plan_from_decision(parts, payload)?
+        }
+        _ => None,
+    };
+
+    Ok(plan_and_report.map(|value| build_sync_plan_response(plan_kind, value, auth_context)))
+}
+
+fn build_stream_plan_payload_from_decision(
+    parts: &http::request::Parts,
+    body_json: &serde_json::Value,
+    plan_kind: &str,
+    payload: GatewayControlSyncDecisionResponse,
+) -> Result<Option<GatewayControlPlanResponse>, GatewayError> {
+    let auth_context = payload.auth_context.clone();
+    let plan_and_report = match plan_kind {
+        OPENAI_CHAT_STREAM_PLAN_KIND => {
+            build_openai_chat_stream_plan_from_decision(parts, body_json, payload)?
+        }
+        OPENAI_CLI_STREAM_PLAN_KIND => {
+            build_openai_cli_stream_plan_from_decision(parts, body_json, payload, false)?
+        }
+        OPENAI_COMPACT_STREAM_PLAN_KIND => {
+            build_openai_cli_stream_plan_from_decision(parts, body_json, payload, true)?
+        }
+        CLAUDE_CHAT_STREAM_PLAN_KIND | CLAUDE_CLI_STREAM_PLAN_KIND => {
+            build_standard_stream_plan_from_decision(parts, body_json, payload, true)?
+        }
+        GEMINI_CHAT_STREAM_PLAN_KIND | GEMINI_CLI_STREAM_PLAN_KIND => {
+            build_gemini_stream_plan_from_decision(parts, body_json, payload)?
+        }
+        OPENAI_VIDEO_CONTENT_PLAN_KIND | GEMINI_FILES_DOWNLOAD_PLAN_KIND => {
+            build_passthrough_stream_plan_from_decision(parts, payload)?
+        }
+        _ => None,
+    };
+
+    Ok(plan_and_report.map(|value| build_stream_plan_response(plan_kind, value, auth_context)))
+}
+
+fn build_sync_plan_response(
+    plan_kind: &str,
+    value: LocalSyncPlanAndReport,
+    auth_context: Option<GatewayControlAuthContext>,
+) -> GatewayControlPlanResponse {
+    GatewayControlPlanResponse {
+        action: EXECUTION_RUNTIME_SYNC_ACTION.to_string(),
+        plan_kind: Some(plan_kind.to_string()),
+        plan: Some(value.plan),
+        report_kind: value.report_kind,
+        report_context: value.report_context,
+        auth_context,
+    }
+}
+
+fn build_stream_plan_response(
+    plan_kind: &str,
+    value: LocalStreamPlanAndReport,
+    auth_context: Option<GatewayControlAuthContext>,
+) -> GatewayControlPlanResponse {
+    GatewayControlPlanResponse {
+        action: EXECUTION_RUNTIME_STREAM_ACTION.to_string(),
+        plan_kind: Some(plan_kind.to_string()),
+        plan: Some(value.plan),
+        report_kind: value.report_kind,
+        report_context: value.report_context,
+        auth_context,
+    }
+}

@@ -897,8 +897,8 @@ def test_python_host_app_surface_keeps_shell_routes_and_rejects_removed_edges() 
     assert _app_matches_http_route("/api/internal/gateway/auth-context", "POST") is False
     assert _app_matches_http_route("/api/internal/gateway/resolve", "POST") is False
     assert _app_matches_http_route("/api/internal/gateway/decision-sync", "POST") is False
-    assert _app_matches_http_route("/api/internal/hub/heartbeat", "POST") is False
-    assert _app_matches_http_route("/api/internal/hub/node-status", "POST") is False
+    assert _app_matches_http_route("/api/internal/tunnel/heartbeat", "POST") is False
+    assert _app_matches_http_route("/api/internal/tunnel/node-status", "POST") is False
     assert _app_matches_http_route("/readyz", "GET") is False
 
     tags = {tag.get("name") for tag in main_module.app.openapi().get("tags", [])}

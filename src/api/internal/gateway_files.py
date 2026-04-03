@@ -80,7 +80,7 @@ async def _build_gemini_files_download_stream_plan(
         _select_provider_candidate,
         resolve_provider_proxy,
     )
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanBody,
         ExecutionPlanTimeouts,
@@ -282,7 +282,7 @@ async def _build_gemini_files_download_stream_decision(
                 resolve_delegate_config_async,
                 resolve_proxy_info_async,
             )
-            from src.services.request.executor_plan import ExecutionProxySnapshot
+            from src.services.request.execution_runtime_plan import ExecutionProxySnapshot
 
             system_proxy = await get_system_proxy_config_async()
             delegate_cfg = await resolve_delegate_config_async(system_proxy)
@@ -494,7 +494,7 @@ async def _build_gemini_files_proxy_sync_plan(
         _enrich_upstream_context_proxy,
         _resolve_upstream_context,
     )
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanTimeouts,
         build_execution_plan_body,

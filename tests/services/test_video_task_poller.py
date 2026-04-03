@@ -6,7 +6,7 @@ import pytest
 
 from src.core.api_format.conversion.internal_video import InternalVideoPollResult, VideoStatus
 from src.models.database import VideoTask
-from src.services.request.rust_executor_client import RustExecutorSyncResult
+from src.services.request.execution_runtime_client import ExecutionRuntimeSyncResult
 from src.services.task.video.poller_adapter import VideoPollContext, VideoTaskPollerAdapter
 
 
@@ -81,7 +81,7 @@ async def test_update_task_after_poll_skips_terminal_cancelled_task(
 async def test_video_poller_try_rust_payload_passes_proxy_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from src.services.request import rust_executor_client as rust_mod
+    from src.services.request import execution_runtime_client as runtime_mod
     from src.services.task.video import poller_adapter as mod
 
     adapter = VideoTaskPollerAdapter()
@@ -90,11 +90,18 @@ async def test_video_poller_try_rust_payload_passes_proxy_snapshot(
     proxy_snapshot = object()
     captured: dict[str, object] = {}
 
-    async def _fake_execute_sync_json(self: object, plan: object) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: object) -> ExecutionRuntimeSyncResult:
         captured["plan"] = plan
-        return RustExecutorSyncResult(status_code=200, response_json={"id": "op_1", "done": False})
+        return ExecutionRuntimeSyncResult(
+            status_code=200,
+            response_json={"id": "op_1", "done": False},
+        )
 
-    monkeypatch.setattr(rust_mod.RustExecutorClient, "execute_sync_json", _fake_execute_sync_json)
+    monkeypatch.setattr(
+        runtime_mod.ExecutionRuntimeClient,
+        "execute_sync_json",
+        _fake_execute_sync_json,
+    )
 
     ctx = VideoPollContext(
         task_id="task-1",

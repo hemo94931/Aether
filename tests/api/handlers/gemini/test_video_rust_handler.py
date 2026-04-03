@@ -11,11 +11,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import src.api.handlers.gemini.video_handler as video_mod
 import src.services.proxy_node.resolver as resolver_mod
-import src.services.request.rust_executor_client as rust_client_mod
+import src.services.request.execution_runtime_client as rust_client_mod
 from src.api.handlers.gemini.video_handler import GeminiVeoHandler
 from src.core.api_format.conversion.internal_video import VideoStatus
 from src.core.exceptions import ProviderNotAvailableException
-from src.services.request.rust_executor_client import RustExecutorStreamResult
+from src.services.request.execution_runtime_client import ExecutionRuntimeStreamResult
 
 
 class _DummyStreamResponseCtx:
@@ -189,19 +189,19 @@ async def test_handle_download_content_uses_rust_executor_with_proxy_snapshot(
         _fake_resolve_proxy_info_async,
     )
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         assert getattr(plan, "method") == "GET"
         assert getattr(plan, "url") == "https://storage.example.com/video.mp4"
         assert getattr(plan, "headers") == {"x-goog-api-key": "upstream-key"}
         assert getattr(plan, "proxy").url == "http://proxy.local:8080"
-        return RustExecutorStreamResult(
+        return ExecutionRuntimeStreamResult(
             status_code=200,
             headers={"content-type": "video/mp4", "x-rust-download": "true"},
             byte_iterator=_iter_chunks([b"gemini-", b"video"]),
             response_ctx=dummy_ctx,
         )
 
-    monkeypatch.setattr(rust_client_mod.RustExecutorClient, "execute_stream", _fake_execute_stream)
+    monkeypatch.setattr(rust_client_mod.ExecutionRuntimeClient, "execute_stream", _fake_execute_stream)
     response = await handler.handle_download_content(
         task_id="operations/ext-1",
         http_request=SimpleNamespace(),

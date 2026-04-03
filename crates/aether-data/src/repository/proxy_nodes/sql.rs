@@ -278,7 +278,7 @@ impl ProxyNodeWriteRepository for SqlxProxyNodeRepository {
         };
         let event_detail = mutation.detail.clone().unwrap_or_else(|| {
             format!(
-                "[hub_node_status] conn_count={}",
+                "[tunnel_node_status] conn_count={}",
                 i32::max(mutation.conn_count, 0)
             )
         });

@@ -72,7 +72,7 @@ pub struct RedisStreamRunnerConfig {
 impl Default for RedisStreamRunnerConfig {
     fn default() -> Self {
         Self {
-            command_timeout_ms: Some(1_000),
+            command_timeout_ms: Some(2_000),
             read_block_ms: Some(1_000),
             read_count: 32,
         }
@@ -90,6 +90,16 @@ impl RedisStreamRunnerConfig {
             return Err(DataLayerError::InvalidConfiguration(
                 "redis stream read_block_ms must be positive".to_string(),
             ));
+        }
+        if let (Some(command_timeout_ms), Some(read_block_ms)) =
+            (self.command_timeout_ms, self.read_block_ms)
+        {
+            if command_timeout_ms <= read_block_ms {
+                return Err(DataLayerError::InvalidConfiguration(
+                    "redis stream command_timeout_ms must be greater than read_block_ms"
+                        .to_string(),
+                ));
+            }
         }
         if self.read_count == 0 {
             return Err(DataLayerError::InvalidConfiguration(
@@ -560,6 +570,13 @@ mod tests {
         .is_err());
         assert!(RedisStreamRunnerConfig {
             read_block_ms: Some(0),
+            ..RedisStreamRunnerConfig::default()
+        }
+        .validate()
+        .is_err());
+        assert!(RedisStreamRunnerConfig {
+            command_timeout_ms: Some(1_000),
+            read_block_ms: Some(1_000),
             ..RedisStreamRunnerConfig::default()
         }
         .validate()

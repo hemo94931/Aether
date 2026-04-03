@@ -264,12 +264,12 @@ async def _build_chat_stream_plan(
         resolve_effective_proxy,
         resolve_proxy_info_async,
     )
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanTimeouts,
         ExecutionProxySnapshot,
         build_execution_plan_body,
-        is_remote_contract_eligible,
+        is_remote_execution_runtime_contract_eligible,
     )
 
     if str(payload.method or "").strip().upper() != "POST":
@@ -453,7 +453,7 @@ async def _build_chat_stream_plan(
             provider_api_format=provider_api_format,
             client_api_format=str(contract.client_api_format or ""),
         )
-        or not is_remote_contract_eligible(contract)
+        or not is_remote_execution_runtime_contract_eligible(contract)
         or provider_api_format.strip().lower() != expected_api_format
         or str(contract.client_api_format or "").strip().lower() != expected_api_format
     ):

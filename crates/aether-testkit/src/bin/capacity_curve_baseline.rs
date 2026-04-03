@@ -4,12 +4,12 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use aether_contracts::{ExecutionPlan, ExecutionTimeouts, RequestBody};
-use aether_hub::protocol;
+use aether_gateway::tunnel_protocol as protocol;
 use aether_testkit::{
     fetch_prometheus_samples, find_metric_value_u64, init_test_runtime_for, run_http_load_probe,
-    ExecutorHarness, ExecutorHarnessConfig, GatewayHarness, GatewayHarnessConfig,
-    HttpLoadProbeConfig, HttpLoadProbeResponseMode, HttpLoadProbeResult, HubHarness,
-    HubHarnessConfig, SpawnedServer,
+    ExecutionRuntimeHarness, ExecutionRuntimeHarnessConfig, GatewayHarness, GatewayHarnessConfig,
+    HttpLoadProbeConfig, HttpLoadProbeResponseMode, HttpLoadProbeResult, SpawnedServer,
+    TunnelHarness, TunnelHarnessConfig,
 };
 use axum::body::{to_bytes, Body, Bytes};
 use axum::http::StatusCode;
@@ -23,13 +23,16 @@ use serde_json::json;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
+const PROXY_TUNNEL_PATH: &str = "/api/internal/proxy-tunnel";
+const TUNNEL_RELAY_PATH_PREFIX: &str = "/api/internal/tunnel/relay";
+
 #[derive(Debug, Clone)]
 struct CapacityCurveBaselineConfig {
     points: Vec<usize>,
     requests_per_point_multiplier: usize,
     sync_delay: Duration,
     stream_chunk_delay: Duration,
-    hub_hold: Duration,
+    tunnel_hold: Duration,
     timeout: Duration,
     saturation_latency_multiplier: u64,
     output_path: Option<PathBuf>,
@@ -42,7 +45,7 @@ impl Default for CapacityCurveBaselineConfig {
             requests_per_point_multiplier: 8,
             sync_delay: Duration::from_millis(75),
             stream_chunk_delay: Duration::from_millis(25),
-            hub_hold: Duration::from_millis(75),
+            tunnel_hold: Duration::from_millis(75),
             timeout: Duration::from_secs(10),
             saturation_latency_multiplier: 4,
             output_path: None,
@@ -55,9 +58,9 @@ struct CapacityCurveBaselineReport {
     suite: &'static str,
     gateway_sync: CapacityCurveScenarioReport,
     gateway_stream: CapacityCurveScenarioReport,
-    executor_sync: CapacityCurveScenarioReport,
-    executor_stream: CapacityCurveScenarioReport,
-    hub_tunnel_stream: CapacityCurveScenarioReport,
+    execution_runtime_sync: CapacityCurveScenarioReport,
+    execution_runtime_stream: CapacityCurveScenarioReport,
+    gateway_tunnel_stream: CapacityCurveScenarioReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -148,23 +151,24 @@ async fn run_suite(
             config,
         )
         .await?,
-        executor_sync: run_executor_curve(
-            "executor_sync",
-            "executor_requests",
+        execution_runtime_sync: run_execution_runtime_curve(
+            "execution_runtime_sync",
+            "execution_runtime_requests",
             false,
             upstream.base_url(),
             config,
         )
         .await?,
-        executor_stream: run_executor_curve(
-            "executor_stream",
-            "executor_requests",
+        execution_runtime_stream: run_execution_runtime_curve(
+            "execution_runtime_stream",
+            "execution_runtime_requests",
             true,
             upstream.base_url(),
             config,
         )
         .await?,
-        hub_tunnel_stream: run_hub_curve("hub_tunnel_stream", "hub_requests", config).await?,
+        gateway_tunnel_stream: run_tunnel_curve("gateway_tunnel_stream", "tunnel_requests", config)
+            .await?,
     })
 }
 
@@ -187,10 +191,11 @@ async fn run_gateway_curve(
     for limit in &config.points {
         let gateway = GatewayHarness::start(GatewayHarnessConfig {
             upstream_base_url: upstream_base_url.to_string(),
-            control_base_url: None,
-            executor_base_url: None,
+            data_config: None,
             max_in_flight_requests: Some(*limit),
             distributed_request_gate: None,
+            tunnel_instance_id: None,
+            tunnel_relay_base_url: None,
         })
         .await?;
         let total_requests = total_requests_for_limit(*limit, config.requests_per_point_multiplier);
@@ -229,7 +234,7 @@ async fn run_gateway_curve(
     })
 }
 
-async fn run_executor_curve(
+async fn run_execution_runtime_curve(
     scenario_name: &str,
     gate_name: &str,
     stream: bool,
@@ -246,7 +251,7 @@ async fn run_executor_curve(
     );
     let mut points = Vec::new();
     for limit in &config.points {
-        let executor = ExecutorHarness::start(ExecutorHarnessConfig {
+        let runtime = ExecutionRuntimeHarness::start(ExecutionRuntimeHarnessConfig {
             max_in_flight_requests: Some(*limit),
             distributed_request_gate: None,
         })
@@ -255,7 +260,7 @@ async fn run_executor_curve(
         let probe = execution_probe_config(
             format!(
                 "{}/v1/execute/{}",
-                executor.base_url(),
+                runtime.base_url(),
                 if stream { "stream" } else { "sync" }
             ),
             execution_plan(format!("{upstream_base_url}/v1/chat/completions"), stream),
@@ -269,7 +274,7 @@ async fn run_executor_curve(
             .map_err(std::io::Error::other)?;
         let duration_ms = started_at.elapsed().as_millis() as u64;
         let metrics =
-            capture_gate_metrics(&format!("{}/metrics", executor.base_url()), gate_name).await?;
+            capture_gate_metrics(&format!("{}/metrics", runtime.base_url()), gate_name).await?;
         points.push(capacity_point(
             *limit,
             total_requests,
@@ -288,17 +293,17 @@ async fn run_executor_curve(
     })
 }
 
-async fn run_hub_curve(
+async fn run_tunnel_curve(
     scenario_name: &str,
     gate_name: &str,
     config: &CapacityCurveBaselineConfig,
 ) -> Result<CapacityCurveScenarioReport, Box<dyn std::error::Error>> {
     let latency_budget_ms =
-        scenario_latency_budget_ms(config.hub_hold, config.saturation_latency_multiplier);
+        scenario_latency_budget_ms(config.tunnel_hold, config.saturation_latency_multiplier);
     let mut points = Vec::new();
     for limit in &config.points {
         let relay_concurrency = (*limit).saturating_sub(1).max(1);
-        let hub = HubHarness::start(HubHarnessConfig {
+        let tunnel = TunnelHarness::start(TunnelHarnessConfig {
             max_streams: (*limit).max(128),
             ping_interval: Duration::from_secs(15),
             idle_timeout: Duration::ZERO,
@@ -307,11 +312,14 @@ async fn run_hub_curve(
             distributed_request_gate: None,
         })
         .await?;
-        let peer = connect_protocol_peer(hub.base_url(), config.hub_hold).await?;
+        let peer = connect_protocol_peer(tunnel.base_url(), config.tunnel_hold).await?;
         let total_requests =
             total_requests_for_limit(relay_concurrency, config.requests_per_point_multiplier);
         let probe = HttpLoadProbeConfig {
-            url: format!("{}/local/relay/node-baseline", hub.base_url()),
+            url: format!(
+                "{tunnel_base}{TUNNEL_RELAY_PATH_PREFIX}/node-baseline",
+                tunnel_base = tunnel.base_url()
+            ),
             method: Method::POST,
             headers: BTreeMap::from([(
                 "content-type".to_string(),
@@ -329,7 +337,7 @@ async fn run_hub_curve(
             .map_err(std::io::Error::other)?;
         let duration_ms = started_at.elapsed().as_millis() as u64;
         let metrics =
-            capture_gate_metrics(&format!("{}/metrics", hub.base_url()), gate_name).await?;
+            capture_gate_metrics(&format!("{}/metrics", tunnel.base_url()), gate_name).await?;
         points.push(capacity_point(
             *limit,
             total_requests,
@@ -610,10 +618,14 @@ fn relay_envelope() -> Vec<u8> {
 }
 
 async fn connect_protocol_peer(
-    hub_base_url: &str,
+    tunnel_base_url: &str,
     hold: Duration,
 ) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error>> {
-    let ws_url = format!("{}/proxy", hub_base_url.replace("http://", "ws://"));
+    let ws_url = format!(
+        "{}{}",
+        tunnel_base_url.replace("http://", "ws://"),
+        PROXY_TUNNEL_PATH
+    );
     let request = ws_url.into_client_request()?;
     let mut request = request;
     request
@@ -751,9 +763,9 @@ fn parse_args(
                     next_value(&mut iter, "--stream-chunk-delay-ms")?.parse()?,
                 )
             }
-            "--hub-hold-ms" => {
-                config.hub_hold =
-                    Duration::from_millis(next_value(&mut iter, "--hub-hold-ms")?.parse()?)
+            "--tunnel-hold-ms" => {
+                config.tunnel_hold =
+                    Duration::from_millis(next_value(&mut iter, "--tunnel-hold-ms")?.parse()?)
             }
             "--timeout-ms" => {
                 config.timeout =
@@ -804,6 +816,6 @@ fn next_value(
 
 fn print_usage() {
     eprintln!(
-        "usage: cargo run -p aether-testkit --bin capacity_curve_baseline -- [--points 8,16,32,64,128,256] [--requests-per-point-multiplier 8] [--sync-delay-ms 75] [--stream-chunk-delay-ms 25] [--hub-hold-ms 75] [--timeout-ms 10000] [--saturation-latency-multiplier 4] [--output /tmp/capacity_curve_baseline.json]"
+        "usage: cargo run -p aether-testkit --bin capacity_curve_baseline -- [--points 8,16,32,64,128,256] [--requests-per-point-multiplier 8] [--sync-delay-ms 75] [--stream-chunk-delay-ms 25] [--tunnel-hold-ms 75] [--timeout-ms 10000] [--saturation-latency-multiplier 4] [--output /tmp/capacity_curve_baseline.json]"
     );
 }

@@ -10,15 +10,15 @@ import pytest
 import src.services.provider.adapters.kiro.token_manager as token_manager_mod
 import src.services.provider.adapters.kiro.usage as usage_mod
 import src.services.provider.adapters.kiro.rust_http as kiro_rust_http_mod
-import src.services.request.rust_executor_client as rust_client_mod
+import src.services.request.execution_runtime_client as runtime_client_mod
 from src.services.provider.adapters.kiro.token_manager import (
     refresh_idc_token,
     refresh_social_token,
 )
 from src.services.provider.adapters.kiro.usage import fetch_kiro_usage_limits
-from src.services.request.rust_executor_client import (
-    RustExecutorClientError,
-    RustExecutorSyncResult,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeClientError,
+    ExecutionRuntimeSyncResult,
 )
 
 
@@ -32,10 +32,10 @@ async def test_fetch_kiro_usage_limits_uses_rust_executor(
 ) -> None:
     monkeypatch.setattr(kiro_rust_http_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         AsyncMock(
-            return_value=RustExecutorSyncResult(
+            return_value=ExecutionRuntimeSyncResult(
                 status_code=200,
                 headers={"content-type": "application/json"},
                 response_json={
@@ -64,7 +64,7 @@ async def test_fetch_kiro_usage_limits_uses_rust_executor(
 
     assert result["usage_data"]["desktopUserInfo"]["email"] == "kiro@example.com"
 
-    plan = rust_client_mod.RustExecutorClient.execute_sync_json.await_args.args[0]
+    plan = runtime_client_mod.ExecutionRuntimeClient.execute_sync_json.await_args.args[0]
     assert plan.method == "GET"
     assert "getUsageLimits" in plan.url
     assert plan.provider_api_format == "kiro:usage"
@@ -77,9 +77,9 @@ async def test_fetch_kiro_usage_limits_falls_back_to_python_when_rust_unavailabl
 ) -> None:
     monkeypatch.setattr(kiro_rust_http_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
-        AsyncMock(side_effect=RustExecutorClientError("executor down")),
+        AsyncMock(side_effect=ExecutionRuntimeClientError("executor down")),
     )
     fake_client = SimpleNamespace(
         get=AsyncMock(
@@ -120,10 +120,10 @@ async def test_refresh_social_token_uses_rust_executor(
     monkeypatch.setattr(kiro_rust_http_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(time, "time", lambda: 1_000)
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         AsyncMock(
-            return_value=RustExecutorSyncResult(
+            return_value=ExecutionRuntimeSyncResult(
                 status_code=200,
                 headers={"content-type": "application/json"},
                 response_json={
@@ -157,7 +157,7 @@ async def test_refresh_social_token_uses_rust_executor(
     assert new_cfg.access_token == "new-social-access-token"
     assert new_cfg.expires_at == 2800
 
-    plan = rust_client_mod.RustExecutorClient.execute_sync_json.await_args.args[0]
+    plan = runtime_client_mod.ExecutionRuntimeClient.execute_sync_json.await_args.args[0]
     assert plan.method == "POST"
     assert plan.url == "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken"
     assert plan.provider_api_format == "kiro:social_refresh"
@@ -171,10 +171,10 @@ async def test_refresh_idc_token_uses_rust_executor(
     monkeypatch.setattr(kiro_rust_http_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(time, "time", lambda: 2_000)
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         AsyncMock(
-            return_value=RustExecutorSyncResult(
+            return_value=ExecutionRuntimeSyncResult(
                 status_code=200,
                 headers={"content-type": "application/json"},
                 response_json={
@@ -209,7 +209,7 @@ async def test_refresh_idc_token_uses_rust_executor(
     assert new_cfg.access_token == "new-idc-access-token"
     assert new_cfg.expires_at == 5600
 
-    plan = rust_client_mod.RustExecutorClient.execute_sync_json.await_args.args[0]
+    plan = runtime_client_mod.ExecutionRuntimeClient.execute_sync_json.await_args.args[0]
     assert plan.method == "POST"
     assert plan.url == "https://oidc.eu-west-1.amazonaws.com/token"
     assert plan.provider_api_format == "kiro:idc_refresh"

@@ -10,14 +10,16 @@ use aether_data::postgres::{
 use aether_data::redis::{RedisClientConfig, RedisLockRunnerConfig};
 use aether_data::{PostgresBackend, RedisBackend};
 use aether_testkit::{
-    init_test_runtime_for, reserve_local_port, HubHarness, HubHarnessConfig, ManagedPostgresServer,
-    ManagedRedisServer,
+    init_test_runtime_for, reserve_local_port, ManagedPostgresServer, ManagedRedisServer,
+    TunnelHarness, TunnelHarnessConfig,
 };
 use futures_util::{FutureExt, StreamExt};
 use serde::Serialize;
 use tokio::sync::{oneshot, Mutex};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
+
+const PROXY_TUNNEL_PATH: &str = "/api/internal/proxy-tunnel";
 
 #[derive(Debug, Clone)]
 struct FailureRecoveryBaselineConfig {
@@ -27,11 +29,11 @@ struct FailureRecoveryBaselineConfig {
     redis_downtime: Duration,
     postgres_statement_timeout: Duration,
     postgres_sleep: Duration,
-    hub_attempts: usize,
-    hub_concurrency: usize,
-    hub_hold: Duration,
-    hub_restart_delay: Duration,
-    hub_downtime: Duration,
+    tunnel_attempts: usize,
+    tunnel_concurrency: usize,
+    tunnel_hold: Duration,
+    tunnel_restart_delay: Duration,
+    tunnel_downtime: Duration,
     timeout: Duration,
     output_path: Option<PathBuf>,
     redis_url: Option<String>,
@@ -47,11 +49,11 @@ impl Default for FailureRecoveryBaselineConfig {
             redis_downtime: Duration::from_millis(150),
             postgres_statement_timeout: Duration::from_millis(50),
             postgres_sleep: Duration::from_millis(200),
-            hub_attempts: 60,
-            hub_concurrency: 4,
-            hub_hold: Duration::from_millis(50),
-            hub_restart_delay: Duration::from_millis(200),
-            hub_downtime: Duration::from_millis(150),
+            tunnel_attempts: 60,
+            tunnel_concurrency: 4,
+            tunnel_hold: Duration::from_millis(50),
+            tunnel_restart_delay: Duration::from_millis(200),
+            tunnel_downtime: Duration::from_millis(150),
             timeout: Duration::from_secs(10),
             output_path: None,
             redis_url: None,
@@ -106,7 +108,7 @@ struct FailureRecoveryBaselineReport {
     postgres_url: String,
     redis_restart: RecoverySummary,
     postgres_slow_query: PostgresSlowQueryRecoveryReport,
-    hub_restart: RecoverySummary,
+    tunnel_restart: RecoverySummary,
 }
 
 #[derive(Default)]
@@ -216,7 +218,7 @@ async fn run_suite(
     let redis_restart = benchmark_redis_restart_recovery(redis_server.clone(), config).await?;
     let postgres_slow_query =
         benchmark_postgres_slow_query_recovery(postgres_server.database_url(), config).await?;
-    let hub_restart = benchmark_hub_restart_recovery(config).await?;
+    let tunnel_restart = benchmark_tunnel_restart_recovery(config).await?;
 
     Ok(FailureRecoveryBaselineReport {
         suite: "failure_recovery_baseline",
@@ -224,7 +226,7 @@ async fn run_suite(
         postgres_url,
         redis_restart,
         postgres_slow_query,
-        hub_restart,
+        tunnel_restart,
     })
 }
 
@@ -431,13 +433,13 @@ async fn bootstrap_failure_recovery_lease_table(
     Ok(())
 }
 
-async fn benchmark_hub_restart_recovery(
+async fn benchmark_tunnel_restart_recovery(
     config: &FailureRecoveryBaselineConfig,
 ) -> Result<RecoverySummary, Box<dyn std::error::Error>> {
     let port = reserve_local_port()?;
-    let hub_config = HubHarnessConfig::default();
-    let initial_hub = HubHarness::start_on_port(hub_config.clone(), port).await?;
-    let ws_url = format!("ws://127.0.0.1:{port}/proxy");
+    let tunnel_config = TunnelHarnessConfig::default();
+    let initial_tunnel = TunnelHarness::start_on_port(tunnel_config.clone(), port).await?;
+    let ws_url = format!("ws://127.0.0.1:{port}{PROXY_TUNNEL_PATH}");
     let collector = Arc::new(RecoveryCollector::default());
     let next_attempt = Arc::new(AtomicUsize::new(0));
     let phase = Arc::new(AtomicUsize::new(0));
@@ -445,25 +447,25 @@ async fn benchmark_hub_restart_recovery(
     let restart_started = Arc::new(Mutex::new(None::<Instant>));
     let (done_tx, done_rx) = oneshot::channel::<()>();
 
-    let hub_restart_delay = config.hub_restart_delay;
-    let hub_downtime = config.hub_downtime;
+    let tunnel_restart_delay = config.tunnel_restart_delay;
+    let tunnel_downtime = config.tunnel_downtime;
     let phase_for_restart = phase.clone();
     let restart_started_for_task = restart_started.clone();
     let restart_task = tokio::spawn(async move {
-        tokio::time::sleep(hub_restart_delay).await;
+        tokio::time::sleep(tunnel_restart_delay).await;
         phase_for_restart.store(1, Ordering::Release);
         *restart_started_for_task.lock().await = Some(Instant::now());
-        drop(initial_hub);
-        tokio::time::sleep(hub_downtime).await;
-        let restarted_hub = start_hub_on_port_retry(hub_config, port).await?;
+        drop(initial_tunnel);
+        tokio::time::sleep(tunnel_downtime).await;
+        let restarted_tunnel = start_tunnel_on_port_retry(tunnel_config, port).await?;
         phase_for_restart.store(2, Ordering::Release);
         let _ = done_rx.await;
-        drop(restarted_hub);
+        drop(restarted_tunnel);
         Ok::<(), String>(())
     });
 
     let mut workers = tokio::task::JoinSet::new();
-    for worker_index in 0..config.hub_concurrency {
+    for worker_index in 0..config.tunnel_concurrency {
         let ws_url = ws_url.clone();
         let next_attempt = next_attempt.clone();
         let collector = collector.clone();
@@ -471,8 +473,8 @@ async fn benchmark_hub_restart_recovery(
         let recovered_after_restart_ms = recovered_after_restart_ms.clone();
         let restart_started = restart_started.clone();
         let timeout = config.timeout;
-        let hold = config.hub_hold;
-        let total_attempts = config.hub_attempts;
+        let hold = config.tunnel_hold;
+        let total_attempts = config.tunnel_attempts;
         workers.spawn(async move {
             loop {
                 let current = next_attempt.fetch_add(1, Ordering::AcqRel);
@@ -536,13 +538,13 @@ async fn benchmark_hub_restart_recovery(
 
     while let Some(result) = workers.join_next().await {
         result
-            .map_err(|err| format!("hub recovery worker task failed: {err}"))?
-            .map_err(|err| format!("hub recovery worker failed: {err}"))?;
+            .map_err(|err| format!("tunnel recovery worker task failed: {err}"))?
+            .map_err(|err| format!("tunnel recovery worker failed: {err}"))?;
     }
     let _ = done_tx.send(());
     restart_task
         .await
-        .map_err(|err| format!("hub restart task failed: {err}"))?
+        .map_err(|err| format!("tunnel restart task failed: {err}"))?
         .map_err(std::io::Error::other)?;
 
     Ok(collector
@@ -550,18 +552,20 @@ async fn benchmark_hub_restart_recovery(
         .await)
 }
 
-async fn start_hub_on_port_retry(
-    config: HubHarnessConfig,
+async fn start_tunnel_on_port_retry(
+    config: TunnelHarnessConfig,
     port: u16,
-) -> Result<HubHarness, String> {
+) -> Result<TunnelHarness, String> {
     let mut attempts = 0usize;
     loop {
-        match HubHarness::start_on_port(config.clone(), port).await {
-            Ok(hub) => return Ok(hub),
+        match TunnelHarness::start_on_port(config.clone(), port).await {
+            Ok(tunnel) => return Ok(tunnel),
             Err(err) => {
                 attempts += 1;
                 if attempts >= 20 {
-                    return Err(format!("failed to restart hub on fixed port {port}: {err}"));
+                    return Err(format!(
+                        "failed to restart tunnel on fixed port {port}: {err}"
+                    ));
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
@@ -635,23 +639,25 @@ fn parse_args(
                 config.postgres_sleep =
                     Duration::from_millis(next_value(&mut iter, "--postgres-sleep-ms")?.parse()?)
             }
-            "--hub-attempts" => {
-                config.hub_attempts = next_value(&mut iter, "--hub-attempts")?.parse()?
+            "--tunnel-attempts" => {
+                config.tunnel_attempts = next_value(&mut iter, "--tunnel-attempts")?.parse()?
             }
-            "--hub-concurrency" => {
-                config.hub_concurrency = next_value(&mut iter, "--hub-concurrency")?.parse()?
+            "--tunnel-concurrency" => {
+                config.tunnel_concurrency =
+                    next_value(&mut iter, "--tunnel-concurrency")?.parse()?
             }
-            "--hub-hold-ms" => {
-                config.hub_hold =
-                    Duration::from_millis(next_value(&mut iter, "--hub-hold-ms")?.parse()?)
+            "--tunnel-hold-ms" => {
+                config.tunnel_hold =
+                    Duration::from_millis(next_value(&mut iter, "--tunnel-hold-ms")?.parse()?)
             }
-            "--hub-restart-delay-ms" => {
-                config.hub_restart_delay =
-                    Duration::from_millis(next_value(&mut iter, "--hub-restart-delay-ms")?.parse()?)
+            "--tunnel-restart-delay-ms" => {
+                config.tunnel_restart_delay = Duration::from_millis(
+                    next_value(&mut iter, "--tunnel-restart-delay-ms")?.parse()?,
+                )
             }
-            "--hub-downtime-ms" => {
-                config.hub_downtime =
-                    Duration::from_millis(next_value(&mut iter, "--hub-downtime-ms")?.parse()?)
+            "--tunnel-downtime-ms" => {
+                config.tunnel_downtime =
+                    Duration::from_millis(next_value(&mut iter, "--tunnel-downtime-ms")?.parse()?)
             }
             "--timeout-ms" => {
                 config.timeout =
@@ -686,8 +692,8 @@ fn validate_config(
         || config.redis_concurrency == 0
         || config.postgres_statement_timeout.is_zero()
         || config.postgres_sleep.is_zero()
-        || config.hub_attempts == 0
-        || config.hub_concurrency == 0
+        || config.tunnel_attempts == 0
+        || config.tunnel_concurrency == 0
         || config.timeout.is_zero()
     {
         return Err("all failure recovery baseline numeric settings must be positive".into());

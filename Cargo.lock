@@ -36,6 +36,8 @@ version = "0.1.0"
 name = "aether-contracts"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "flate2",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -75,31 +77,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aether-executor"
-version = "0.1.0"
-dependencies = [
- "aether-contracts",
- "aether-http",
- "aether-runtime",
- "async-stream",
- "axum",
- "base64",
- "bytes",
- "clap",
- "flate2",
- "futures-util",
- "http",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
 name = "aether-gateway"
 version = "0.1.0"
 dependencies = [
@@ -120,11 +97,13 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "clap",
+ "dashmap",
  "flate2",
  "futures-util",
  "hmac",
  "http",
  "ldap3",
+ "parking_lot",
  "redis",
  "regex",
  "reqwest",
@@ -151,36 +130,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "aether-hub"
-version = "0.2.0"
-dependencies = [
- "aether-http",
- "aether-runtime",
- "async-stream",
- "axum",
- "bytes",
- "clap",
- "dashmap",
- "flate2",
- "futures-util",
- "http-body-util",
- "parking_lot",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite 0.28.0",
- "tracing",
-]
-
-[[package]]
 name = "aether-proxy"
 version = "0.2.5"
 dependencies = [
+ "aether-contracts",
+ "aether-gateway",
  "aether-http",
  "aether-runtime",
  "anyhow",
  "arc-swap",
+ "axum",
  "base64",
  "bytes",
  "clap",
@@ -234,10 +193,8 @@ version = "0.1.0"
 dependencies = [
  "aether-contracts",
  "aether-data",
- "aether-executor",
  "aether-gateway",
  "aether-http",
- "aether-hub",
  "aether-runtime",
  "async-stream",
  "axum",

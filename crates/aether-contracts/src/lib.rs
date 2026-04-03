@@ -2,6 +2,7 @@ mod error;
 mod frame;
 mod plan;
 mod result;
+pub mod tunnel;
 
 pub use error::{ExecutionError, ExecutionErrorKind, ExecutionPhase};
 pub use frame::{StreamFrame, StreamFramePayload, StreamFrameType};

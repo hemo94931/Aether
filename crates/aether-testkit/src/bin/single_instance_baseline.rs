@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use aether_contracts::{ExecutionPlan, ExecutionTimeouts, RequestBody};
 use aether_testkit::{
-    init_test_runtime_for, run_http_load_probe, ExecutorHarness, ExecutorHarnessConfig,
-    GatewayHarness, GatewayHarnessConfig, HttpLoadProbeConfig, HttpLoadProbeResponseMode,
-    HttpLoadProbeResult, SpawnedServer,
+    init_test_runtime_for, run_http_load_probe, ExecutionRuntimeHarness,
+    ExecutionRuntimeHarnessConfig, GatewayHarness, GatewayHarnessConfig, HttpLoadProbeConfig,
+    HttpLoadProbeResponseMode, HttpLoadProbeResult, SpawnedServer,
 };
 use axum::body::{to_bytes, Body, Bytes};
 use axum::http::StatusCode;
@@ -74,7 +74,7 @@ async fn run_suite(
 ) -> Result<SingleInstanceBaselineReport, Box<dyn std::error::Error>> {
     let upstream = SpawnedServer::start(build_fake_upstream()).await?;
     let gateway = GatewayHarness::start(GatewayHarnessConfig::new(upstream.base_url())).await?;
-    let executor = ExecutorHarness::start(ExecutorHarnessConfig::default()).await?;
+    let runtime = ExecutionRuntimeHarness::start(ExecutionRuntimeHarnessConfig::default()).await?;
 
     let gateway_sync = run_http_load_probe(&gateway_sync_probe_config(gateway.base_url(), config))
         .await
@@ -83,15 +83,15 @@ async fn run_suite(
         run_http_load_probe(&gateway_stream_probe_config(gateway.base_url(), config))
             .await
             .map_err(std::io::Error::other)?;
-    let executor_sync = run_http_load_probe(&executor_sync_probe_config(
-        executor.base_url(),
+    let execution_runtime_sync = run_http_load_probe(&execution_runtime_sync_probe_config(
+        runtime.base_url(),
         upstream.base_url(),
         config,
     ))
     .await
     .map_err(std::io::Error::other)?;
-    let executor_stream = run_http_load_probe(&executor_stream_probe_config(
-        executor.base_url(),
+    let execution_runtime_stream = run_http_load_probe(&execution_runtime_stream_probe_config(
+        runtime.base_url(),
         upstream.base_url(),
         config,
     ))
@@ -110,12 +110,12 @@ async fn run_suite(
                 result: gateway_stream,
             },
             NamedBaselineResult {
-                name: "executor_sync".to_string(),
-                result: executor_sync,
+                name: "execution_runtime_sync".to_string(),
+                result: execution_runtime_sync,
             },
             NamedBaselineResult {
-                name: "executor_stream".to_string(),
-                result: executor_stream,
+                name: "execution_runtime_stream".to_string(),
+                result: execution_runtime_stream,
             },
         ],
     })
@@ -151,13 +151,13 @@ fn gateway_stream_probe_config(
     probe
 }
 
-fn executor_sync_probe_config(
-    executor_base_url: &str,
+fn execution_runtime_sync_probe_config(
+    runtime_base_url: &str,
     upstream_base_url: &str,
     config: &SingleInstanceBaselineConfig,
 ) -> HttpLoadProbeConfig {
     execution_probe_config(
-        format!("{executor_base_url}/v1/execute/sync"),
+        format!("{runtime_base_url}/v1/execute/sync"),
         execution_plan(format!("{upstream_base_url}/v1/chat/completions"), false),
         config.sync_requests,
         config.sync_concurrency,
@@ -165,13 +165,13 @@ fn executor_sync_probe_config(
     )
 }
 
-fn executor_stream_probe_config(
-    executor_base_url: &str,
+fn execution_runtime_stream_probe_config(
+    runtime_base_url: &str,
     upstream_base_url: &str,
     config: &SingleInstanceBaselineConfig,
 ) -> HttpLoadProbeConfig {
     execution_probe_config(
-        format!("{executor_base_url}/v1/execute/stream"),
+        format!("{runtime_base_url}/v1/execute/stream"),
         execution_plan(format!("{upstream_base_url}/v1/chat/completions"), true),
         config.stream_requests,
         config.stream_concurrency,

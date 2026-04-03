@@ -11,13 +11,13 @@ from fastapi.responses import StreamingResponse
 
 import src.api.public.gemini_files as gemini_files_mod
 import src.services.proxy_node.resolver as resolver_mod
-import src.services.request.rust_executor_client as rust_client_mod
+import src.services.request.execution_runtime_client as rust_client_mod
 from src.api.public.gemini_files import UpstreamContext
 from src.config.settings import config
-from src.services.request.executor_plan import ExecutionProxySnapshot
-from src.services.request.rust_executor_client import (
-    RustExecutorStreamResult,
-    RustExecutorSyncResult,
+from src.services.request.execution_runtime_plan import ExecutionProxySnapshot
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeStreamResult,
+    ExecutionRuntimeSyncResult,
 )
 
 
@@ -111,19 +111,19 @@ async def test_proxy_request_passes_proxy_snapshot_to_rust_executor(
         url="http://proxy.local:8080",
     )
 
-    async def _fake_execute_sync_json(self: object, plan: object) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: object) -> ExecutionRuntimeSyncResult:
         assert getattr(plan, "method") == "GET"
         assert getattr(plan, "provider_id") == "prov-1"
         assert getattr(plan, "endpoint_id") == "ep-1"
         assert getattr(plan, "proxy").url == "http://proxy.local:8080"
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             headers={"content-type": "application/json", "x-rust-files": "true"},
             response_json={"files": [{"name": "files/abc"}]},
         )
 
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        rust_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -223,14 +223,14 @@ async def test_download_file_uses_enriched_proxy_snapshot_for_regular_files(
         AsyncMock(return_value=enriched_ctx),
     )
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         assert getattr(plan, "method") == "GET"
         assert getattr(plan, "url") == (
             "https://generativelanguage.googleapis.com/v1beta/files/file-1:download?alt=media"
         )
         assert getattr(plan, "headers") == {"x-goog-api-key": "upstream-key"}
         assert getattr(plan, "proxy").url == "http://proxy.local:8080"
-        return RustExecutorStreamResult(
+        return ExecutionRuntimeStreamResult(
             status_code=200,
             headers={"content-type": "application/octet-stream", "x-rust-files": "true"},
             byte_iterator=_iter_chunks([b"file-", b"bytes"]),
@@ -238,7 +238,7 @@ async def test_download_file_uses_enriched_proxy_snapshot_for_regular_files(
         )
 
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        rust_client_mod.ExecutionRuntimeClient,
         "execute_stream",
         _fake_execute_stream,
     )
@@ -302,12 +302,12 @@ async def test_download_file_returns_503_when_rust_stream_unavailable(
         AsyncMock(return_value=enriched_ctx),
     )
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         del self, plan
-        raise rust_client_mod.RustExecutorClientError("executor unavailable")
+        raise rust_client_mod.ExecutionRuntimeClientError("executor unavailable")
 
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        rust_client_mod.ExecutionRuntimeClient,
         "execute_stream",
         _fake_execute_stream,
     )

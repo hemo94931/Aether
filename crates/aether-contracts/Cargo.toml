@@ -7,7 +7,8 @@ repository.workspace = true
 description = "Shared contracts for Python and Rust Aether components"
 
 [dependencies]
+bytes.workspace = true
+flate2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-

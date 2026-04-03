@@ -33,7 +33,6 @@ export DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-5}
 export HTTP_MAX_CONNECTIONS=${HTTP_MAX_CONNECTIONS:-20}
 export HTTP_KEEPALIVE_CONNECTIONS=${HTTP_KEEPALIVE_CONNECTIONS:-5}
 
-EXECUTOR_PID=""
 GATEWAY_PID=""
 STARTUP_WAIT_EARLY_EXIT=false
 
@@ -44,14 +43,6 @@ cleanup() {
         kill "${GATEWAY_PID}" >/dev/null 2>&1 || true
         wait "${GATEWAY_PID}" >/dev/null 2>&1 || true
     fi
-
-    if [ -n "${EXECUTOR_PID}" ]; then
-        echo ""
-        echo "=> 停止 aether-executor..."
-        kill "${EXECUTOR_PID}" >/dev/null 2>&1 || true
-        wait "${EXECUTOR_PID}" >/dev/null 2>&1 || true
-    fi
-
 }
 
 trap cleanup EXIT
@@ -103,40 +94,7 @@ wait_for_startup() {
 # - ./dev.sh 不再启动 Python 宿主；本地默认只验证 Rust-owned 路径
 APP_PORT=${APP_PORT:-8084}
 RUST_SERVICE_STARTUP_TIMEOUT_SECONDS=${RUST_SERVICE_STARTUP_TIMEOUT_SECONDS:-120}
-EXECUTOR_STARTUP_TIMEOUT_SECONDS=${EXECUTOR_STARTUP_TIMEOUT_SECONDS:-${RUST_SERVICE_STARTUP_TIMEOUT_SECONDS}}
 GATEWAY_STARTUP_TIMEOUT_SECONDS=${GATEWAY_STARTUP_TIMEOUT_SECONDS:-${RUST_SERVICE_STARTUP_TIMEOUT_SECONDS}}
-
-should_start_executor=false
-if [ "${DEV_START_EXECUTOR:-false}" = "true" ] || [ "${EXECUTOR_BACKEND:-rust}" = "rust" ]; then
-    should_start_executor=true
-fi
-
-if [ "${should_start_executor}" = "true" ]; then
-    if ! command -v cargo >/dev/null 2>&1; then
-        echo "=> 未找到 cargo，无法启动 aether-executor。请先安装 Rust toolchain。"
-        exit 1
-    fi
-
-    if [ -n "${EXECUTOR_TRANSPORT:-}" ] && [ "${EXECUTOR_TRANSPORT}" != "tcp" ]; then
-        echo "=> 本地 ./dev.sh 只支持 gateway -> executor 的 TCP 模式。"
-        echo "=> 请移除 EXECUTOR_TRANSPORT=${EXECUTOR_TRANSPORT}，或改为 EXECUTOR_TRANSPORT=tcp。"
-        exit 1
-    fi
-    export EXECUTOR_TRANSPORT=tcp
-    export EXECUTOR_BASE_URL=${EXECUTOR_BASE_URL:-http://127.0.0.1:5219}
-    export EXECUTOR_BIND=${EXECUTOR_BIND:-127.0.0.1:5219}
-
-    echo "=> 启动 aether-executor (tcp: ${EXECUTOR_BIND})..."
-    cargo run -q -p aether-executor -- --transport tcp --bind "${EXECUTOR_BIND}" &
-    EXECUTOR_PID=$!
-
-    if ! wait_for_startup "${EXECUTOR_PID}" "${EXECUTOR_STARTUP_TIMEOUT_SECONDS}" "aether-executor" curl -sf "${EXECUTOR_BASE_URL}/health"; then
-        if [ "${STARTUP_WAIT_EARLY_EXIT}" = "true" ]; then
-            EXECUTOR_PID=""
-        fi
-        exit 1
-    fi
-fi
 
 if ! command -v cargo >/dev/null 2>&1; then
     echo "=> 未找到 cargo，无法启动 aether-gateway。请先安装 Rust toolchain。"
@@ -146,20 +104,9 @@ fi
 export AETHER_GATEWAY_BIND=${AETHER_GATEWAY_BIND:-0.0.0.0:${APP_PORT}}
 export AETHER_GATEWAY_UPSTREAM=${AETHER_GATEWAY_UPSTREAM:-http://127.0.0.1:9}
 export AETHER_GATEWAY_VIDEO_TASK_TRUTH_SOURCE_MODE=${AETHER_GATEWAY_VIDEO_TASK_TRUTH_SOURCE_MODE:-rust-authoritative}
-if [ "${should_start_executor}" = "true" ] && [ "${EXECUTOR_TRANSPORT:-}" = "tcp" ]; then
-    export AETHER_GATEWAY_EXECUTOR_URL=${AETHER_GATEWAY_EXECUTOR_URL:-${EXECUTOR_BASE_URL}}
-fi
 
 GATEWAY_ARGS=(--bind "${AETHER_GATEWAY_BIND}" --upstream "${AETHER_GATEWAY_UPSTREAM}")
-if [ -n "${AETHER_GATEWAY_EXECUTOR_URL:-}" ]; then
-    GATEWAY_ARGS+=(--executor-url "${AETHER_GATEWAY_EXECUTOR_URL}")
-fi
-
-if [ -n "${AETHER_GATEWAY_EXECUTOR_URL:-}" ]; then
-    echo "=> 启动 aether-gateway (Rust frontdoor: ${AETHER_GATEWAY_BIND}, upstream=${AETHER_GATEWAY_UPSTREAM}, executor=${AETHER_GATEWAY_EXECUTOR_URL})..."
-else
-    echo "=> 启动 aether-gateway (Rust frontdoor: ${AETHER_GATEWAY_BIND}, upstream=${AETHER_GATEWAY_UPSTREAM})..."
-fi
+echo "=> 启动 aether-gateway (Rust frontdoor: ${AETHER_GATEWAY_BIND}, upstream=${AETHER_GATEWAY_UPSTREAM})..."
 cargo run -q -p aether-gateway -- "${GATEWAY_ARGS[@]}" &
 GATEWAY_PID=$!
 
@@ -174,14 +121,8 @@ echo "=> 启动本地开发服务..."
 echo "=> Rust公开入口:     http://localhost:${APP_PORT}"
 echo "=> Frontdoor健康检查: http://localhost:${APP_PORT}/_gateway/health"
 echo "=> Legacy upstream:  ${AETHER_GATEWAY_UPSTREAM}"
-if [ -n "${AETHER_GATEWAY_EXECUTOR_URL:-}" ]; then
-    echo "=> Executor API:     ${AETHER_GATEWAY_EXECUTOR_URL}"
-fi
 echo "=> 数据库: ${DATABASE_URL}"
-if [ "${should_start_executor}" = "true" ]; then
-    echo "=> Executor 后端: ${EXECUTOR_BACKEND:-rust} (${EXECUTOR_TRANSPORT})"
-fi
-echo "=> 提示: 未下沉到 Rust 的 legacy 路由会直接失败，除非你手动设置了可用的 upstream/control URL。"
+echo "=> 提示: 未下沉到 Rust 的 legacy 路由会直接失败，除非你手动设置了可用的 upstream。"
 echo ""
 
 wait "${GATEWAY_PID}"

@@ -9,14 +9,25 @@ WORKDIR /app
 COPY frontend/ ./frontend/
 RUN cd frontend && npm run build
 
+FROM rust:1.86-slim AS gateway-builder
+WORKDIR /build
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    perl
+COPY Cargo.toml Cargo.lock ./
+COPY apps/ ./apps/
+COPY crates/ ./crates/
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release --locked -p aether-gateway && \
+    cp target/release/aether-gateway /tmp/aether-gateway
+
 # ==================== 运行时镜像 ====================
 FROM python:3.13-slim
 WORKDIR /app
-
-ARG HUB_RELEASE_REPO=fawney19/Aether
-ARG HUB_TAG
-ARG TARGETARCH
-ARG GITHUB_TOKEN
 
 # 运行时依赖（无 gcc/nodejs/npm，使用 BuildKit 缓存加速）
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -37,37 +48,7 @@ COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/
 COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/
 COPY --from=builder /usr/local/bin/alembic /usr/local/bin/
-# Hub 预编译二进制（构建时从 GitHub Release 下载）
-# GITHUB_TOKEN 可选：未认证 API 限流 60 次/小时，认证后 5000 次/小时
-RUN set -eux; \
-    auth_header=""; \
-    if [ -n "${GITHUB_TOKEN:-}" ]; then \
-        auth_header="Authorization: token ${GITHUB_TOKEN}"; \
-    fi; \
-    tag="${HUB_TAG:-}"; \
-    if [ -z "$tag" ]; then \
-        tag="$(curl -sL ${auth_header:+-H "$auth_header"} "https://api.github.com/repos/${HUB_RELEASE_REPO}/releases" | python3 -c "import json,sys;print(next((r['tag_name'] for r in json.load(sys.stdin) if r.get('tag_name','').startswith('hub-v') and not r.get('draft') and not r.get('prerelease')),''))")"; \
-    fi; \
-    if [ -z "$tag" ]; then \
-        echo "Failed to resolve hub release tag"; \
-        exit 1; \
-    fi; \
-    arch="${TARGETARCH:-}"; \
-    if [ -z "$arch" ]; then \
-        arch="$(dpkg --print-architecture)"; \
-    fi; \
-    case "$arch" in \
-        amd64|arm64) ;; \
-        x86_64) arch="amd64" ;; \
-        aarch64) arch="arm64" ;; \
-        *) echo "Unsupported architecture: $arch"; exit 1 ;; \
-    esac; \
-    echo "Using Hub release tag: $tag"; \
-    url="https://github.com/${HUB_RELEASE_REPO}/releases/download/${tag}/aether-hub-linux-${arch}.tar.gz"; \
-    curl -L --fail -o /tmp/aether-hub.tar.gz "$url"; \
-    tar xzf /tmp/aether-hub.tar.gz -C /usr/local/bin; \
-    chmod +x /usr/local/bin/aether-hub; \
-    rm -f /tmp/aether-hub.tar.gz
+COPY --from=gateway-builder /tmp/aether-gateway /usr/local/bin/aether-gateway
 # 从 builder 阶段复制前端构建产物
 COPY --from=builder /app/frontend/dist /usr/share/nginx/html
 RUN chmod -R 755 /usr/share/nginx/html
@@ -119,9 +100,9 @@ RUN printf '%s\n' \
     '        return 404;' \
     '    }' \
     '' \
-    '    # WebSocket 隧道端点（aether-proxy tunnel 模式）' \
+    '    # WebSocket 隧道端点（gateway-owned tunnel 模式）' \
     '    location = /api/internal/proxy-tunnel {' \
-    '        proxy_pass http://127.0.0.1:8085/proxy;' \
+    '        proxy_pass http://127.0.0.1:PORT_PLACEHOLDER;' \
     '        proxy_http_version 1.1;' \
     '        proxy_set_header Host $host;' \
     '        proxy_set_header X-Real-IP $real_ip;' \
@@ -237,14 +218,14 @@ RUN printf '%s\n' \
     'pidfile=/var/run/supervisord.pid' \
     '' \
     '[program:nginx]' \
-    'command=/bin/bash -c "sed \"s/PORT_PLACEHOLDER/8084/g\" /etc/nginx/sites-available/default.template > /etc/nginx/sites-available/default && /usr/sbin/nginx -g \"daemon off;\""' \
+    'command=/bin/bash -c "sed \"s/PORT_PLACEHOLDER/%(ENV_PORT)s/g\" /etc/nginx/sites-available/default.template > /etc/nginx/sites-available/default && /usr/sbin/nginx -g \"daemon off;\""' \
     'autostart=true' \
     'autorestart=true' \
     'stdout_logfile=/var/log/nginx/access.log' \
     'stderr_logfile=/var/log/nginx/error.log' \
     '' \
-    '[program:app]' \
-    'command=/bin/bash -c "MAX_REQUESTS_JITTER=$((${MAX_REQUESTS:-50000}/20)); exec gunicorn src.main:app -c gunicorn_conf.py --preload -w %(ENV_GUNICORN_WORKERS)s -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:8084 --max-requests ${MAX_REQUESTS:-50000} --max-requests-jitter $MAX_REQUESTS_JITTER --access-logfile - --error-logfile - --log-level info"' \
+    '[program:gateway]' \
+    'command=/usr/local/bin/aether-gateway --bind 127.0.0.1:%(ENV_PORT)s --upstream http://127.0.0.1:%(ENV_LEGACY_APP_PORT)s' \
     'directory=/app' \
     'autostart=true' \
     'autorestart=true' \
@@ -252,16 +233,18 @@ RUN printf '%s\n' \
     'stdout_logfile_maxbytes=0' \
     'stderr_logfile=/dev/stderr' \
     'stderr_logfile_maxbytes=0' \
-    'environment=PYTHONUNBUFFERED=1,PYTHONIOENCODING=utf-8,LANG=C.UTF-8,LC_ALL=C.UTF-8,DOCKER_CONTAINER=true,LD_PRELOAD=/usr/local/lib/libjemalloc.so.2,MALLOC_CONF="background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000"' \
+    'environment=RUST_LOG=aether_gateway=info' \
     '' \
-    '[program:tunnel-hub]' \
-    'command=/usr/local/bin/aether-hub --bind 0.0.0.0:8085' \
+    '[program:app]' \
+    'command=/bin/bash -c "MAX_REQUESTS_JITTER=$((${MAX_REQUESTS:-50000}/20)); exec gunicorn src.main:app -c gunicorn_conf.py --preload -w %(ENV_GUNICORN_WORKERS)s -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:%(ENV_LEGACY_APP_PORT)s --max-requests ${MAX_REQUESTS:-50000} --max-requests-jitter $MAX_REQUESTS_JITTER --access-logfile - --error-logfile - --log-level info"' \
+    'directory=/app' \
     'autostart=true' \
     'autorestart=true' \
     'stdout_logfile=/dev/stdout' \
     'stdout_logfile_maxbytes=0' \
     'stderr_logfile=/dev/stderr' \
-    'stderr_logfile_maxbytes=0' > /etc/supervisor/conf.d/supervisord.conf
+    'stderr_logfile_maxbytes=0' \
+    'environment=PYTHONUNBUFFERED=1,PYTHONIOENCODING=utf-8,LANG=C.UTF-8,LC_ALL=C.UTF-8,DOCKER_CONTAINER=true,LD_PRELOAD=/usr/local/lib/libjemalloc.so.2,MALLOC_CONF="background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000"' > /etc/supervisor/conf.d/supervisord.conf
 # 创建目录
 RUN mkdir -p /var/log/supervisor /app/logs /app/data
 # 入口脚本（启动前执行迁移）
@@ -276,6 +259,7 @@ ENV PYTHONUNBUFFERED=1 \
     LD_PRELOAD=/usr/local/lib/libjemalloc.so.2 \
     MALLOC_CONF=background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000 \
     PORT=8084 \
+    LEGACY_APP_PORT=18084 \
     GUNICORN_WORKERS=2 \
     MAX_REQUESTS=4000
 EXPOSE 80

@@ -1,8 +1,6 @@
 # Aether 部署配置 - 本地构建
 # 使用方法:
 #   首次构建 base: docker build -f Dockerfile.base -t aether-base:latest .
-#   Hub 二进制:   cd aether-hub && ./build.sh（默认 binary 模式）供发布；deploy.sh 构建 app 时会自动下载
-#   Hub 镜像发布: cd aether-hub && ./build.sh --image --tag <tag> --push（可选）
 #   启动服务: docker compose -f docker-compose.build.yml up -d --build
 #   或使用:    ./deploy.sh
 
@@ -43,8 +41,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.app.local
-      args:
-        GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     image: aether-app:latest
     container_name: aether-app
     env_file:

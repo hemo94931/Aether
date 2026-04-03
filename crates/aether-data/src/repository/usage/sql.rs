@@ -50,6 +50,15 @@ SELECT
   first_byte_time_ms,
   status,
   billing_status,
+  request_headers,
+  request_body,
+  provider_request_headers,
+  provider_request_body,
+  response_headers,
+  response_body,
+  client_response_headers,
+  client_response_body,
+  request_metadata,
   CAST(EXTRACT(EPOCH FROM created_at) AS BIGINT) AS created_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM COALESCE(finalized_at, created_at)) AS BIGINT) AS updated_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM finalized_at) AS BIGINT) AS finalized_at_unix_secs
@@ -98,6 +107,15 @@ SELECT
   first_byte_time_ms,
   status,
   billing_status,
+  request_headers,
+  request_body,
+  provider_request_headers,
+  provider_request_body,
+  response_headers,
+  response_body,
+  client_response_headers,
+  client_response_body,
+  request_metadata,
   CAST(EXTRACT(EPOCH FROM created_at) AS BIGINT) AS created_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM COALESCE(finalized_at, created_at)) AS BIGINT) AS updated_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM finalized_at) AS BIGINT) AS finalized_at_unix_secs
@@ -176,6 +194,15 @@ SELECT
   first_byte_time_ms,
   status,
   billing_status,
+  NULL::jsonb AS request_headers,
+  NULL::jsonb AS request_body,
+  NULL::jsonb AS provider_request_headers,
+  NULL::jsonb AS provider_request_body,
+  NULL::jsonb AS response_headers,
+  NULL::jsonb AS response_body,
+  NULL::jsonb AS client_response_headers,
+  NULL::jsonb AS client_response_body,
+  NULL::jsonb AS request_metadata,
   CAST(EXTRACT(EPOCH FROM created_at) AS BIGINT) AS created_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM COALESCE(finalized_at, created_at)) AS BIGINT) AS updated_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM finalized_at) AS BIGINT) AS finalized_at_unix_secs
@@ -222,6 +249,15 @@ SELECT
   first_byte_time_ms,
   status,
   billing_status,
+  NULL::jsonb AS request_headers,
+  NULL::jsonb AS request_body,
+  NULL::jsonb AS provider_request_headers,
+  NULL::jsonb AS provider_request_body,
+  NULL::jsonb AS response_headers,
+  NULL::jsonb AS response_body,
+  NULL::jsonb AS client_response_headers,
+  NULL::jsonb AS client_response_body,
+  NULL::jsonb AS request_metadata,
   CAST(EXTRACT(EPOCH FROM created_at) AS BIGINT) AS created_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM COALESCE(finalized_at, created_at)) AS BIGINT) AS updated_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM finalized_at) AS BIGINT) AS finalized_at_unix_secs
@@ -326,11 +362,12 @@ INSERT INTO "usage" (
   $44,
   $45,
   $46,
+  $47,
   CASE
-    WHEN $47 IS NULL THEN NULL
-    ELSE TO_TIMESTAMP($47::double precision)
+    WHEN $48 IS NULL THEN NULL
+    ELSE TO_TIMESTAMP($48::double precision)
   END,
-  COALESCE(TO_TIMESTAMP($48::double precision), NOW())
+  COALESCE(TO_TIMESTAMP($49::double precision), NOW())
 )
 ON CONFLICT (request_id)
 DO UPDATE SET
@@ -419,6 +456,15 @@ RETURNING
   first_byte_time_ms,
   status,
   billing_status,
+  request_headers,
+  request_body,
+  provider_request_headers,
+  provider_request_body,
+  response_headers,
+  response_body,
+  client_response_headers,
+  client_response_body,
+  request_metadata,
   CAST(EXTRACT(EPOCH FROM created_at) AS BIGINT) AS created_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM COALESCE(finalized_at, created_at)) AS BIGINT) AS updated_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM finalized_at) AS BIGINT) AS finalized_at_unix_secs
@@ -760,6 +806,15 @@ fn map_usage_row(row: &sqlx::postgres::PgRow) -> Result<StoredRequestUsageAudit,
     usage.cache_creation_cost_usd = row.try_get::<f64, _>("cache_creation_cost_usd")?;
     usage.cache_read_cost_usd = row.try_get::<f64, _>("cache_read_cost_usd")?;
     usage.output_price_per_1m = row.try_get("output_price_per_1m")?;
+    usage.request_headers = row.try_get("request_headers")?;
+    usage.request_body = row.try_get("request_body")?;
+    usage.provider_request_headers = row.try_get("provider_request_headers")?;
+    usage.provider_request_body = row.try_get("provider_request_body")?;
+    usage.response_headers = row.try_get("response_headers")?;
+    usage.response_body = row.try_get("response_body")?;
+    usage.client_response_headers = row.try_get("client_response_headers")?;
+    usage.client_response_body = row.try_get("client_response_body")?;
+    usage.request_metadata = row.try_get("request_metadata")?;
     Ok(usage)
 }
 
@@ -890,5 +945,12 @@ mod tests {
     #[test]
     fn usage_sql_supports_recent_usage_audits_query() {
         assert!(super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("FROM \"usage\""));
+    }
+
+    #[test]
+    fn usage_sql_insert_values_aligns_request_metadata_and_timestamps() {
+        assert!(super::UPSERT_SQL.contains("\n  $46,\n  $47,\n  CASE"));
+        assert!(super::UPSERT_SQL.contains("WHEN $48 IS NULL THEN NULL"));
+        assert!(super::UPSERT_SQL.contains("TO_TIMESTAMP($49::double precision)"));
     }
 }

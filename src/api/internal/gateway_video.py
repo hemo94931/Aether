@@ -156,11 +156,11 @@ async def _build_openai_video_create_sync_plan(
     from src.api.handlers.openai.video_adapter import OpenAIVideoAdapter
     from src.api.handlers.openai.video_handler import OpenAIVideoHandler
     from src.core.api_format import make_signature_key
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanTimeouts,
         build_execution_plan_body,
-        is_remote_contract_eligible,
+        is_remote_execution_runtime_contract_eligible,
     )
 
     if (
@@ -283,7 +283,7 @@ async def _build_openai_video_create_sync_plan(
             total_ms=300_000,
         ),
     )
-    if not is_remote_contract_eligible(contract):
+    if not is_remote_execution_runtime_contract_eligible(contract):
         return None
 
     return GatewayExecutionPlanResponse(
@@ -347,11 +347,11 @@ async def _build_openai_video_remix_sync_plan(
     from src.core.api_format.conversion.internal_video import VideoStatus
     from src.core.crypto import crypto_service
     from src.models.database import Provider
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanTimeouts,
         build_execution_plan_body,
-        is_remote_contract_eligible,
+        is_remote_execution_runtime_contract_eligible,
     )
 
     if str(payload.method or "").strip().upper() != "POST" or not task_id or payload.body_base64:
@@ -467,7 +467,7 @@ async def _build_openai_video_remix_sync_plan(
             total_ms=300_000,
         ),
     )
-    if not is_remote_contract_eligible(contract):
+    if not is_remote_execution_runtime_contract_eligible(contract):
         return None
 
     return GatewayExecutionPlanResponse(
@@ -521,11 +521,11 @@ async def _build_gemini_video_create_sync_plan(
     from src.api.handlers.gemini.video_adapter import GeminiVeoAdapter
     from src.api.handlers.gemini.video_handler import GeminiVeoHandler
     from src.core.api_format import make_signature_key
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanTimeouts,
         build_execution_plan_body,
-        is_remote_contract_eligible,
+        is_remote_execution_runtime_contract_eligible,
     )
 
     if str(payload.method or "").strip().upper() != "POST" or not model or payload.body_base64:
@@ -646,7 +646,7 @@ async def _build_gemini_video_create_sync_plan(
             total_ms=300_000,
         ),
     )
-    if not is_remote_contract_eligible(contract):
+    if not is_remote_execution_runtime_contract_eligible(contract):
         return None
 
     return GatewayExecutionPlanResponse(
@@ -708,11 +708,11 @@ async def _build_openai_video_cancel_sync_plan(
     from src.core.api_format import make_signature_key
     from src.core.api_format.conversion.internal_video import VideoStatus
     from src.core.crypto import crypto_service
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanBody,
         ExecutionPlanTimeouts,
-        is_remote_contract_eligible,
+        is_remote_execution_runtime_contract_eligible,
     )
 
     if str(payload.method or "").strip().upper() != "POST" or not task_id:
@@ -807,7 +807,7 @@ async def _build_openai_video_cancel_sync_plan(
             total_ms=300_000,
         ),
     )
-    if not is_remote_contract_eligible(contract):
+    if not is_remote_execution_runtime_contract_eligible(contract):
         return None
 
     return GatewayExecutionPlanResponse(
@@ -858,11 +858,11 @@ async def _build_openai_video_delete_sync_plan(
     from src.core.api_format import make_signature_key
     from src.core.api_format.conversion.internal_video import VideoStatus
     from src.core.crypto import crypto_service
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanBody,
         ExecutionPlanTimeouts,
-        is_remote_contract_eligible,
+        is_remote_execution_runtime_contract_eligible,
     )
 
     if str(payload.method or "").strip().upper() != "DELETE" or not task_id:
@@ -952,7 +952,7 @@ async def _build_openai_video_delete_sync_plan(
             total_ms=300_000,
         ),
     )
-    if not is_remote_contract_eligible(contract):
+    if not is_remote_execution_runtime_contract_eligible(contract):
         return None
 
     return GatewayExecutionPlanResponse(
@@ -1003,11 +1003,11 @@ async def _build_gemini_video_cancel_sync_plan(
     from src.core.api_format import make_signature_key
     from src.core.api_format.conversion.internal_video import VideoStatus
     from src.services.provider.auth import get_provider_auth
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanTimeouts,
         build_execution_plan_body,
-        is_remote_contract_eligible,
+        is_remote_execution_runtime_contract_eligible,
     )
 
     if str(payload.method or "").strip().upper() != "POST" or not task_id:
@@ -1112,7 +1112,7 @@ async def _build_gemini_video_cancel_sync_plan(
             total_ms=300_000,
         ),
     )
-    if not is_remote_contract_eligible(contract):
+    if not is_remote_execution_runtime_contract_eligible(contract):
         return None
 
     return GatewayExecutionPlanResponse(
@@ -1160,7 +1160,7 @@ async def _build_openai_video_content_stream_plan(
 ) -> dict[str, Any]:
     from src.api.handlers.openai.video_handler import OpenAIVideoHandler
     from src.core.api_format.conversion.internal_video import VideoStatus
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanBody,
         ExecutionPlanTimeouts,

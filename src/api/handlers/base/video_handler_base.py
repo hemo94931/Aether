@@ -190,22 +190,22 @@ class VideoHandlerBase(ABC):
         pool_timeout_ms: int = 30_000,
         log_label: str = "VideoRequest",
     ) -> httpx.Response:
-        from src.services.request.executor_plan import (
+        from src.services.request.execution_runtime_plan import (
             ExecutionPlan,
             ExecutionPlanTimeouts,
             build_execution_plan_body,
         )
-        from src.services.request.rust_executor_client import (
-            RustExecutorClient,
-            RustExecutorClientError,
+        from src.services.request.execution_runtime_client import (
+            ExecutionRuntimeClient,
+            ExecutionRuntimeClientError,
         )
 
         resolved_provider_name = str(provider_name or "").strip() or None
-        if config.executor_backend != "rust":
+        if config.execution_runtime_backend != "rust":
             raise ProviderNotAvailableException(
                 "Video 请求仅支持 Rust executor",
                 provider_name=resolved_provider_name,
-                upstream_response=f"executor_backend={config.executor_backend}",
+                upstream_response=f"executor_backend={config.execution_runtime_backend}",
             )
 
         request_headers = dict(headers)
@@ -260,8 +260,8 @@ class VideoHandlerBase(ABC):
             ) from exc
 
         try:
-            rust_result = await RustExecutorClient().execute_sync_json(plan)
-        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+            rust_result = await ExecutionRuntimeClient().execute_sync_json(plan)
+        except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning(
                 "[{}] Rust executor unavailable request_id={} method={} url={}: {}",
                 log_label,

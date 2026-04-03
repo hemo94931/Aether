@@ -104,17 +104,17 @@ class VideoTaskCancelService:
             body: Any,
             content_type: str | None = None,
         ) -> httpx.Response:
-            from src.services.request.executor_plan import (
+            from src.services.request.execution_runtime_plan import (
                 ExecutionPlan,
                 ExecutionPlanTimeouts,
                 build_execution_plan_body,
             )
-            from src.services.request.rust_executor_client import (
-                RustExecutorClient,
-                RustExecutorClientError,
+            from src.services.request.execution_runtime_client import (
+                ExecutionRuntimeClient,
+                ExecutionRuntimeClientError,
             )
 
-            if config.executor_backend != "rust":
+            if config.execution_runtime_backend != "rust":
                 return httpx.Response(
                     status_code=503,
                     request=httpx.Request(method, url, headers=request_headers),
@@ -130,7 +130,7 @@ class VideoTaskCancelService:
                 final_headers["content-type"] = content_type
 
             try:
-                result = await RustExecutorClient().execute_sync_json(
+                result = await ExecutionRuntimeClient().execute_sync_json(
                     ExecutionPlan(
                         request_id=str(getattr(task, "request_id", "") or task_id),
                         candidate_id=None,
@@ -156,7 +156,7 @@ class VideoTaskCancelService:
                         ),
                     )
                 )
-            except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+            except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
                 logger.warning(
                     "[VideoCancel] Rust executor unavailable task={} method={} url={}: {}",
                     getattr(task, "id", task_id),

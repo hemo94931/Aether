@@ -1,0 +1,466 @@
+use crate::gateway::ai_pipeline::conversion::{
+    build_core_error_body_for_client_format, core_error_background_report_kind,
+    core_error_default_client_api_format, is_core_error_finalize_kind, LocalCoreSyncErrorKind,
+};
+use crate::gateway::ai_pipeline::private_response::normalize_provider_private_response_value as unwrap_local_finalize_response_value;
+use crate::gateway::usage::spawn_sync_report;
+use crate::gateway::{
+    build_client_response_from_parts, maybe_compile_sync_finalize_response, AppState,
+    GatewayControlDecision, GatewayError, GatewaySyncReportRequest,
+};
+use axum::body::Body;
+use axum::http::Response;
+use base64::Engine as _;
+use tracing::warn;
+
+#[derive(Clone, Debug)]
+struct LocalSyncErrorDetails {
+    message: String,
+    code: Option<String>,
+    kind: LocalCoreSyncErrorKind,
+}
+
+pub(super) fn maybe_build_local_core_error_response(
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    payload: &GatewaySyncReportRequest,
+) -> Result<Option<Response<Body>>, GatewayError> {
+    if !is_core_error_finalize_kind(payload.report_kind.as_str()) {
+        return Ok(None);
+    }
+
+    let Some(body_json) = payload.body_json.as_ref() else {
+        return Ok(None);
+    };
+    let mut body_json = body_json.clone();
+    if let Some(report_context) = payload.report_context.as_ref() {
+        if let Some(unwrapped) =
+            unwrap_local_finalize_response_value(body_json.clone(), report_context)?
+        {
+            body_json = unwrapped;
+        }
+    }
+
+    let Some(body_object) = body_json.as_object() else {
+        return Ok(None);
+    };
+    if !body_object.contains_key("error")
+        && !body_object
+            .get("type")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value == "error")
+    {
+        return Ok(None);
+    }
+
+    let Some(response_body_json) = build_best_effort_local_core_error_body(payload, &body_json)?
+    else {
+        return Ok(None);
+    };
+
+    let mut response_headers = payload.headers.clone();
+    response_headers.remove("content-encoding");
+    response_headers.remove("content-length");
+    response_headers.insert("content-type".to_string(), "application/json".to_string());
+
+    let body_bytes = serde_json::to_vec(&response_body_json)
+        .map_err(|err| GatewayError::Internal(err.to_string()))?;
+    response_headers.insert("content-length".to_string(), body_bytes.len().to_string());
+
+    Ok(Some(build_client_response_from_parts(
+        resolve_local_sync_error_status_code(payload.status_code, &body_json),
+        &response_headers,
+        Body::from(body_bytes),
+        trace_id,
+        Some(decision),
+    )?))
+}
+
+fn maybe_resolve_local_sync_response_body_json(
+    payload: &GatewaySyncReportRequest,
+) -> Result<Option<serde_json::Value>, GatewayError> {
+    if let Some(client_body_json) = payload.client_body_json.clone() {
+        return Ok(Some(client_body_json));
+    }
+
+    let Some(mut body_json) = payload.body_json.clone() else {
+        return Ok(None);
+    };
+
+    if let Some(report_context) = payload.report_context.as_ref() {
+        if let Some(unwrapped) =
+            unwrap_local_finalize_response_value(body_json.clone(), report_context)?
+        {
+            body_json = unwrapped;
+        }
+    }
+
+    if is_core_error_finalize_kind(payload.report_kind.as_str()) {
+        if let Some(converted) = build_best_effort_local_core_error_body(payload, &body_json)? {
+            return Ok(Some(converted));
+        }
+    }
+
+    Ok(Some(body_json))
+}
+
+fn build_local_sync_response_from_json(
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    payload: &GatewaySyncReportRequest,
+    body_json: serde_json::Value,
+) -> Result<Response<Body>, GatewayError> {
+    let status_code = if is_core_error_finalize_kind(payload.report_kind.as_str())
+        || has_nested_error(&body_json)
+    {
+        resolve_local_sync_error_status_code(payload.status_code, &body_json)
+    } else {
+        payload.status_code
+    };
+
+    let mut response_headers = payload.headers.clone();
+    response_headers.remove("content-encoding");
+    response_headers.remove("content-length");
+    response_headers.insert("content-type".to_string(), "application/json".to_string());
+
+    let body_bytes =
+        serde_json::to_vec(&body_json).map_err(|err| GatewayError::Internal(err.to_string()))?;
+    response_headers.insert("content-length".to_string(), body_bytes.len().to_string());
+
+    build_client_response_from_parts(
+        status_code,
+        &response_headers,
+        Body::from(body_bytes),
+        trace_id,
+        Some(decision),
+    )
+}
+
+fn build_local_sync_response_from_bytes(
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    payload: &GatewaySyncReportRequest,
+    body_bytes: Vec<u8>,
+) -> Result<Response<Body>, GatewayError> {
+    let mut response_headers = payload.headers.clone();
+    response_headers.remove("content-length");
+    if body_bytes.is_empty() {
+        response_headers.remove("content-encoding");
+    }
+    response_headers.insert("content-length".to_string(), body_bytes.len().to_string());
+
+    build_client_response_from_parts(
+        payload.status_code,
+        &response_headers,
+        Body::from(body_bytes),
+        trace_id,
+        Some(decision),
+    )
+}
+
+fn build_local_core_sync_finalize_fallback_response(
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    payload: &GatewaySyncReportRequest,
+) -> Result<Response<Body>, GatewayError> {
+    if let Some(body_json) = maybe_resolve_local_sync_response_body_json(payload)? {
+        return build_local_sync_response_from_json(trace_id, decision, payload, body_json);
+    }
+
+    if let Some(body_base64) = payload.body_base64.as_ref() {
+        let body_bytes = base64::engine::general_purpose::STANDARD
+            .decode(body_base64)
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        return build_local_sync_response_from_bytes(trace_id, decision, payload, body_bytes);
+    }
+
+    build_local_sync_response_from_bytes(trace_id, decision, payload, Vec::new())
+}
+
+pub(crate) fn build_best_effort_local_core_error_body(
+    payload: &GatewaySyncReportRequest,
+    body_json: &serde_json::Value,
+) -> Result<Option<serde_json::Value>, GatewayError> {
+    let default_api_format = core_error_default_client_api_format(payload.report_kind.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let client_api_format = payload
+        .report_context
+        .as_ref()
+        .and_then(|value| value.get("client_api_format"))
+        .and_then(|value| value.as_str())
+        .unwrap_or(default_api_format.as_str())
+        .trim()
+        .to_ascii_lowercase();
+    let provider_api_format = payload
+        .report_context
+        .as_ref()
+        .and_then(|value| value.get("provider_api_format"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_else(|| client_api_format.clone());
+
+    if client_api_format.is_empty() {
+        return Ok(None);
+    }
+    if client_api_format == provider_api_format {
+        return Ok(Some(body_json.clone()));
+    }
+
+    let details = extract_local_sync_error_details(payload.status_code, body_json);
+    Ok(build_core_error_body_for_client_format(
+        &client_api_format,
+        &details.message,
+        details.code.as_deref(),
+        details.kind,
+    ))
+}
+
+pub(crate) fn resolve_core_error_background_report_kind(report_kind: &str) -> Option<String> {
+    core_error_background_report_kind(report_kind).map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_core_success_background_report_kind(report_kind: &str) -> Option<String> {
+    crate::gateway::ai_pipeline::conversion::core_success_background_report_kind(report_kind)
+        .map(ToOwned::to_owned)
+}
+
+fn resolve_local_sync_error_status_code(status_code: u16, body_json: &serde_json::Value) -> u16 {
+    if (400..600).contains(&status_code) {
+        return status_code;
+    }
+
+    let Some(error_object) = body_json.get("error").and_then(|value| value.as_object()) else {
+        return 400;
+    };
+
+    for key in ["code", "status"] {
+        let Some(value) = error_object.get(key) else {
+            continue;
+        };
+        if let Some(number) = value.as_u64() {
+            if (400..600).contains(&number) {
+                return number as u16;
+            }
+        }
+        if let Some(text) = value.as_str() {
+            if let Ok(number) = text.parse::<u16>() {
+                if (400..600).contains(&number) {
+                    return number;
+                }
+            }
+        }
+    }
+
+    400
+}
+
+fn extract_local_sync_error_details(
+    status_code: u16,
+    body_json: &serde_json::Value,
+) -> LocalSyncErrorDetails {
+    let resolved_status_code = resolve_local_sync_error_status_code(status_code, body_json);
+    let body_object = body_json.as_object();
+    let error_object = body_object
+        .and_then(|object| object.get("error"))
+        .and_then(|value| value.as_object());
+
+    let message = first_non_empty_error_text(
+        error_object,
+        body_object,
+        &["message", "detail", "reason", "status", "type", "__type"],
+    )
+    .unwrap_or_else(|| format!("HTTP {resolved_status_code}"));
+    let code = first_non_empty_error_text(error_object, body_object, &["code", "status"]);
+    let raw_type = first_non_empty_error_text(error_object, body_object, &["type", "__type"]);
+    let raw_status = first_non_empty_error_text(error_object, body_object, &["status"]);
+    let kind = classify_local_sync_error_kind(
+        resolved_status_code,
+        raw_type.as_deref(),
+        raw_status.as_deref(),
+        code.as_deref(),
+        message.as_str(),
+    );
+
+    LocalSyncErrorDetails {
+        message,
+        code,
+        kind,
+    }
+}
+
+fn first_non_empty_error_text(
+    error_object: Option<&serde_json::Map<String, serde_json::Value>>,
+    body_object: Option<&serde_json::Map<String, serde_json::Value>>,
+    keys: &[&str],
+) -> Option<String> {
+    for object in [error_object, body_object].into_iter().flatten() {
+        for key in keys {
+            let Some(value) = object.get(*key) else {
+                continue;
+            };
+            match value {
+                serde_json::Value::String(text) if !text.trim().is_empty() => {
+                    return Some(text.trim().to_string());
+                }
+                serde_json::Value::Number(number) => return Some(number.to_string()),
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+fn classify_local_sync_error_kind(
+    status_code: u16,
+    raw_type: Option<&str>,
+    raw_status: Option<&str>,
+    raw_code: Option<&str>,
+    message: &str,
+) -> LocalCoreSyncErrorKind {
+    let mut fingerprint = String::new();
+    for segment in [raw_type, raw_status, raw_code, Some(message)] {
+        if let Some(segment) = segment.map(str::trim).filter(|value| !value.is_empty()) {
+            if !fingerprint.is_empty() {
+                fingerprint.push(' ');
+            }
+            fingerprint.push_str(&segment.to_ascii_lowercase());
+        }
+    }
+
+    if status_code == 429
+        || fingerprint.contains("rate_limit")
+        || fingerprint.contains("rate limited")
+        || fingerprint.contains("resource_exhausted")
+        || fingerprint.contains("throttl")
+    {
+        return LocalCoreSyncErrorKind::RateLimit;
+    }
+    if fingerprint.contains("contextlength")
+        || fingerprint.contains("contentlengthexceeded")
+        || fingerprint.contains("context window")
+        || fingerprint.contains("context length")
+        || fingerprint.contains("max_tokens")
+        || (fingerprint.contains("context") && fingerprint.contains("token"))
+    {
+        return LocalCoreSyncErrorKind::ContextLengthExceeded;
+    }
+    if status_code == 401
+        || fingerprint.contains("unauth")
+        || fingerprint.contains("authentication")
+    {
+        return LocalCoreSyncErrorKind::Authentication;
+    }
+    if status_code == 403 || fingerprint.contains("permission") || fingerprint.contains("forbidden")
+    {
+        return LocalCoreSyncErrorKind::PermissionDenied;
+    }
+    if status_code == 404 || fingerprint.contains("not_found") || fingerprint.contains("not found")
+    {
+        return LocalCoreSyncErrorKind::NotFound;
+    }
+    if status_code == 503 || fingerprint.contains("overload") || fingerprint.contains("unavailable")
+    {
+        return LocalCoreSyncErrorKind::Overloaded;
+    }
+    if (500..600).contains(&status_code) {
+        return LocalCoreSyncErrorKind::ServerError;
+    }
+    LocalCoreSyncErrorKind::InvalidRequest
+}
+
+pub(crate) fn strip_utf8_bom_and_ws(mut body: &[u8]) -> &[u8] {
+    loop {
+        while let Some(first) = body.first() {
+            if first.is_ascii_whitespace() {
+                body = &body[1..];
+            } else {
+                break;
+            }
+        }
+        if body.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            body = &body[3..];
+        } else {
+            break;
+        }
+    }
+    body
+}
+
+pub(crate) fn has_nested_error(value: &serde_json::Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+
+    if object.contains_key("error") {
+        return true;
+    }
+    if object
+        .get("type")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| value == "error")
+    {
+        return true;
+    }
+
+    object
+        .get("chunks")
+        .and_then(|value| value.as_array())
+        .is_some_and(|chunks| {
+            chunks.iter().any(|chunk| {
+                chunk.as_object().is_some_and(|chunk_object| {
+                    chunk_object.contains_key("error")
+                        || chunk_object
+                            .get("type")
+                            .and_then(|value| value.as_str())
+                            .is_some_and(|value| value == "error")
+                })
+            })
+        })
+}
+
+pub(crate) async fn submit_local_core_error_or_sync_finalize(
+    state: &AppState,
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    payload: GatewaySyncReportRequest,
+) -> Result<Response<Body>, GatewayError> {
+    let response = if let Some(response) =
+        maybe_compile_sync_finalize_response(trace_id, decision, &payload)?
+    {
+        response
+    } else if let Some(response) =
+        maybe_build_local_core_error_response(trace_id, decision, &payload)?
+    {
+        response
+    } else {
+        warn!(
+            trace_id = %trace_id,
+            report_kind = %payload.report_kind,
+            status_code = payload.status_code,
+            client_api_format = payload.report_context.as_ref().and_then(|value| value.get("client_api_format")).and_then(|value| value.as_str()).unwrap_or(""),
+            provider_api_format = payload.report_context.as_ref().and_then(|value| value.get("provider_api_format")).and_then(|value| value.as_str()).unwrap_or(""),
+            envelope_name = payload.report_context.as_ref().and_then(|value| value.get("envelope_name")).and_then(|value| value.as_str()).unwrap_or(""),
+            needs_conversion = payload.report_context.as_ref().and_then(|value| value.get("needs_conversion")).and_then(|value| value.as_bool()).unwrap_or(false),
+            "gateway local core finalize fell back to raw response body"
+        );
+        build_local_core_sync_finalize_fallback_response(trace_id, decision, &payload)?
+    };
+
+    if let Some(error_report_kind) =
+        resolve_core_error_background_report_kind(payload.report_kind.as_str())
+    {
+        let mut report_payload = payload.clone();
+        report_payload.report_kind = error_report_kind;
+        spawn_sync_report(state.clone(), trace_id.to_string(), report_payload);
+    } else {
+        warn!(
+            trace_id = %trace_id,
+            report_kind = %payload.report_kind,
+            "gateway built local core finalize response without background error report mapping"
+        );
+    }
+
+    Ok(response)
+}

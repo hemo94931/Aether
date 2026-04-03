@@ -166,7 +166,7 @@ class ProviderOpsService:
         proxy: Any,
         tunnel_node_id: str | None,
     ) -> Any:
-        from src.services.request.executor_plan import ExecutionProxySnapshot
+        from src.services.request.execution_runtime_plan import ExecutionProxySnapshot
 
         if tunnel_node_id:
             return ExecutionProxySnapshot(
@@ -206,21 +206,21 @@ class ProviderOpsService:
 
         import httpx
 
-        from src.services.request.executor_plan import (
+        from src.services.request.execution_runtime_plan import (
             ExecutionPlan,
             ExecutionPlanBody,
             ExecutionPlanTimeouts,
         )
-        from src.services.request.rust_executor_client import (
-            RustExecutorClient,
-            RustExecutorClientError,
+        from src.services.request.execution_runtime_client import (
+            ExecutionRuntimeClient,
+            ExecutionRuntimeClientError,
         )
 
-        if config.executor_backend != "rust":
+        if config.execution_runtime_backend != "rust":
             return None
 
         try:
-            result = await RustExecutorClient().execute_sync_json(
+            result = await ExecutionRuntimeClient().execute_sync_json(
                 ExecutionPlan(
                     request_id=f"provider-ops-verify:{architecture_id}",
                     candidate_id=None,
@@ -247,7 +247,7 @@ class ProviderOpsService:
                 )
             )
         except (
-            RustExecutorClientError,
+            ExecutionRuntimeClientError,
             httpx.HTTPError,
             json.JSONDecodeError,
             ValueError,

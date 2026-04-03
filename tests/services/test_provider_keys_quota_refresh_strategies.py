@@ -19,7 +19,7 @@ from src.services.provider_keys.quota_refresh.antigravity_refresher import (
 )
 from src.services.provider_keys.quota_refresh.codex_refresher import refresh_codex_key_quota
 from src.services.provider_keys.quota_refresh.kiro_refresher import refresh_kiro_key_quota
-from src.services.request.rust_executor_client import RustExecutorSyncResult
+from src.services.request.execution_runtime_client import ExecutionRuntimeSyncResult
 
 
 class _FakeDB:
@@ -166,7 +166,7 @@ async def test_codex_refresher_prefers_rust_executor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from src.services.provider_keys.quota_refresh import codex_refresher as module
-    from src.services.request import rust_executor_client as rust_module
+    from src.services.request import execution_runtime_client as runtime_module
 
     monkeypatch.setattr(app_config, "executor_backend", "rust")
 
@@ -200,15 +200,19 @@ async def test_codex_refresher_prefers_rust_executor(
         module, "parse_codex_wham_usage_response", lambda _data: {"used_percent": 12.5}
     )
 
-    async def _fake_execute_sync_json(self: object, plan: Any) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: Any) -> ExecutionRuntimeSyncResult:
         captured["plan"] = plan
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"ok": True},
             headers={"content-type": "application/json"},
         )
 
-    monkeypatch.setattr(rust_module.RustExecutorClient, "execute_sync_json", _fake_execute_sync_json)
+    monkeypatch.setattr(
+        runtime_module.ExecutionRuntimeClient,
+        "execute_sync_json",
+        _fake_execute_sync_json,
+    )
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),

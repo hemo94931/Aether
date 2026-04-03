@@ -294,7 +294,10 @@ async def _build_openai_chat_sync_decision(
         resolve_effective_proxy,
         resolve_proxy_info_async,
     )
-    from src.services.request.executor_plan import ExecutionPlanTimeouts, ExecutionProxySnapshot
+    from src.services.request.execution_runtime_plan import (
+        ExecutionPlanTimeouts,
+        ExecutionProxySnapshot,
+    )
 
     if str(payload.method or "").strip().upper() != "POST":
         return None
@@ -559,12 +562,12 @@ async def _build_chat_stream_decision(
         resolve_effective_proxy,
         resolve_proxy_info_async,
     )
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanTimeouts,
         ExecutionProxySnapshot,
         build_execution_plan_body,
-        is_remote_contract_eligible,
+        is_remote_execution_runtime_contract_eligible,
     )
 
     if str(payload.method or "").strip().upper() != "POST":
@@ -775,7 +778,7 @@ async def _build_chat_stream_decision(
         tls_profile=prep.tls_profile,
         timeouts=timeouts,
     )
-    if not is_remote_contract_eligible(contract):
+    if not is_remote_execution_runtime_contract_eligible(contract):
         return None
 
     prompt_cache_key = str(provider_request_body.get("prompt_cache_key") or "").strip() or None

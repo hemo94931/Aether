@@ -31,7 +31,7 @@ class MsgType(IntEnum):
     GOAWAY = 0x12  # \u53cc\u5411: \u4f18\u96c5\u5173\u95ed (stream_id=0)
     HEARTBEAT_DATA = 0x13  # Proxy -> Aether: \u6307\u6807\u4e0a\u62a5
     HEARTBEAT_ACK = 0x14  # Aether -> Proxy: \u5fc3\u8df3\u786e\u8ba4 + \u8fdc\u7a0b\u914d\u7f6e
-    NODE_STATUS = 0x15  # Hub -> Worker: \u8282\u70b9\u8fde\u63a5\u72b6\u6001\u5e7f\u64ad
+    NODE_STATUS = 0x15  # Tunnel relay -> Worker: \u8282\u70b9\u8fde\u63a5\u72b6\u6001\u5e7f\u64ad
 
 
 class FrameFlags:

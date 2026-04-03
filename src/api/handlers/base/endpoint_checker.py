@@ -708,17 +708,17 @@ class HttpRequestExecutor:
         start_time: float,
         effective_timeout: float,
     ) -> EndpointCheckResult | None:
-        from src.services.request.executor_plan import (
+        from src.services.request.execution_runtime_plan import (
             ExecutionPlan,
             ExecutionPlanTimeouts,
             build_execution_plan_body,
         )
-        from src.services.request.rust_executor_client import (
-            RustExecutorClient,
-            RustExecutorClientError,
+        from src.services.request.execution_runtime_client import (
+            ExecutionRuntimeClient,
+            ExecutionRuntimeClientError,
         )
 
-        if config.executor_backend != "rust":
+        if config.execution_runtime_backend != "rust":
             return None
 
         proxy_snapshot = await self._build_rust_proxy_snapshot(request.proxy_config)
@@ -750,7 +750,7 @@ class HttpRequestExecutor:
 
         try:
             if is_stream:
-                rust_stream = await RustExecutorClient().execute_stream(plan)
+                rust_stream = await ExecutionRuntimeClient().execute_stream(plan)
                 try:
                     if rust_stream.status_code >= 400:
                         error_bytes = await self._read_limited_bytes(rust_stream.byte_iterator)
@@ -799,8 +799,8 @@ class HttpRequestExecutor:
                     raw_response_body=stream_result.get("final_response"),
                 )
 
-            result = await RustExecutorClient().execute_sync_json(plan)
-        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+            result = await ExecutionRuntimeClient().execute_sync_json(plan)
+        except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
             logger.warning(
                 "[{}] endpoint check rust fallback | provider={} model={} error={}",
                 request.api_format,
@@ -859,7 +859,7 @@ class HttpRequestExecutor:
             resolve_delegate_config_async,
             resolve_proxy_info_async,
         )
-        from src.services.request.executor_plan import ExecutionProxySnapshot
+        from src.services.request.execution_runtime_plan import ExecutionProxySnapshot
 
         effective_proxy = proxy_config
         if not effective_proxy or not effective_proxy.get("enabled", True):

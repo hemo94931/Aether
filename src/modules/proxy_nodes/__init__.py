@@ -59,7 +59,7 @@ def _reset_tunnel_connected_on_startup() -> None:
     """服务端启动时将所有 tunnel_connected=True 的节点重置为 False/OFFLINE。
 
     服务端重启后 DB 中可能残留 tunnel_connected=True 的记录。
-    如果不重置，节点会在 Hub 状态广播到来前短暂显示 ONLINE。
+    如果不重置，节点会在 tunnel 状态广播到来前短暂显示 ONLINE。
     """
     from datetime import datetime, timezone
 
@@ -123,7 +123,7 @@ async def _on_startup() -> None:
 
     if config.worker_processes > 1:
         logger.info(
-            "检测到 WEB_CONCURRENCY={}，Hub 模式允许多 worker 共享 tunnel。",
+            "检测到 WEB_CONCURRENCY={}，隧道模式允许多 worker 共享 tunnel。",
             config.worker_processes,
         )
 

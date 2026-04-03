@@ -11,9 +11,9 @@ import src.api.handlers.openai.video_handler as video_mod
 from src.api.handlers.openai.video_handler import OpenAIVideoHandler
 from src.core.api_format.conversion.internal_video import VideoStatus
 from src.core.exceptions import ProviderNotAvailableException
-from src.services.request.rust_executor_client import (
-    RustExecutorClientError,
-    RustExecutorStreamResult,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeClientError,
+    ExecutionRuntimeStreamResult,
 )
 
 
@@ -61,19 +61,19 @@ async def test_handle_download_content_uses_rust_executor_for_direct_video_url(
         ),
     )
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         assert getattr(plan, "method") == "GET"
         assert getattr(plan, "url") == "https://cdn.example.com/video.mp4"
         assert getattr(plan, "body").json_body is None
         assert getattr(plan, "body").body_bytes_b64 is None
-        return RustExecutorStreamResult(
+        return ExecutionRuntimeStreamResult(
             status_code=200,
             headers={"content-type": "video/mp4", "x-rust-download": "true"},
             byte_iterator=_iter_chunks([b"video-", b"bytes"]),
             response_ctx=dummy_ctx,
         )
 
-    monkeypatch.setattr(video_mod.RustExecutorClient, "execute_stream", _fake_execute_stream)
+    monkeypatch.setattr(video_mod.ExecutionRuntimeClient, "execute_stream", _fake_execute_stream)
 
     response = await handler.handle_download_content(
         task_id="task-1",
@@ -128,21 +128,21 @@ async def test_handle_download_content_uses_rust_executor_for_upstream_content_e
         lambda original_headers, upstream_key, endpoint: {"authorization": f"Bearer {upstream_key}"},
     )
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         assert getattr(plan, "method") == "GET"
         assert getattr(plan, "url") == "https://api.openai.com/v1/videos/ext-1/content"
         assert getattr(plan, "headers") == {"authorization": "Bearer upstream-key"}
         assert getattr(plan, "provider_id") == "prov-1"
         assert getattr(plan, "endpoint_id") == "ep-1"
         assert getattr(plan, "key_id") == "key-1"
-        return RustExecutorStreamResult(
+        return ExecutionRuntimeStreamResult(
             status_code=200,
             headers={"content-type": "video/mp4", "x-rust-download": "true"},
             byte_iterator=_iter_chunks([b"upstream-", b"video"]),
             response_ctx=dummy_ctx,
         )
 
-    monkeypatch.setattr(video_mod.RustExecutorClient, "execute_stream", _fake_execute_stream)
+    monkeypatch.setattr(video_mod.ExecutionRuntimeClient, "execute_stream", _fake_execute_stream)
 
     response = await handler.handle_download_content(
         task_id="task-1",
@@ -175,11 +175,11 @@ async def test_handle_download_content_raises_when_rust_executor_unavailable(
         ),
     )
 
-    async def _failing_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _failing_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         del self, plan
-        raise RustExecutorClientError("executor down")
+        raise ExecutionRuntimeClientError("executor down")
 
-    monkeypatch.setattr(video_mod.RustExecutorClient, "execute_stream", _failing_execute_stream)
+    monkeypatch.setattr(video_mod.ExecutionRuntimeClient, "execute_stream", _failing_execute_stream)
     with pytest.raises(ProviderNotAvailableException):
         await handler.handle_download_content(
             task_id="task-1",

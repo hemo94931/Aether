@@ -76,7 +76,7 @@ async def _build_codex_proxy_snapshot(
 ) -> Any:
     from importlib import import_module
 
-    from src.services.request.executor_plan import ExecutionProxySnapshot
+    from src.services.request.execution_runtime_plan import ExecutionProxySnapshot
 
     resolver_module = import_module("src.services.proxy_node.resolver")
     build_proxy_url_async = getattr(resolver_module, "build_proxy_url_async", None)
@@ -135,21 +135,21 @@ async def _try_rust_codex_quota_response(
     proxy_snapshot: Any,
 ) -> httpx.Response | None:
     from src.config import config
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanBody,
         ExecutionPlanTimeouts,
     )
-    from src.services.request.rust_executor_client import (
-        RustExecutorClient,
-        RustExecutorClientError,
+    from src.services.request.execution_runtime_client import (
+        ExecutionRuntimeClient,
+        ExecutionRuntimeClientError,
     )
 
-    if config.executor_backend != "rust":
+    if config.execution_runtime_backend != "rust":
         return None
 
     try:
-        result = await RustExecutorClient().execute_sync_json(
+        result = await ExecutionRuntimeClient().execute_sync_json(
             ExecutionPlan(
                 request_id=f"codex-quota:{key.id}",
                 candidate_id=None,
@@ -176,7 +176,7 @@ async def _try_rust_codex_quota_response(
             )
         )
     except (
-        RustExecutorClientError,
+        ExecutionRuntimeClientError,
         httpx.HTTPError,
         json.JSONDecodeError,
         ValueError,

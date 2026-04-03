@@ -7,9 +7,9 @@ import httpx
 import pytest
 
 import src.services.task.video.cancel as cancel_mod
-import src.services.request.rust_executor_client as rust_client_mod
+import src.services.request.execution_runtime_client as runtime_client_mod
 from src.core.api_format.conversion.internal_video import VideoStatus
-from src.services.request.rust_executor_client import RustExecutorSyncResult
+from src.services.request.execution_runtime_client import ExecutionRuntimeSyncResult
 from src.services.task.video.cancel import VideoTaskCancelService
 
 
@@ -66,10 +66,10 @@ async def test_video_cancel_service_uses_rust_for_openai_delete(
 
     monkeypatch.setattr(cancel_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         AsyncMock(
-            return_value=RustExecutorSyncResult(
+            return_value=ExecutionRuntimeSyncResult(
                 status_code=204,
                 headers={},
                 response_json=None,
@@ -134,14 +134,18 @@ async def test_video_cancel_service_uses_rust_for_gemini_cancel(
 
     monkeypatch.setattr(cancel_mod.config, "executor_backend", "rust")
     execute_sync = AsyncMock(
-        return_value=RustExecutorSyncResult(
+        return_value=ExecutionRuntimeSyncResult(
             status_code=200,
             headers={"content-type": "application/json"},
             response_json={"ok": True},
             response_body_bytes=None,
         )
     )
-    monkeypatch.setattr(rust_client_mod.RustExecutorClient, "execute_sync_json", execute_sync)
+    monkeypatch.setattr(
+        runtime_client_mod.ExecutionRuntimeClient,
+        "execute_sync_json",
+        execute_sync,
+    )
     monkeypatch.setattr(
         "src.core.crypto.crypto_service.decrypt",
         lambda value: "upstream-key",
@@ -259,9 +263,9 @@ async def test_video_cancel_service_returns_503_when_rust_executor_unavailable(
 
     monkeypatch.setattr(cancel_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
-        AsyncMock(side_effect=rust_client_mod.RustExecutorClientError("executor down")),
+        AsyncMock(side_effect=runtime_client_mod.ExecutionRuntimeClientError("executor down")),
     )
     monkeypatch.setattr(
         "src.core.crypto.crypto_service.decrypt",

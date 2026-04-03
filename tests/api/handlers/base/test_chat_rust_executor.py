@@ -9,14 +9,14 @@ import src.api.handlers.base.chat_sync_executor as chat_sync_mod
 from src.api.handlers.base.chat_sync_executor import ChatSyncExecutor
 from src.core.exceptions import EmbeddedErrorException
 from src.core.exceptions import ProviderNotAvailableException
-from src.services.request.executor_plan import (
+from src.services.request.execution_runtime_plan import (
     ExecutionPlan,
     ExecutionPlanBody,
     PreparedExecutionPlan,
 )
-from src.services.request.rust_executor_client import (
-    RustExecutorClientError,
-    RustExecutorSyncResult,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeClientError,
+    ExecutionRuntimeSyncResult,
 )
 
 
@@ -138,16 +138,16 @@ async def test_execute_sync_plan_uses_rust_executor_when_available(
 
     monkeypatch.setattr(chat_sync_mod.config, "executor_backend", "rust")
 
-    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> ExecutionRuntimeSyncResult:
         assert plan.request_id == "req-test"
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"id": "chatcmpl-1"},
             headers={"content-type": "application/json"},
         )
 
     monkeypatch.setattr(
-        chat_sync_mod.RustExecutorClient,
+        chat_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -172,17 +172,17 @@ async def test_execute_sync_plan_allows_supported_proxy_urls_for_rust(
 
     monkeypatch.setattr(chat_sync_mod.config, "executor_backend", "rust")
 
-    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> ExecutionRuntimeSyncResult:
         assert plan.proxy is not None
         assert plan.proxy.url == "http://proxy.internal:8080"
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"id": "chatcmpl-proxy"},
             headers={"content-type": "application/json"},
         )
 
     monkeypatch.setattr(
-        chat_sync_mod.RustExecutorClient,
+        chat_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -205,18 +205,18 @@ async def test_execute_sync_plan_allows_tunnel_delegate_for_rust(
 
     monkeypatch.setattr(chat_sync_mod.config, "executor_backend", "rust")
 
-    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> ExecutionRuntimeSyncResult:
         assert plan.proxy is not None
         assert plan.proxy.mode == "tunnel"
         assert plan.proxy.node_id == "node-1"
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"id": "chatcmpl-tunnel"},
             headers={"content-type": "application/json"},
         )
 
     monkeypatch.setattr(
-        chat_sync_mod.RustExecutorClient,
+        chat_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -239,16 +239,16 @@ async def test_execute_sync_plan_allows_tls_profile_for_rust(
 
     monkeypatch.setattr(chat_sync_mod.config, "executor_backend", "rust")
 
-    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> ExecutionRuntimeSyncResult:
         assert plan.tls_profile == "claude_code_nodejs"
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"id": "chatcmpl-tls"},
             headers={"content-type": "application/json"},
         )
 
     monkeypatch.setattr(
-        chat_sync_mod.RustExecutorClient,
+        chat_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -272,15 +272,15 @@ async def test_execute_sync_plan_applies_envelope_postprocessing_after_rust(
 
     monkeypatch.setattr(chat_sync_mod.config, "executor_backend", "rust")
 
-    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
-        return RustExecutorSyncResult(
+    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> ExecutionRuntimeSyncResult:
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"payload": {"id": "wrapped-1", "message": "ok"}},
             headers={"content-type": "application/json"},
         )
 
     monkeypatch.setattr(
-        chat_sync_mod.RustExecutorClient,
+        chat_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -330,16 +330,16 @@ async def test_execute_sync_plan_applies_format_conversion_after_rust(
                 "source_id": response_json["provider_id"],
             }
 
-    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> ExecutionRuntimeSyncResult:
         assert plan.provider_api_format == "gemini:chat"
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"provider_id": "gemini-1"},
             headers={"content-type": "application/json"},
         )
 
     monkeypatch.setattr(
-        chat_sync_mod.RustExecutorClient,
+        chat_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -389,16 +389,16 @@ async def test_execute_sync_plan_aggregates_upstream_stream_after_rust(
         assert request_id == "req-test"
         return SimpleNamespace(id="agg-1")
 
-    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> ExecutionRuntimeSyncResult:
         assert plan.stream is True
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_body_bytes=b"data: {\"id\":\"chunk-1\"}\n\ndata: [DONE]\n\n",
             headers={"content-type": "text/event-stream"},
         )
 
     monkeypatch.setattr(
-        chat_sync_mod.RustExecutorClient,
+        chat_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -432,16 +432,16 @@ async def test_execute_sync_plan_turns_rust_http_error_into_httpx_status_error(
 
     monkeypatch.setattr(chat_sync_mod.config, "executor_backend", "rust")
 
-    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> ExecutionRuntimeSyncResult:
         assert plan.url.endswith("/chat/completions")
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=429,
             response_json={"error": {"message": "slow down"}},
             headers={"content-type": "application/json"},
         )
 
     monkeypatch.setattr(
-        chat_sync_mod.RustExecutorClient,
+        chat_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -466,9 +466,9 @@ async def test_execute_sync_plan_preserves_embedded_error_semantics_from_rust(
 
     monkeypatch.setattr(chat_sync_mod.config, "executor_backend", "rust")
 
-    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> ExecutionRuntimeSyncResult:
         assert plan.provider_api_format == "openai:chat"
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={
                 "error": {
@@ -481,7 +481,7 @@ async def test_execute_sync_plan_preserves_embedded_error_semantics_from_rust(
         )
 
     monkeypatch.setattr(
-        chat_sync_mod.RustExecutorClient,
+        chat_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -506,12 +506,12 @@ async def test_execute_sync_plan_raises_when_rust_unavailable(
 
     monkeypatch.setattr(chat_sync_mod.config, "executor_backend", "rust")
 
-    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: ExecutionPlan) -> ExecutionRuntimeSyncResult:
         assert plan.request_id == "req-test"
-        raise RustExecutorClientError("executor down")
+        raise ExecutionRuntimeClientError("executor down")
 
     monkeypatch.setattr(
-        chat_sync_mod.RustExecutorClient,
+        chat_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -541,12 +541,12 @@ async def test_execute_sync_plan_raises_when_remote_contract_is_ineligible(
 
     monkeypatch.setattr(chat_sync_mod.config, "executor_backend", "rust")
 
-    async def _should_not_call_rust(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
+    async def _should_not_call_rust(self: object, plan: ExecutionPlan) -> ExecutionRuntimeSyncResult:
         del self, plan
         raise AssertionError("rust executor should not be called")
 
     monkeypatch.setattr(
-        chat_sync_mod.RustExecutorClient,
+        chat_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _should_not_call_rust,
     )

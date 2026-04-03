@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.api.handlers.base.endpoint_checker import EndpointCheckRequest, HttpRequestExecutor
-from src.services.request.rust_executor_client import (
-    RustExecutorStreamResult,
-    RustExecutorSyncResult,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeStreamResult,
+    ExecutionRuntimeSyncResult,
 )
 
 
@@ -25,7 +25,7 @@ async def test_endpoint_checker_sync_prefers_rust_executor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from src.api.handlers.base import endpoint_checker as mod
-    from src.services.request import rust_executor_client as rust_mod
+    from src.services.request import execution_runtime_client as rust_mod
 
     monkeypatch.setattr(mod.config, "executor_backend", "rust")
 
@@ -42,15 +42,15 @@ async def test_endpoint_checker_sync_prefers_rust_executor(
     async def _fake_execute_sync_json(
         self: object,
         plan: Any,
-    ) -> RustExecutorSyncResult:
+    ) -> ExecutionRuntimeSyncResult:
         captured["plan"] = plan
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"id": "resp_1", "usage": {"prompt_tokens": 1, "completion_tokens": 2}},
             headers={"content-type": "application/json"},
         )
 
-    monkeypatch.setattr(rust_mod.RustExecutorClient, "execute_sync_json", _fake_execute_sync_json)
+    monkeypatch.setattr(rust_mod.ExecutionRuntimeClient, "execute_sync_json", _fake_execute_sync_json)
 
     result = await executor.execute(
         EndpointCheckRequest(
@@ -80,7 +80,7 @@ async def test_endpoint_checker_stream_prefers_rust_executor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from src.api.handlers.base import endpoint_checker as mod
-    from src.services.request import rust_executor_client as rust_mod
+    from src.services.request import execution_runtime_client as rust_mod
 
     monkeypatch.setattr(mod.config, "executor_backend", "rust")
 
@@ -98,15 +98,15 @@ async def test_endpoint_checker_stream_prefers_rust_executor(
 
     stream_ctx = _DummyStreamContext()
 
-    async def _fake_execute_stream(self: object, plan: Any) -> RustExecutorStreamResult:
-        return RustExecutorStreamResult(
+    async def _fake_execute_stream(self: object, plan: Any) -> ExecutionRuntimeStreamResult:
+        return ExecutionRuntimeStreamResult(
             status_code=200,
             headers={"content-type": "text/event-stream"},
             byte_iterator=_byte_iter(),
             response_ctx=stream_ctx,
         )
 
-    monkeypatch.setattr(rust_mod.RustExecutorClient, "execute_stream", _fake_execute_stream)
+    monkeypatch.setattr(rust_mod.ExecutionRuntimeClient, "execute_stream", _fake_execute_stream)
 
     result = await executor.execute(
         EndpointCheckRequest(

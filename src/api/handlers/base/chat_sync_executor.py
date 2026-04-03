@@ -47,16 +47,16 @@ from src.core.exceptions import (
     UpstreamClientException,
 )
 from src.core.logger import logger
-from src.services.request.executor_plan import (
+from src.services.request.execution_runtime_plan import (
     ExecutionPlan,
     ExecutionPlanTimeouts,
     ExecutionProxySnapshot,
     PreparedExecutionPlan,
     build_execution_plan_body,
 )
-from src.services.request.rust_executor_client import (
-    RustExecutorClient,
-    RustExecutorClientError,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeClient,
+    ExecutionRuntimeClientError,
 )
 from src.services.task.request_state import MutableRequestBodyState
 
@@ -679,8 +679,8 @@ class ChatSyncExecutor:
             )
 
         try:
-            rust_result = await RustExecutorClient().execute_sync_json(prepared_plan.contract)
-        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+            rust_result = await ExecutionRuntimeClient().execute_sync_json(prepared_plan.contract)
+        except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning(
                 "[{}] Rust executor unavailable: {}",
                 handler.request_id,
@@ -770,7 +770,7 @@ class ChatSyncExecutor:
 
         if prepared_plan.upstream_is_stream:
             if response_body_bytes is None:
-                raise RustExecutorClientError("Rust executor stream result must contain body bytes")
+                raise ExecutionRuntimeClientError("Rust executor stream result must contain body bytes")
             return await self._finalize_rust_stream_sync_result(
                 prepared_plan=prepared_plan,
                 provider=provider,
@@ -779,7 +779,7 @@ class ChatSyncExecutor:
             )
 
         if response_json is None:
-            raise RustExecutorClientError("Rust executor sync result must contain response_json")
+            raise ExecutionRuntimeClientError("Rust executor sync result must contain response_json")
 
         ctx.response_json = dict(response_json)
         if provider_response_json is not None:

@@ -192,18 +192,35 @@ class Config:
         # HTTP_REQUEST_TIMEOUT: 非流式请求整体超时（秒），默认 300 秒
         self.http_request_timeout = float(os.getenv("HTTP_REQUEST_TIMEOUT", "300.0"))
 
-        # 内部 executor 配置
-        # EXECUTOR_BACKEND:
-        # - rust: 当前 pioneer 分支默认，优先将可序列化的执行计划转发给 Rust executor
+        # 内部 execution runtime 配置
+        # EXECUTION_RUNTIME_BACKEND:
+        # - rust: 当前默认，优先将可序列化的执行计划转发给 Rust execution runtime
         # - python: 显式回退到现有 httpx 路径
-        self.executor_backend = os.getenv("EXECUTOR_BACKEND", "rust").strip().lower()
-        self.executor_transport = os.getenv("EXECUTOR_TRANSPORT", "unix_socket").strip().lower()
-        self.executor_socket_path = os.getenv(
-            "EXECUTOR_SOCKET_PATH", "/tmp/aether-executor.sock"
+        #
+        # 兼容说明:
+        # - 旧 EXECUTOR_* 环境变量仍然可用
+        # - 代码中的 executor_* 属性继续保留为兼容别名
+        self._execution_runtime_backend = os.getenv(
+            "EXECUTION_RUNTIME_BACKEND",
+            os.getenv("EXECUTOR_BACKEND", "rust"),
+        ).strip().lower()
+        self._execution_runtime_transport = os.getenv(
+            "EXECUTION_RUNTIME_TRANSPORT",
+            os.getenv("EXECUTOR_TRANSPORT", "unix_socket"),
+        ).strip().lower()
+        self._execution_runtime_socket_path = os.getenv(
+            "EXECUTION_RUNTIME_SOCKET_PATH",
+            os.getenv("EXECUTOR_SOCKET_PATH", "/tmp/aether-executor.sock"),
         ).strip()
-        self.executor_base_url = os.getenv("EXECUTOR_BASE_URL", "http://127.0.0.1:5219").strip()
-        self.executor_request_timeout = float(
-            os.getenv("EXECUTOR_REQUEST_TIMEOUT", str(self.http_request_timeout))
+        self._execution_runtime_base_url = os.getenv(
+            "EXECUTION_RUNTIME_BASE_URL",
+            os.getenv("EXECUTOR_BASE_URL", "http://127.0.0.1:5219"),
+        ).strip()
+        self._execution_runtime_request_timeout = float(
+            os.getenv(
+                "EXECUTION_RUNTIME_REQUEST_TIMEOUT",
+                os.getenv("EXECUTOR_REQUEST_TIMEOUT", str(self.http_request_timeout)),
+            )
         )
 
         # HTTP 连接池配置
@@ -555,6 +572,86 @@ class Config:
     def database_url(self, value: str) -> Any:
         """允许在测试中设置数据库 URL"""
         self._database_url = value
+
+    @property
+    def execution_runtime_backend(self) -> str:
+        return self._execution_runtime_backend
+
+    @execution_runtime_backend.setter
+    def execution_runtime_backend(self, value: str) -> None:
+        self._execution_runtime_backend = str(value).strip().lower()
+
+    @property
+    def execution_runtime_transport(self) -> str:
+        return self._execution_runtime_transport
+
+    @execution_runtime_transport.setter
+    def execution_runtime_transport(self, value: str) -> None:
+        self._execution_runtime_transport = str(value).strip().lower()
+
+    @property
+    def execution_runtime_socket_path(self) -> str:
+        return self._execution_runtime_socket_path
+
+    @execution_runtime_socket_path.setter
+    def execution_runtime_socket_path(self, value: str) -> None:
+        self._execution_runtime_socket_path = str(value).strip()
+
+    @property
+    def execution_runtime_base_url(self) -> str:
+        return self._execution_runtime_base_url
+
+    @execution_runtime_base_url.setter
+    def execution_runtime_base_url(self, value: str) -> None:
+        self._execution_runtime_base_url = str(value).strip()
+
+    @property
+    def execution_runtime_request_timeout(self) -> float:
+        return self._execution_runtime_request_timeout
+
+    @execution_runtime_request_timeout.setter
+    def execution_runtime_request_timeout(self, value: float) -> None:
+        self._execution_runtime_request_timeout = float(value)
+
+    @property
+    def executor_backend(self) -> str:
+        return self.execution_runtime_backend
+
+    @executor_backend.setter
+    def executor_backend(self, value: str) -> None:
+        self.execution_runtime_backend = value
+
+    @property
+    def executor_transport(self) -> str:
+        return self.execution_runtime_transport
+
+    @executor_transport.setter
+    def executor_transport(self, value: str) -> None:
+        self.execution_runtime_transport = value
+
+    @property
+    def executor_socket_path(self) -> str:
+        return self.execution_runtime_socket_path
+
+    @executor_socket_path.setter
+    def executor_socket_path(self, value: str) -> None:
+        self.execution_runtime_socket_path = value
+
+    @property
+    def executor_base_url(self) -> str:
+        return self.execution_runtime_base_url
+
+    @executor_base_url.setter
+    def executor_base_url(self, value: str) -> None:
+        self.execution_runtime_base_url = value
+
+    @property
+    def executor_request_timeout(self) -> float:
+        return self.execution_runtime_request_timeout
+
+    @executor_request_timeout.setter
+    def executor_request_timeout(self, value: float) -> None:
+        self.execution_runtime_request_timeout = value
 
     def log_startup_warnings(self) -> None:
         """

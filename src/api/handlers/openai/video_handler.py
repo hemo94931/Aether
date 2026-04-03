@@ -43,14 +43,14 @@ from src.core.exceptions import ProviderNotAvailableException
 from src.core.logger import logger
 from src.models.database import ApiKey, ProviderAPIKey, ProviderEndpoint, User, VideoTask
 from src.services.billing.rule_service import BillingRuleLookupResult, BillingRuleService
-from src.services.request.executor_plan import (
+from src.services.request.execution_runtime_plan import (
     ExecutionPlan,
     ExecutionPlanBody,
     ExecutionPlanTimeouts,
 )
-from src.services.request.rust_executor_client import (
-    RustExecutorClient,
-    RustExecutorClientError,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeClient,
+    ExecutionRuntimeClientError,
 )
 from src.services.scheduling.aware_scheduler import ProviderCandidate
 from src.services.usage.service import UsageService
@@ -809,11 +809,11 @@ class OpenAIVideoHandler(VideoHandlerBase):
         default_media_type: str,
         default_error_message: str,
     ) -> Response | StreamingResponse:
-        if config.executor_backend != "rust":
+        if config.execution_runtime_backend != "rust":
             raise ProviderNotAvailableException(
                 "Video 下载仅支持 Rust executor",
                 provider_name="openai",
-                upstream_response=f"executor_backend={config.executor_backend}",
+                upstream_response=f"executor_backend={config.execution_runtime_backend}",
             )
 
         try:
@@ -854,8 +854,8 @@ class OpenAIVideoHandler(VideoHandlerBase):
             ) from exc
 
         try:
-            rust_stream = await RustExecutorClient().execute_stream(plan)
-        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+            rust_stream = await ExecutionRuntimeClient().execute_stream(plan)
+        except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning(
                 "[VideoDownload] Rust executor unavailable task={} url={}: {}",
                 task_id,

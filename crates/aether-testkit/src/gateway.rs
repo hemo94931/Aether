@@ -1,4 +1,4 @@
-use aether_gateway::{build_router_with_state, AppState};
+use aether_gateway::{build_router_with_state, AppState, GatewayDataConfig};
 use aether_runtime::DistributedConcurrencyGate;
 
 use crate::server::SpawnedServer;
@@ -6,20 +6,22 @@ use crate::server::SpawnedServer;
 #[derive(Debug, Clone)]
 pub struct GatewayHarnessConfig {
     pub upstream_base_url: String,
-    pub control_base_url: Option<String>,
-    pub executor_base_url: Option<String>,
+    pub data_config: Option<GatewayDataConfig>,
     pub max_in_flight_requests: Option<usize>,
     pub distributed_request_gate: Option<DistributedConcurrencyGate>,
+    pub tunnel_instance_id: Option<String>,
+    pub tunnel_relay_base_url: Option<String>,
 }
 
 impl GatewayHarnessConfig {
     pub fn new(upstream_base_url: impl Into<String>) -> Self {
         Self {
             upstream_base_url: upstream_base_url.into(),
-            control_base_url: None,
-            executor_base_url: None,
+            data_config: None,
             max_in_flight_requests: None,
             distributed_request_gate: None,
+            tunnel_instance_id: None,
+            tunnel_relay_base_url: None,
         }
     }
 }
@@ -42,12 +44,16 @@ impl GatewayHarness {
         config: GatewayHarnessConfig,
         port: Option<u16>,
     ) -> Result<Self, String> {
-        let mut state = AppState::new_with_executor(
-            config.upstream_base_url,
-            config.control_base_url,
-            config.executor_base_url,
-        )
-        .map_err(|err| format!("failed to build gateway harness state: {err}"))?;
+        let mut state = AppState::new(config.upstream_base_url)
+            .map_err(|err| format!("failed to build gateway harness state: {err}"))?;
+        if let Some(data_config) = config.data_config {
+            state = state
+                .with_data_config(data_config)
+                .map_err(|err| format!("failed to configure gateway harness data state: {err}"))?;
+        }
+        if let Some(instance_id) = config.tunnel_instance_id {
+            state = state.with_tunnel_identity(instance_id, config.tunnel_relay_base_url);
+        }
         if let Some(limit) = config.max_in_flight_requests {
             state = state.with_request_concurrency_limit(limit);
         }

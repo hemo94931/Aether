@@ -1,7 +1,7 @@
 """
-Tunnel httpx Transport
+Tunnel httpx transport。
 
-统一通过 aether-hub 转发 tunnel 请求。
+统一通过 gateway relay 转发 tunnel 请求。
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ def is_tunnel_node(node_info: dict[str, Any] | None) -> bool:
 
 
 def create_tunnel_transport(node_id: str, timeout: float = 60.0) -> httpx.AsyncBaseTransport:
-    """创建统一的 Hub tunnel transport。"""
-    from .hub_transport import HubTunnelTransport
+    """创建统一的 gateway tunnel relay transport。"""
+    from .gateway_tunnel_transport import GatewayTunnelTransport
 
-    return HubTunnelTransport(node_id, timeout=timeout)
+    return GatewayTunnelTransport(node_id, timeout=timeout)

@@ -345,7 +345,7 @@ class ProxyNodeService:
         detail: str | None = None,
         observed_at: datetime | None = None,
     ) -> ProxyNode | None:
-        """根据 Hub 连接池状态更新 tunnel 连接状态并记录事件。"""
+        """根据 tunnel relay 连接池状态更新 tunnel 连接状态并记录事件。"""
         node = db.query(ProxyNode).filter(ProxyNode.id == node_id).first()
         if not node:
             return None
@@ -356,7 +356,7 @@ class ProxyNodeService:
             last_transition = last_transition.replace(tzinfo=timezone.utc)
 
         event_type = "connected" if connected else "disconnected"
-        event_detail = detail or f"[hub_node_status] conn_count={max(int(conn_count), 0)}"
+        event_detail = detail or f"[tunnel_node_status] conn_count={max(int(conn_count), 0)}"
 
         if last_transition and event_time < last_transition:
             db.add(

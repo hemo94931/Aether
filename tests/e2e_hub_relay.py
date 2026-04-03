@@ -1,12 +1,12 @@
 """
-aether-hub local relay 端到端测试
+aether-gateway tunnel runtime harness 端到端测试
 
 测试流程:
-1. 启动 aether-hub（绑定随机端口）
-2. 用 websockets 库模拟一个 aether-proxy client 连接到 Hub
+1. 启动 aether-gateway 的 tunnel runtime harness（绑定随机端口）
+2. 用 websockets 库模拟一个 aether-proxy client 连接到 tunnel runtime
 3. Mock proxy 在收到请求帧后返回固定响应帧
-4. 通过 Hub 的 /local/relay/{node_id} HTTP API 发送请求
-5. 验证完整链路: HTTP request -> Hub -> WS frame -> mock proxy -> WS frame -> Hub -> HTTP response
+4. 通过 /api/internal/tunnel/relay/{node_id} HTTP API 发送请求
+5. 验证完整链路: HTTP request -> tunnel runtime -> WS frame -> mock proxy -> WS frame -> tunnel runtime -> HTTP response
 
 运行: uv run python tests/e2e_hub_relay.py
 """
@@ -26,7 +26,7 @@ import time
 import httpx
 
 # ---------------------------------------------------------------------------
-# Protocol constants (mirror aether-hub/src/protocol.rs)
+# Protocol constants (mirror apps/aether-gateway/src/tunnel/embedded/protocol.rs)
 # ---------------------------------------------------------------------------
 HEADER_SIZE = 10
 
@@ -158,20 +158,30 @@ async def run_test() -> bool:
     hub_binary = os.path.join(
         os.path.dirname(__file__),
         "..",
-        "aether-hub",
         "target",
         "release",
-        "aether-hub",
+        "examples",
+        "tunnel_runtime_harness",
     )
     hub_binary = os.path.normpath(hub_binary)
 
     if not os.path.isfile(hub_binary):
-        print(f"FAIL: hub binary not found at {hub_binary}")
-        print("  run: cd aether-hub && cargo build --release")
-        return False
+        hub_binary = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "target",
+            "debug",
+            "examples",
+            "tunnel_runtime_harness",
+        )
+        hub_binary = os.path.normpath(hub_binary)
+        if not os.path.isfile(hub_binary):
+            print(f"FAIL: tunnel runtime harness binary not found at {hub_binary}")
+            print("  run: cargo build -p aether-gateway --example tunnel_runtime_harness")
+            return False
 
-    # Start aether-hub (with control plane disabled since we don't have the app running)
-    print(f"[1/5] Starting aether-hub on {hub_bind} ...")
+    # Start tunnel runtime harness (with control plane disabled since we don't have the app running)
+    print(f"[1/5] Starting tunnel runtime harness on {hub_bind} ...")
     hub_proc = subprocess.Popen(
         [
             hub_binary,
@@ -187,19 +197,19 @@ async def run_test() -> bool:
     )
 
     try:
-        # Wait for hub to be ready
+        # Wait for runtime to be ready
         for _ in range(30):
             await asyncio.sleep(0.2)
             try:
                 async with httpx.AsyncClient() as client:
                     resp = await client.get(f"http://{hub_bind}/health", timeout=1.0)
                     if resp.status_code == 200:
-                        print("  hub is healthy")
+                        print("  tunnel runtime harness is healthy")
                         break
             except Exception:
                 continue
         else:
-            print("FAIL: hub did not start in time")
+            print("FAIL: tunnel runtime harness did not start in time")
             return False
 
         # Check initial stats
@@ -214,7 +224,9 @@ async def run_test() -> bool:
         proxy_ready = asyncio.Event()
         print(f"\n[2/5] Connecting mock proxy (node_id={node_id}) ...")
         proxy_task = asyncio.create_task(
-            mock_proxy(f"ws://{hub_bind}/proxy", node_id, proxy_ready)
+            mock_proxy(
+                f"ws://{hub_bind}/api/internal/proxy-tunnel", node_id, proxy_ready
+            )
         )
 
         try:
@@ -223,7 +235,7 @@ async def run_test() -> bool:
             print("FAIL: mock proxy did not connect in time")
             return False
 
-        # Give hub a moment to register
+        # Give runtime a moment to register
         await asyncio.sleep(0.3)
 
         async with httpx.AsyncClient() as client:
@@ -249,7 +261,7 @@ async def run_test() -> bool:
         )
 
         async with httpx.AsyncClient() as client:
-            relay_url = f"http://{hub_bind}/local/relay/{node_id}"
+            relay_url = f"http://{hub_bind}/api/internal/tunnel/relay/{node_id}"
             resp = await client.post(
                 relay_url,
                 content=envelope,
@@ -281,7 +293,7 @@ async def run_test() -> bool:
         print(f"\n[5/5] Testing error cases ...")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"http://{hub_bind}/local/relay/non-existent-node",
+                f"http://{hub_bind}/api/internal/tunnel/relay/non-existent-node",
                 content=encode_relay_envelope(
                     {"method": "GET", "url": "https://example.com", "headers": {}, "timeout": 5},
                     b"",

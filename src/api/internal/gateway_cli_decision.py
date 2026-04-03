@@ -82,10 +82,10 @@ async def _build_cli_sync_decision(
         resolve_effective_proxy,
         resolve_proxy_info_async,
     )
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlanTimeouts,
         ExecutionProxySnapshot,
-        should_bypass_remote_executor_url,
+        should_bypass_remote_execution_runtime_url,
     )
 
     if str(payload.method or "").strip().upper() != "POST":
@@ -196,7 +196,7 @@ async def _build_cli_sync_decision(
         needs_conversion=bool(getattr(candidate, "needs_conversion", False)),
         output_limit=getattr(candidate, "output_limit", None),
     )
-    if should_bypass_remote_executor_url(
+    if should_bypass_remote_execution_runtime_url(
         upstream_request.url,
         provider_api_format=provider_api_format,
         client_api_format=client_api_format,
@@ -339,10 +339,10 @@ async def _build_cli_stream_decision(
         resolve_effective_proxy,
         resolve_proxy_info_async,
     )
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlanTimeouts,
         ExecutionProxySnapshot,
-        should_bypass_remote_executor_url,
+        should_bypass_remote_execution_runtime_url,
     )
 
     if str(payload.method or "").strip().upper() != "POST":
@@ -458,7 +458,7 @@ async def _build_cli_stream_decision(
         needs_conversion=bool(getattr(candidate, "needs_conversion", False)),
         output_limit=getattr(candidate, "output_limit", None),
     )
-    if should_bypass_remote_executor_url(
+    if should_bypass_remote_execution_runtime_url(
         upstream_request.url,
         provider_api_format=provider_api_format,
         client_api_format=client_api_format,
@@ -599,7 +599,10 @@ async def _build_openai_cli_sync_decision(
         resolve_effective_proxy,
         resolve_proxy_info_async,
     )
-    from src.services.request.executor_plan import ExecutionPlanTimeouts, ExecutionProxySnapshot
+    from src.services.request.execution_runtime_plan import (
+        ExecutionPlanTimeouts,
+        ExecutionProxySnapshot,
+    )
 
     if str(payload.method or "").strip().upper() != "POST":
         return None

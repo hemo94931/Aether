@@ -213,7 +213,7 @@ def build_all_format_configs(
 async def _build_models_proxy_snapshot(
     proxy_config: dict[str, Any] | None,
 ) -> Any:
-    from src.services.request.executor_plan import build_proxy_snapshot
+    from src.services.request.execution_runtime_plan import build_proxy_snapshot
 
     return await build_proxy_snapshot(proxy_config, label="upstream model fetch")
 
@@ -371,17 +371,17 @@ async def _try_rust_fetch_models_for_api_format(
     timeout: float,
     proxy_config: dict[str, Any] | None,
 ) -> tuple[list[dict[str, Any]], str | None, bool] | None:
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanBody,
         ExecutionPlanTimeouts,
     )
-    from src.services.request.rust_executor_client import (
-        RustExecutorClient,
-        RustExecutorClientError,
+    from src.services.request.execution_runtime_client import (
+        ExecutionRuntimeClient,
+        ExecutionRuntimeClientError,
     )
 
-    if config.executor_backend != "rust":
+    if config.execution_runtime_backend != "rust":
         return None
 
     try:
@@ -393,7 +393,7 @@ async def _try_rust_fetch_models_for_api_format(
 
         for _ in range(20):
             url = _build_model_fetch_url(api_format, base_url, api_key, next_cursor)
-            result = await RustExecutorClient().execute_sync_json(
+            result = await ExecutionRuntimeClient().execute_sync_json(
                 ExecutionPlan(
                     request_id=f"model-fetch:{api_format}:{next_cursor or 'root'}",
                     candidate_id=None,
@@ -439,7 +439,7 @@ async def _try_rust_fetch_models_for_api_format(
             next_cursor = next_after_id
 
         return models, None, True
-    except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+    except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
         logger.warning("Rust model fetch fallback for {}: {}", api_format, exc)
         return None
     except Exception as exc:

@@ -7,14 +7,14 @@ import httpx
 import pytest
 
 import src.services.provider.adapters.gemini_cli.rust_http as gemini_cli_rust_http_mod
-import src.services.request.rust_executor_client as rust_client_mod
+import src.services.request.execution_runtime_client as runtime_client_mod
 from src.services.provider.adapters.gemini_cli.client import (
     load_code_assist,
     onboard_user,
 )
-from src.services.request.rust_executor_client import (
-    RustExecutorClientError,
-    RustExecutorSyncResult,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeClientError,
+    ExecutionRuntimeSyncResult,
 )
 
 
@@ -24,10 +24,10 @@ async def test_load_code_assist_uses_rust_executor(
 ) -> None:
     monkeypatch.setattr(gemini_cli_rust_http_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         AsyncMock(
-            return_value=RustExecutorSyncResult(
+            return_value=ExecutionRuntimeSyncResult(
                 status_code=200,
                 headers={"content-type": "application/json"},
                 response_json={"cloudaicompanionProject": "project-1"},
@@ -42,7 +42,7 @@ async def test_load_code_assist_uses_rust_executor(
     result = await load_code_assist("access-token", proxy_config=None, timeout_seconds=12.0)
 
     assert result["cloudaicompanionProject"] == "project-1"
-    plan = rust_client_mod.RustExecutorClient.execute_sync_json.await_args.args[0]
+    plan = runtime_client_mod.ExecutionRuntimeClient.execute_sync_json.await_args.args[0]
     assert plan.method == "POST"
     assert plan.url.endswith("/v1internal:loadCodeAssist")
     assert plan.provider_api_format == "gemini_cli:load_code_assist"
@@ -61,9 +61,9 @@ async def test_load_code_assist_falls_back_to_python_when_rust_unavailable(
 ) -> None:
     monkeypatch.setattr(gemini_cli_rust_http_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
-        AsyncMock(side_effect=RustExecutorClientError("executor down")),
+        AsyncMock(side_effect=ExecutionRuntimeClientError("executor down")),
     )
     fake_client = SimpleNamespace(
         post=AsyncMock(
@@ -91,10 +91,10 @@ async def test_onboard_user_uses_rust_executor(
 ) -> None:
     monkeypatch.setattr(gemini_cli_rust_http_mod.config, "executor_backend", "rust")
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         AsyncMock(
-            return_value=RustExecutorSyncResult(
+            return_value=ExecutionRuntimeSyncResult(
                 status_code=200,
                 headers={"content-type": "application/json"},
                 response_json={
@@ -118,7 +118,7 @@ async def test_onboard_user_uses_rust_executor(
     )
 
     assert project_id == "project-onboarded"
-    plan = rust_client_mod.RustExecutorClient.execute_sync_json.await_args.args[0]
+    plan = runtime_client_mod.ExecutionRuntimeClient.execute_sync_json.await_args.args[0]
     assert plan.method == "POST"
     assert plan.url.endswith("/v1internal:onboardUser")
     assert plan.provider_api_format == "gemini_cli:onboard_user"

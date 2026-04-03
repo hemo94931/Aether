@@ -1,15 +1,13 @@
 [workspace]
 members = [
-    "aether-hub",
-    "aether-proxy",
+    "apps/aether-proxy",
     "crates/aether-cache",
     "crates/aether-billing",
     "crates/aether-wallet",
     "crates/aether-crypto",
     "crates/aether-contracts",
     "crates/aether-data",
-    "crates/aether-executor",
-    "crates/aether-gateway",
+    "apps/aether-gateway",
     "crates/aether-http",
     "crates/aether-runtime",
     "crates/aether-testkit",
@@ -22,15 +20,13 @@ license = "LicenseRef-Aether-NonCommercial"
 repository = "https://github.com/fawney19/Aether.git"
 
 [workspace.dependencies]
-aether-hub = { path = "aether-hub" }
 aether-cache = { path = "crates/aether-cache" }
 aether-billing = { path = "crates/aether-billing" }
 aether-wallet = { path = "crates/aether-wallet" }
 aether-crypto = { path = "crates/aether-crypto" }
 aether-contracts = { path = "crates/aether-contracts" }
 aether-data = { path = "crates/aether-data" }
-aether-executor = { path = "crates/aether-executor" }
-aether-gateway = { path = "crates/aether-gateway" }
+aether-gateway = { path = "apps/aether-gateway" }
 aether-http = { path = "crates/aether-http" }
 aether-runtime = { path = "crates/aether-runtime" }
 aether-testkit = { path = "crates/aether-testkit" }

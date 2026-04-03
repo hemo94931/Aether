@@ -293,6 +293,33 @@ impl UsageWriteRepository for InMemoryUsageReadRepository {
             first_byte_time_ms: usage.first_byte_time_ms,
             status: usage.status,
             billing_status: usage.billing_status,
+            request_headers: usage
+                .request_headers
+                .or_else(|| existing.and_then(|existing| existing.request_headers.clone())),
+            request_body: usage
+                .request_body
+                .or_else(|| existing.and_then(|existing| existing.request_body.clone())),
+            provider_request_headers: usage.provider_request_headers.or_else(|| {
+                existing.and_then(|existing| existing.provider_request_headers.clone())
+            }),
+            provider_request_body: usage
+                .provider_request_body
+                .or_else(|| existing.and_then(|existing| existing.provider_request_body.clone())),
+            response_headers: usage
+                .response_headers
+                .or_else(|| existing.and_then(|existing| existing.response_headers.clone())),
+            response_body: usage
+                .response_body
+                .or_else(|| existing.and_then(|existing| existing.response_body.clone())),
+            client_response_headers: usage
+                .client_response_headers
+                .or_else(|| existing.and_then(|existing| existing.client_response_headers.clone())),
+            client_response_body: usage
+                .client_response_body
+                .or_else(|| existing.and_then(|existing| existing.client_response_body.clone())),
+            request_metadata: usage
+                .request_metadata
+                .or_else(|| existing.and_then(|existing| existing.request_metadata.clone())),
             created_at_unix_secs,
             updated_at_unix_secs: usage.updated_at_unix_secs,
             finalized_at_unix_secs: usage.finalized_at_unix_secs,

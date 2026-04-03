@@ -32,16 +32,16 @@ from src.core.exceptions import (
 )
 from src.core.logger import logger
 from src.services.provider.behavior import get_provider_behavior
-from src.services.request.executor_plan import (
+from src.services.request.execution_runtime_plan import (
     ExecutionPlan,
     ExecutionPlanTimeouts,
     ExecutionProxySnapshot,
     build_execution_plan_body,
-    is_remote_contract_eligible,
+    is_remote_execution_runtime_contract_eligible,
 )
-from src.services.request.rust_executor_client import (
-    RustExecutorClient,
-    RustExecutorClientError,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeClient,
+    ExecutionRuntimeClientError,
 )
 from src.services.scheduling.aware_scheduler import ProviderCandidate
 from src.services.system.config import SystemConfigService
@@ -472,7 +472,7 @@ class CliStreamMixin:
                 ),
             )
 
-            if not is_remote_contract_eligible(rust_plan):
+            if not is_remote_execution_runtime_contract_eligible(rust_plan):
                 raise ProviderNotAvailableException(
                     "CLI 请求暂不支持当前 Rust executor 契约",
                     provider_name=str(provider.name),
@@ -480,8 +480,8 @@ class CliStreamMixin:
                 )
 
             try:
-                rust_result = await RustExecutorClient().execute_sync_json(rust_plan)
-            except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+                rust_result = await ExecutionRuntimeClient().execute_sync_json(rust_plan)
+            except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
                 logger.warning(
                     "[{}] CLI Rust executor(sync->stream) unavailable: {}",
                     self.request_id,
@@ -607,7 +607,7 @@ class CliStreamMixin:
             ),
         )
 
-        if not is_remote_contract_eligible(rust_plan):
+        if not is_remote_execution_runtime_contract_eligible(rust_plan):
             raise ProviderNotAvailableException(
                 "CLI 请求暂不支持当前 Rust executor 契约",
                 provider_name=str(provider.name),
@@ -615,8 +615,8 @@ class CliStreamMixin:
             )
 
         try:
-            rust_stream = await RustExecutorClient().execute_stream(rust_plan)
-        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+            rust_stream = await ExecutionRuntimeClient().execute_stream(rust_plan)
+        except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
             logger.warning(
                 "[{}] CLI Rust executor stream unavailable: {}",
                 self.request_id,

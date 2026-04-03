@@ -84,12 +84,12 @@ async def _build_cli_stream_plan(
         resolve_effective_proxy,
         resolve_proxy_info_async,
     )
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanTimeouts,
         ExecutionProxySnapshot,
         build_execution_plan_body,
-        is_remote_contract_eligible,
+        is_remote_execution_runtime_contract_eligible,
     )
 
     if str(payload.method or "").strip().upper() != "POST":
@@ -255,7 +255,7 @@ async def _build_cli_stream_plan(
             provider_api_format=provider_api_format,
             client_api_format=str(client_api_format),
         )
-        or not is_remote_contract_eligible(contract)
+        or not is_remote_execution_runtime_contract_eligible(contract)
         or provider_api_format != str(client_api_format)
         or provider_api_format not in expected_provider_formats
     ):
@@ -325,12 +325,12 @@ async def _build_cli_sync_plan(
         resolve_effective_proxy,
         resolve_proxy_info_async,
     )
-    from src.services.request.executor_plan import (
+    from src.services.request.execution_runtime_plan import (
         ExecutionPlan,
         ExecutionPlanTimeouts,
         ExecutionProxySnapshot,
         build_execution_plan_body,
-        is_remote_contract_eligible,
+        is_remote_execution_runtime_contract_eligible,
     )
 
     if str(payload.method or "").strip().upper() != "POST":
@@ -492,7 +492,7 @@ async def _build_cli_sync_plan(
 
     normalized_client_api_format = str(client_api_format)
     if (
-        not is_remote_contract_eligible(contract)
+        not is_remote_execution_runtime_contract_eligible(contract)
         or normalized_client_api_format not in expected_client_formats
     ):
         return None

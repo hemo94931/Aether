@@ -6,11 +6,11 @@ import pytest
 
 import src.core.api_format.capabilities as capabilities_mod
 import src.services.model.upstream_fetcher as fetcher_mod
-import src.services.request.rust_executor_client as rust_client_mod
+import src.services.request.execution_runtime_client as runtime_client_mod
 from src.services.model.upstream_fetcher import fetch_models_from_endpoints
-from src.services.request.rust_executor_client import (
-    RustExecutorClientError,
-    RustExecutorSyncResult,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeClientError,
+    ExecutionRuntimeSyncResult,
 )
 
 
@@ -34,13 +34,17 @@ async def test_fetch_models_from_endpoints_uses_rust_for_openai(
         AsyncMock(side_effect=AssertionError("python fallback should not run")),
     )
     execute_sync = AsyncMock(
-        return_value=RustExecutorSyncResult(
+        return_value=ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"data": [{"id": "gpt-5", "owned_by": "openai"}]},
             headers={"content-type": "application/json"},
         )
     )
-    monkeypatch.setattr(rust_client_mod.RustExecutorClient, "execute_sync_json", execute_sync)
+    monkeypatch.setattr(
+        runtime_client_mod.ExecutionRuntimeClient,
+        "execute_sync_json",
+        execute_sync,
+    )
 
     models, errors, ok = await fetch_models_from_endpoints(
         [
@@ -84,7 +88,7 @@ async def test_fetch_models_from_endpoints_uses_rust_for_claude_paginated(
     )
     execute_sync = AsyncMock(
         side_effect=[
-            RustExecutorSyncResult(
+            ExecutionRuntimeSyncResult(
                 status_code=200,
                 response_json={
                     "data": [{"id": "claude-sonnet-4"}],
@@ -93,7 +97,7 @@ async def test_fetch_models_from_endpoints_uses_rust_for_claude_paginated(
                 },
                 headers={"content-type": "application/json"},
             ),
-            RustExecutorSyncResult(
+            ExecutionRuntimeSyncResult(
                 status_code=200,
                 response_json={
                     "data": [{"id": "claude-opus-4"}],
@@ -103,7 +107,11 @@ async def test_fetch_models_from_endpoints_uses_rust_for_claude_paginated(
             ),
         ]
     )
-    monkeypatch.setattr(rust_client_mod.RustExecutorClient, "execute_sync_json", execute_sync)
+    monkeypatch.setattr(
+        runtime_client_mod.ExecutionRuntimeClient,
+        "execute_sync_json",
+        execute_sync,
+    )
 
     models, errors, ok = await fetch_models_from_endpoints(
         [
@@ -149,7 +157,7 @@ async def test_fetch_models_from_endpoints_uses_rust_for_gemini(
         AsyncMock(side_effect=AssertionError("python fallback should not run")),
     )
     execute_sync = AsyncMock(
-        return_value=RustExecutorSyncResult(
+        return_value=ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={
                 "models": [
@@ -162,7 +170,11 @@ async def test_fetch_models_from_endpoints_uses_rust_for_gemini(
             headers={"content-type": "application/json"},
         )
     )
-    monkeypatch.setattr(rust_client_mod.RustExecutorClient, "execute_sync_json", execute_sync)
+    monkeypatch.setattr(
+        runtime_client_mod.ExecutionRuntimeClient,
+        "execute_sync_json",
+        execute_sync,
+    )
 
     models, errors, ok = await fetch_models_from_endpoints(
         [
@@ -205,9 +217,9 @@ async def test_fetch_models_from_endpoints_returns_rust_only_error_when_rust_una
         lambda proxy_config, timeout=30.0: {"timeout": timeout},
     )
     monkeypatch.setattr(
-        rust_client_mod.RustExecutorClient,
+        runtime_client_mod.ExecutionRuntimeClient,
         "execute_sync_json",
-        AsyncMock(side_effect=RustExecutorClientError("executor down")),
+        AsyncMock(side_effect=ExecutionRuntimeClientError("executor down")),
     )
     python_fetch = AsyncMock(return_value=([{"id": "fallback-model"}], None))
     monkeypatch.setattr(capabilities_mod, "fetch_models_for_api_format", python_fetch)

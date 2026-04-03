@@ -63,7 +63,7 @@ from src.database import get_db
 from src.models.database import Base, RequestCandidate
 from src.services.orchestration.candidate_resolver import CandidateResolver
 from src.services.scheduling.schemas import PoolCandidate, ProviderCandidate
-from src.services.request.executor_plan import ExecutionPlan, ExecutionPlanBody, PreparedExecutionPlan
+from src.services.request.execution_runtime_plan import ExecutionPlan, ExecutionPlanBody, PreparedExecutionPlan
 
 
 def _wait_until(predicate: Any, *, timeout: float = 1.0, interval: float = 0.01) -> None:

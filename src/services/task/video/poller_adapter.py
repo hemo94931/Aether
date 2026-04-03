@@ -393,21 +393,21 @@ class VideoTaskPollerAdapter:
     ) -> dict[str, Any] | None:
         import httpx
 
-        from src.services.request.executor_plan import (
+        from src.services.request.execution_runtime_plan import (
             ExecutionPlan,
             ExecutionPlanBody,
             ExecutionPlanTimeouts,
         )
-        from src.services.request.rust_executor_client import (
-            RustExecutorClient,
-            RustExecutorClientError,
+        from src.services.request.execution_runtime_client import (
+            ExecutionRuntimeClient,
+            ExecutionRuntimeClientError,
         )
 
-        if config.executor_backend != "rust":
+        if config.execution_runtime_backend != "rust":
             return None
 
         try:
-            result = await RustExecutorClient().execute_sync_json(
+            result = await ExecutionRuntimeClient().execute_sync_json(
                 ExecutionPlan(
                     request_id=f"video-poll-{ctx.task_id}",
                     candidate_id=None,
@@ -433,7 +433,7 @@ class VideoTaskPollerAdapter:
                     ),
                 )
             )
-        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+        except (ExecutionRuntimeClientError, httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
             logger.warning(
                 "[VideoPoller] Rust poll fallback task={} url={} error={}",
                 ctx.task_id,
@@ -585,7 +585,7 @@ class VideoTaskPollerAdapter:
             resolve_effective_proxy,
             resolve_proxy_info_async,
         )
-        from src.services.request.executor_plan import ExecutionProxySnapshot
+        from src.services.request.execution_runtime_plan import ExecutionProxySnapshot
 
         try:
             effective_proxy = resolve_effective_proxy(

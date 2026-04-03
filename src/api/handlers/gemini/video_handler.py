@@ -526,22 +526,22 @@ class GeminiVeoHandler(VideoHandlerBase):
             resolve_effective_proxy,
             resolve_proxy_info_async,
         )
-        from src.services.request.executor_plan import (
+        from src.services.request.execution_runtime_plan import (
             ExecutionPlan,
             ExecutionPlanBody,
             ExecutionPlanTimeouts,
             ExecutionProxySnapshot,
         )
-        from src.services.request.rust_executor_client import (
-            RustExecutorClient,
-            RustExecutorClientError,
+        from src.services.request.execution_runtime_client import (
+            ExecutionRuntimeClient,
+            ExecutionRuntimeClientError,
         )
 
-        if config.executor_backend != "rust":
+        if config.execution_runtime_backend != "rust":
             raise ProviderNotAvailableException(
                 "Video 下载仅支持 Rust executor",
                 provider_name="gemini",
-                upstream_response=f"executor_backend={config.executor_backend}",
+                upstream_response=f"executor_backend={config.execution_runtime_backend}",
             )
 
         try:
@@ -607,8 +607,8 @@ class GeminiVeoHandler(VideoHandlerBase):
             ) from exc
 
         try:
-            rust_stream = await RustExecutorClient().execute_stream(plan)
-        except (RustExecutorClientError, httpx.HTTPError, ValueError) as exc:
+            rust_stream = await ExecutionRuntimeClient().execute_stream(plan)
+        except (ExecutionRuntimeClientError, httpx.HTTPError, ValueError) as exc:
             logger.warning(
                 "[VideoDownload] Rust executor unavailable task={} url={}: {}",
                 task_id,

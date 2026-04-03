@@ -15,10 +15,10 @@ from src.api.handlers.base.cli_stream_mixin import CliStreamMixin
 from src.api.handlers.base.cli_sync_mixin import CliSyncMixin
 from src.api.handlers.base.stream_context import StreamContext
 from src.core.exceptions import ProviderNotAvailableException
-from src.services.request.rust_executor_client import (
-    RustExecutorClientError,
-    RustExecutorStreamResult,
-    RustExecutorSyncResult,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeClientError,
+    ExecutionRuntimeStreamResult,
+    ExecutionRuntimeSyncResult,
 )
 
 
@@ -278,9 +278,9 @@ async def test_cli_process_sync_uses_rust_executor_when_available(
                 pool_summary=None,
             )
 
-    async def _fake_execute_sync_json(self: object, plan: object) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: object) -> ExecutionRuntimeSyncResult:
         assert getattr(plan, "provider_api_format") == "openai:cli"
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"id": "resp-rust-cli"},
             headers={"content-type": "application/json"},
@@ -288,7 +288,7 @@ async def test_cli_process_sync_uses_rust_executor_when_available(
 
     monkeypatch.setattr(taskmod, "TaskService", _FakeTaskService)
     monkeypatch.setattr(
-        cli_sync_mod.RustExecutorClient,
+        cli_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -376,10 +376,10 @@ async def test_cli_process_sync_aggregates_upstream_stream_after_rust(
         assert request_id == "req-cli-sync"
         return SimpleNamespace(id="agg-cli-1")
 
-    async def _fake_execute_sync_json(self: object, plan: object) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: object) -> ExecutionRuntimeSyncResult:
         assert getattr(plan, "provider_api_format") == "openai:cli"
         assert getattr(plan, "stream") is True
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_body_bytes=b"data: {\"id\":\"chunk-1\"}\n\ndata: [DONE]\n\n",
             headers={"content-type": "text/event-stream"},
@@ -390,7 +390,7 @@ async def test_cli_process_sync_aggregates_upstream_stream_after_rust(
 
     monkeypatch.setattr(taskmod, "TaskService", _FakeTaskService)
     monkeypatch.setattr(
-        cli_sync_mod.RustExecutorClient,
+        cli_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -451,16 +451,16 @@ async def test_cli_process_sync_raises_when_rust_unavailable(
             await kwargs["request_func"](provider, endpoint, key, candidate)
             raise AssertionError("task service should not reach Python local execution")
 
-    async def _fake_execute_sync_json(self: object, plan: object) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: object) -> ExecutionRuntimeSyncResult:
         del self, plan
-        raise RustExecutorClientError("executor down")
+        raise ExecutionRuntimeClientError("executor down")
 
     async def _fake_get_upstream_client(*args: Any, **kwargs: Any) -> object:
         raise AssertionError("python fallback should not be used")
 
     monkeypatch.setattr(taskmod, "TaskService", _FakeTaskService)
     monkeypatch.setattr(
-        cli_sync_mod.RustExecutorClient,
+        cli_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -485,7 +485,7 @@ async def test_cli_process_sync_raises_when_remote_contract_is_ineligible(
 ) -> None:
     handler = _DummySyncHandler()
     monkeypatch.setattr(cli_sync_mod.config, "executor_backend", "rust")
-    monkeypatch.setattr(cli_sync_mod, "is_remote_contract_eligible", lambda plan: False)
+    monkeypatch.setattr(cli_sync_mod, "is_remote_execution_runtime_contract_eligible", lambda plan: False)
     _patch_proxy_resolver(monkeypatch)
 
     class _FakeTaskService:
@@ -512,7 +512,7 @@ async def test_cli_process_sync_raises_when_remote_contract_is_ineligible(
             await kwargs["request_func"](provider, endpoint, key, candidate)
             raise AssertionError("task service should not complete after local upstream attempt")
 
-    async def _fake_execute_sync_json(self: object, plan: object) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: object) -> ExecutionRuntimeSyncResult:
         raise AssertionError("rust executor should not be used when contract is ineligible")
 
     async def _fake_get_upstream_client(*args: Any, **kwargs: Any) -> object:
@@ -520,7 +520,7 @@ async def test_cli_process_sync_raises_when_remote_contract_is_ineligible(
 
     monkeypatch.setattr(taskmod, "TaskService", _FakeTaskService)
     monkeypatch.setattr(
-        cli_sync_mod.RustExecutorClient,
+        cli_sync_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -550,9 +550,9 @@ async def test_cli_execute_stream_request_uses_rust_sync_bridge(
     monkeypatch.setattr(cli_stream_mod.config, "executor_backend", "rust")
     _patch_proxy_resolver(monkeypatch)
 
-    async def _fake_execute_sync_json(self: object, plan: object) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: object) -> ExecutionRuntimeSyncResult:
         assert getattr(plan, "stream") is False
-        return RustExecutorSyncResult(
+        return ExecutionRuntimeSyncResult(
             status_code=200,
             response_json={"id": "sync-bridge-rust"},
             headers={"content-type": "application/json"},
@@ -563,7 +563,7 @@ async def test_cli_execute_stream_request_uses_rust_sync_bridge(
         yield b"data: cli-bridge\n\n"
 
     monkeypatch.setattr(
-        cli_stream_mod.RustExecutorClient,
+        cli_stream_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
@@ -641,22 +641,22 @@ async def test_cli_execute_stream_request_raises_when_rust_unavailable(
     )
 
     if upstream_is_stream:
-        async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+        async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
             del self, plan
-            raise RustExecutorClientError("executor down")
+            raise ExecutionRuntimeClientError("executor down")
 
         monkeypatch.setattr(
-            cli_stream_mod.RustExecutorClient,
+            cli_stream_mod.ExecutionRuntimeClient,
             "execute_stream",
             _fake_execute_stream,
         )
     else:
-        async def _fake_execute_sync_json(self: object, plan: object) -> RustExecutorSyncResult:
+        async def _fake_execute_sync_json(self: object, plan: object) -> ExecutionRuntimeSyncResult:
             del self, plan
-            raise RustExecutorClientError("executor down")
+            raise ExecutionRuntimeClientError("executor down")
 
         monkeypatch.setattr(
-            cli_stream_mod.RustExecutorClient,
+            cli_stream_mod.ExecutionRuntimeClient,
             "execute_sync_json",
             _fake_execute_sync_json,
         )
@@ -690,16 +690,16 @@ async def test_cli_execute_stream_request_raises_when_remote_contract_is_ineligi
     ctx.client_api_format = "openai:cli"
 
     monkeypatch.setattr(cli_stream_mod.config, "executor_backend", "rust")
-    monkeypatch.setattr(cli_stream_mod, "is_remote_contract_eligible", lambda plan: False)
+    monkeypatch.setattr(cli_stream_mod, "is_remote_execution_runtime_contract_eligible", lambda plan: False)
     _patch_proxy_resolver(monkeypatch)
 
     async def _fake_get_upstream_client(*args: Any, **kwargs: Any) -> object:
         raise AssertionError("python fallback should not be used")
 
-    async def _fake_execute_sync_json(self: object, plan: object) -> RustExecutorSyncResult:
+    async def _fake_execute_sync_json(self: object, plan: object) -> ExecutionRuntimeSyncResult:
         raise AssertionError("rust sync executor should not be used when contract is ineligible")
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         raise AssertionError("rust stream executor should not be used when contract is ineligible")
 
     monkeypatch.setattr(
@@ -707,12 +707,12 @@ async def test_cli_execute_stream_request_raises_when_remote_contract_is_ineligi
         _fake_get_upstream_client,
     )
     monkeypatch.setattr(
-        cli_stream_mod.RustExecutorClient,
+        cli_stream_mod.ExecutionRuntimeClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
     monkeypatch.setattr(
-        cli_stream_mod.RustExecutorClient,
+        cli_stream_mod.ExecutionRuntimeClient,
         "execute_stream",
         _fake_execute_stream,
     )
@@ -763,9 +763,9 @@ async def test_cli_execute_stream_request_uses_rust_native_stream(
     monkeypatch.setattr(cli_stream_mod.config, "executor_backend", "rust")
     _patch_proxy_resolver(monkeypatch)
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         assert getattr(plan, "stream") is True
-        return RustExecutorStreamResult(
+        return ExecutionRuntimeStreamResult(
             status_code=200,
             headers={"content-type": "text/event-stream", "x-upstream-test": "true"},
             byte_iterator=_iter_chunks(
@@ -778,7 +778,7 @@ async def test_cli_execute_stream_request_uses_rust_native_stream(
         )
 
     monkeypatch.setattr(
-        cli_stream_mod.RustExecutorClient,
+        cli_stream_mod.ExecutionRuntimeClient,
         "execute_stream",
         _fake_execute_stream,
     )

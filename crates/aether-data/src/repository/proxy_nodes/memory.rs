@@ -178,7 +178,7 @@ impl ProxyNodeWriteRepository for InMemoryProxyNodeRepository {
         };
         let event_detail = mutation.detail.clone().unwrap_or_else(|| {
             format!(
-                "[hub_node_status] conn_count={}",
+                "[tunnel_node_status] conn_count={}",
                 i32::max(mutation.conn_count, 0)
             )
         });
@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(stale_events[0].event_type, "disconnected");
         assert_eq!(
             stale_events[0].detail.as_deref(),
-            Some("[stale_ignored] [hub_node_status] conn_count=0")
+            Some("[stale_ignored] [tunnel_node_status] conn_count=0")
         );
 
         let updated = repository
@@ -344,7 +344,7 @@ mod tests {
         assert_eq!(events[0].created_at_unix_secs, Some(1_800_000_000));
         assert_eq!(
             events[0].detail.as_deref(),
-            Some("[hub_node_status] conn_count=0")
+            Some("[tunnel_node_status] conn_count=0")
         );
 
         let found = repository

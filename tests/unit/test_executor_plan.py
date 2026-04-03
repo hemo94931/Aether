@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import base64
 
-from src.services.request.executor_plan import PreparedExecutionPlan
-from src.services.request.executor_plan import (
+from src.services.request.execution_runtime_plan import PreparedExecutionPlan
+from src.services.request.execution_runtime_plan import (
     ExecutionPlan,
     ExecutionPlanBody,
     ExecutionPlanTimeouts,
     ExecutionProxySnapshot,
     build_execution_plan_body,
-    should_bypass_remote_executor_url,
+    should_bypass_remote_execution_runtime_url,
 )
 
 
@@ -374,9 +374,9 @@ def test_prepared_execution_plan_remote_eligible_rejects_codex_cli_transport() -
     assert prepared.remote_eligible is False
 
 
-def test_should_bypass_remote_executor_url_accepts_backendapi_codex_variant() -> None:
+def test_should_bypass_remote_execution_runtime_url_accepts_backendapi_codex_variant() -> None:
     assert (
-        should_bypass_remote_executor_url(
+        should_bypass_remote_execution_runtime_url(
             "https://chatgpt.com/backendapi/codex/responses",
             provider_api_format="openai:cli",
             client_api_format="openai:cli",

@@ -1,14 +1,14 @@
 """
-aether-executor 本地端到端测试
+aether-gateway execution runtime harness 本地端到端测试
 
 测试流程:
 1. 启动本地假上游 HTTP 服务
-2. 启动 aether-executor（Unix Socket）
-3. 用 Python RustExecutorClient 发送 ExecutionPlan
+2. 启动 aether-gateway example harness（Unix Socket）
+3. 用 Python ExecutionRuntimeClient 发送 ExecutionPlan
 4. 验证执行结果与上游响应一致
 
 运行:
-  cargo build -p aether-executor
+  cargo build -p aether-gateway --example execution-runtime-harness
   uv run python tests/e2e_rust_executor.py
 """
 
@@ -26,13 +26,13 @@ from pathlib import Path
 
 import httpx
 
-from src.services.request.executor_plan import (
+from src.services.request.execution_runtime_plan import (
     ExecutionPlan,
     ExecutionPlanBody,
     ExecutionProxySnapshot,
     ExecutionPlanTimeouts,
 )
-from src.services.request.rust_executor_client import RustExecutorClient
+from src.services.request.execution_runtime_client import ExecutionRuntimeClient
 
 
 async def _upstream_app(scope, receive, send) -> None:  # type: ignore[no-untyped-def]
@@ -361,12 +361,6 @@ async def _start_proxy_server() -> tuple[asyncio.AbstractServer, int, asyncio.Fu
 
 async def run_test() -> bool:
     repo_root = Path(__file__).resolve().parents[1]
-    executor_binary = repo_root / "target" / "debug" / "aether-executor"
-    if not executor_binary.is_file():
-        print(f"FAIL: executor binary not found at {executor_binary}")
-        print("  run: cargo build -p aether-executor")
-        return False
-
     upstream_listener = await asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
     upstream_port = upstream_listener.sockets[0].getsockname()[1]
     upstream_listener.close()
@@ -401,12 +395,19 @@ async def run_test() -> bool:
     executor_socket.unlink(missing_ok=True)
     executor_proc = subprocess.Popen(
         [
-            str(executor_binary),
+            "cargo",
+            "run",
+            "-p",
+            "aether-gateway",
+            "--example",
+            "execution-runtime-harness",
+            "--",
             "--transport",
             "unix_socket",
             "--unix-socket",
             str(executor_socket),
         ],
+        cwd=repo_root,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -433,7 +434,7 @@ async def run_test() -> bool:
             for _ in range(50):
                 try:
                     resp = await client.post(
-                        f"http://127.0.0.1:{relay_port}/local/relay/probe",
+                        f"http://127.0.0.1:{relay_port}/api/internal/tunnel/relay/probe",
                         content=(0).to_bytes(4, "big"),
                         timeout=0.2,
                     )
@@ -445,8 +446,8 @@ async def run_test() -> bool:
                 print("FAIL: relay server did not start in time")
                 return False
 
-        print("[2/4] Waiting for aether-executor ...")
-        for _ in range(100):
+        print("[2/4] Waiting for execution-runtime harness ...")
+        for _ in range(600):
             if executor_socket.exists():
                 try:
                     async with httpx.AsyncClient(
@@ -460,13 +461,13 @@ async def run_test() -> bool:
                     pass
             await asyncio.sleep(0.1)
         else:
-            print("FAIL: executor did not start in time")
+            print("FAIL: execution-runtime harness did not start in time")
             if executor_proc.stdout is not None:
                 print(executor_proc.stdout.read())
             return False
 
-        print("[3/4] Sending ExecutionPlan via RustExecutorClient ...")
-        client = RustExecutorClient(
+        print("[3/4] Sending ExecutionPlan via ExecutionRuntimeClient ...")
+        client = ExecutionRuntimeClient(
             transport="unix_socket",
             socket_path=str(executor_socket),
             base_url="http://127.0.0.1:5219",
@@ -539,7 +540,7 @@ async def run_test() -> bool:
                     mode="tunnel",
                     node_id="node-1",
                     label="relay-node",
-                    extra={"hub_base_url": f"http://127.0.0.1:{relay_port}"},
+                    extra={"tunnel_base_url": f"http://127.0.0.1:{relay_port}"},
                 ),
                 timeouts=ExecutionPlanTimeouts(
                     connect_ms=5_000,
@@ -844,7 +845,7 @@ async def run_test() -> bool:
                     mode="tunnel",
                     node_id="node-1",
                     label="relay-node",
-                    extra={"hub_base_url": f"http://127.0.0.1:{relay_port}"},
+                    extra={"tunnel_base_url": f"http://127.0.0.1:{relay_port}"},
                 ),
                 timeouts=ExecutionPlanTimeouts(
                     connect_ms=5_000,

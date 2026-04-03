@@ -12,9 +12,9 @@ import src.services.proxy_node.resolver as proxymod
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
 from src.api.handlers.base.stream_context import StreamContext
 from src.core.exceptions import ProviderNotAvailableException
-from src.services.request.rust_executor_client import (
-    RustExecutorClientError,
-    RustExecutorStreamResult,
+from src.services.request.execution_runtime_client import (
+    ExecutionRuntimeClientError,
+    ExecutionRuntimeStreamResult,
 )
 
 
@@ -265,9 +265,9 @@ async def test_execute_stream_request_uses_rust_executor_when_available(
 
     dummy_ctx = _DummyStreamResponseCtx()
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         assert getattr(plan, "stream") is True
-        return RustExecutorStreamResult(
+        return ExecutionRuntimeStreamResult(
             status_code=200,
             headers={"content-type": "text/event-stream", "x-upstream-test": "true"},
             byte_iterator=_iter_chunks(
@@ -279,7 +279,7 @@ async def test_execute_stream_request_uses_rust_executor_when_available(
             response_ctx=dummy_ctx,
         )
 
-    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_stream", _fake_execute_stream)
+    monkeypatch.setattr(chatmod.ExecutionRuntimeClient, "execute_stream", _fake_execute_stream)
 
     stream = await handler._execute_stream_request(
         ctx,
@@ -359,7 +359,7 @@ async def test_execute_stream_request_uses_rust_sync_executor_for_non_stream_ups
             headers={"content-type": "application/json"},
         )
 
-    async def _should_not_call_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _should_not_call_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         del self, plan
         raise AssertionError("stream executor should not be used")
 
@@ -378,8 +378,8 @@ async def test_execute_stream_request_uses_rust_sync_executor_for_non_stream_ups
         lambda internal_resp: [{"kind": "chunk"}],
     )
     monkeypatch.setattr(chatmod, "get_parser_for_format", lambda _format: _FakeParser())
-    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_sync_json", _fake_execute_sync_json)
-    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_stream", _should_not_call_stream)
+    monkeypatch.setattr(chatmod.ExecutionRuntimeClient, "execute_sync_json", _fake_execute_sync_json)
+    monkeypatch.setattr(chatmod.ExecutionRuntimeClient, "execute_stream", _should_not_call_stream)
     monkeypatch.setattr(
         "src.clients.http_client.HTTPClientPool.get_upstream_client",
         _should_not_get_http_client,
@@ -432,9 +432,9 @@ async def test_execute_stream_request_accepts_async_generator_stream_processor(
 
     dummy_ctx = _DummyStreamResponseCtx()
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         assert getattr(plan, "stream") is True
-        return RustExecutorStreamResult(
+        return ExecutionRuntimeStreamResult(
             status_code=200,
             headers={"content-type": "text/event-stream"},
             byte_iterator=_iter_chunks(
@@ -446,7 +446,7 @@ async def test_execute_stream_request_accepts_async_generator_stream_processor(
             response_ctx=dummy_ctx,
         )
 
-    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_stream", _fake_execute_stream)
+    monkeypatch.setattr(chatmod.ExecutionRuntimeClient, "execute_stream", _fake_execute_stream)
 
     stream = await handler._execute_stream_request(
         ctx,
@@ -501,18 +501,18 @@ async def test_execute_stream_request_allows_tunnel_delegate_for_rust(
 
     dummy_ctx = _DummyStreamResponseCtx()
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         assert getattr(plan, "proxy") is not None
         assert getattr(plan.proxy, "mode") == "tunnel"
         assert getattr(plan.proxy, "node_id") == "node-1"
-        return RustExecutorStreamResult(
+        return ExecutionRuntimeStreamResult(
             status_code=200,
             headers={"content-type": "text/event-stream"},
             byte_iterator=_iter_chunks([b"data: [DONE]\n\n"]),
             response_ctx=dummy_ctx,
         )
 
-    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_stream", _fake_execute_stream)
+    monkeypatch.setattr(chatmod.ExecutionRuntimeClient, "execute_stream", _fake_execute_stream)
 
     stream = await handler._execute_stream_request(
         ctx,
@@ -577,16 +577,16 @@ async def test_execute_stream_request_allows_tls_profile_for_rust(
         _fake_prepare_provider_request,
     )
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         assert getattr(plan, "tls_profile") == "claude_code_nodejs"
-        return RustExecutorStreamResult(
+        return ExecutionRuntimeStreamResult(
             status_code=200,
             headers={"content-type": "text/event-stream"},
             byte_iterator=_iter_chunks([b"data: [DONE]\n\n"]),
             response_ctx=dummy_ctx,
         )
 
-    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_stream", _fake_execute_stream)
+    monkeypatch.setattr(chatmod.ExecutionRuntimeClient, "execute_stream", _fake_execute_stream)
 
     stream = await handler._execute_stream_request(
         ctx,
@@ -629,16 +629,16 @@ async def test_execute_stream_request_turns_rust_upstream_error_into_http_status
 
     dummy_ctx = _DummyStreamResponseCtx()
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         assert getattr(plan, "stream") is True
-        return RustExecutorStreamResult(
+        return ExecutionRuntimeStreamResult(
             status_code=429,
             headers={"content-type": "application/json"},
             byte_iterator=_iter_chunks([b'{"error":{"message":"slow down"}}']),
             response_ctx=dummy_ctx,
         )
 
-    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_stream", _fake_execute_stream)
+    monkeypatch.setattr(chatmod.ExecutionRuntimeClient, "execute_stream", _fake_execute_stream)
 
     with pytest.raises(httpx.HTTPStatusError) as exc_info:
         await handler._execute_stream_request(
@@ -678,14 +678,14 @@ async def test_execute_stream_request_raises_when_rust_unavailable(
         output_limit=None,
     )
 
-    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _fake_execute_stream(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         del plan
-        raise RustExecutorClientError("executor down")
+        raise ExecutionRuntimeClientError("executor down")
 
     async def _fake_get_upstream_client(*args: Any, **kwargs: Any) -> object:
         raise AssertionError("python fallback should not be used")
 
-    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_stream", _fake_execute_stream)
+    monkeypatch.setattr(chatmod.ExecutionRuntimeClient, "execute_stream", _fake_execute_stream)
     monkeypatch.setattr(
         "src.clients.http_client.HTTPClientPool.get_upstream_client",
         _fake_get_upstream_client,
@@ -728,15 +728,15 @@ async def test_execute_stream_request_raises_when_remote_contract_is_ineligible(
         output_limit=None,
     )
 
-    async def _should_not_call_rust(self: object, plan: object) -> RustExecutorStreamResult:
+    async def _should_not_call_rust(self: object, plan: object) -> ExecutionRuntimeStreamResult:
         del self, plan
         raise AssertionError("rust executor should not be called")
 
     async def _fake_get_upstream_client(*args: Any, **kwargs: Any) -> object:
         raise AssertionError("python fallback should not be used")
 
-    monkeypatch.setattr(chatmod, "is_remote_contract_eligible", lambda plan: False)
-    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_stream", _should_not_call_rust)
+    monkeypatch.setattr(chatmod, "is_remote_execution_runtime_contract_eligible", lambda plan: False)
+    monkeypatch.setattr(chatmod.ExecutionRuntimeClient, "execute_stream", _should_not_call_rust)
     monkeypatch.setattr(
         "src.clients.http_client.HTTPClientPool.get_upstream_client",
         _fake_get_upstream_client,
