@@ -116,7 +116,7 @@ async fn gateway_executes_openai_chat_stream_via_local_decision_gate_without_exe
         .with_transport_fields(
             true,
             false,
-            false,
+            true,
             None,
             Some(2),
             None,
@@ -540,7 +540,7 @@ async fn gateway_executes_openai_chat_stream_via_local_openai_cli_cross_format_c
         .with_transport_fields(
             true,
             false,
-            false,
+            true,
             None,
             Some(2),
             None,
@@ -816,7 +816,11 @@ async fn gateway_executes_openai_chat_stream_via_local_openai_cli_cross_format_c
             provider_catalog_repository,
             Arc::clone(&request_candidate_repository),
             DEVELOPMENT_ENCRYPTION_KEY,
-        ),
+        )
+        .with_system_config_values_for_tests(vec![(
+            "provider_priority_mode".to_string(),
+            json!("global_key"),
+        )]),
     );
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
@@ -1310,7 +1314,11 @@ async fn gateway_executes_openai_chat_stream_with_custom_path_via_local_decision
             provider_catalog_repository,
             Arc::clone(&request_candidate_repository),
             DEVELOPMENT_ENCRYPTION_KEY,
-        ),
+        )
+        .with_system_config_values_for_tests(vec![(
+            "provider_priority_mode".to_string(),
+            json!("global_key"),
+        )]),
     );
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
@@ -1409,7 +1417,8 @@ async fn gateway_executes_openai_chat_stream_with_custom_path_via_local_decision
 }
 
 #[tokio::test]
-async fn gateway_retries_next_local_openai_chat_stream_candidate_with_local_failover_only() {
+async fn gateway_retries_next_local_openai_chat_stream_candidate_after_retryable_429_execution_runtime_status(
+) {
     #[derive(Debug, Clone)]
     struct SeenExecutionRuntimeStreamRequest {
         trace_id: String,
@@ -1716,7 +1725,8 @@ async fn gateway_retries_next_local_openai_chat_stream_candidate_with_local_fail
 
                 let frames = if attempt == 1 {
                     concat!(
-                        "{\"type\":\"headers\",\"payload\":{\"kind\":\"headers\",\"status_code\":502,\"headers\":{\"content-type\":\"application/json\"}}}\n",
+                        "{\"type\":\"headers\",\"payload\":{\"kind\":\"headers\",\"status_code\":429,\"headers\":{\"content-type\":\"application/json\"}}}\n",
+                        "{\"type\":\"data\",\"payload\":{\"kind\":\"data\",\"text\":\"{\\\"error\\\":{\\\"message\\\":\\\"rate limited\\\",\\\"type\\\":\\\"rate_limit_error\\\"}}\"}}\n",
                         "{\"type\":\"eof\",\"payload\":{\"kind\":\"eof\"}}\n"
                     )
                 } else {
@@ -1812,7 +1822,11 @@ async fn gateway_retries_next_local_openai_chat_stream_candidate_with_local_fail
             provider_catalog_repository,
             Arc::clone(&request_candidate_repository),
             DEVELOPMENT_ENCRYPTION_KEY,
-        ),
+        )
+        .with_system_config_values_for_tests(vec![(
+            "provider_priority_mode".to_string(),
+            json!("global_key"),
+        )]),
     );
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
@@ -1887,10 +1901,14 @@ async fn gateway_retries_next_local_openai_chat_stream_candidate_with_local_fail
     assert_eq!(stored_candidates.len(), 2);
     assert_eq!(stored_candidates[0].candidate_index, 0);
     assert_eq!(stored_candidates[0].status, RequestCandidateStatus::Failed);
-    assert_eq!(stored_candidates[0].status_code, Some(502));
+    assert_eq!(stored_candidates[0].status_code, Some(429));
     assert_eq!(
         stored_candidates[0].error_type.as_deref(),
         Some("retryable_upstream_status")
+    );
+    assert_eq!(
+        stored_candidates[0].error_message.as_deref(),
+        Some("execution runtime stream returned retryable status 429")
     );
     assert_eq!(stored_candidates[1].candidate_index, 1);
     assert_eq!(stored_candidates[1].status, RequestCandidateStatus::Success);

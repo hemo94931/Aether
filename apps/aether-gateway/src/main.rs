@@ -1,5 +1,5 @@
 use clap::{Args as ClapArgs, Parser, ValueEnum};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use aether_crypto::warm_python_fernet_secret;
 use aether_data::postgres::PostgresPoolConfig;
@@ -621,12 +621,12 @@ fn resolve_gateway_log_instance_id() -> String {
         .unwrap_or_else(|| "local".to_string())
 }
 
-fn resolve_healthcheck_url(bind: &str) -> Result<String, std::io::Error> {
+fn resolve_bind_http_base_url(bind: &str) -> Result<String, std::io::Error> {
     let trimmed = bind.trim();
     if trimmed.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "AETHER_GATEWAY_BIND cannot be empty when --healthcheck is enabled",
+            "AETHER_GATEWAY_BIND cannot be empty",
         ));
     }
 
@@ -637,21 +637,19 @@ fn resolve_healthcheck_url(bind: &str) -> Result<String, std::io::Error> {
             std::net::IpAddr::V6(ip) if ip.is_unspecified() => "[::1]".to_string(),
             std::net::IpAddr::V6(ip) => format!("[{ip}]"),
         };
-        return Ok(format!("http://{host}:{}/health", socket_addr.port()));
+        return Ok(format!("http://{host}:{}", socket_addr.port()));
     }
 
     let (host, port) = trimmed.rsplit_once(':').ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!(
-                "AETHER_GATEWAY_BIND must include a port when --healthcheck is enabled: {trimmed}"
-            ),
+            format!("AETHER_GATEWAY_BIND must include a port: {trimmed}"),
         )
     })?;
     let port = port.parse::<u16>().map_err(|error| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("invalid healthcheck port in AETHER_GATEWAY_BIND={trimmed}: {error}"),
+            format!("invalid bind port in AETHER_GATEWAY_BIND={trimmed}: {error}"),
         )
     })?;
 
@@ -668,7 +666,11 @@ fn resolve_healthcheck_url(bind: &str) -> Result<String, std::io::Error> {
         host.to_string()
     };
 
-    Ok(format!("http://{host}:{port}/health"))
+    Ok(format!("http://{host}:{port}"))
+}
+
+fn resolve_healthcheck_url(bind: &str) -> Result<String, std::io::Error> {
+    Ok(format!("{}/health", resolve_bind_http_base_url(bind)?))
 }
 
 async fn run_healthcheck(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
@@ -785,17 +787,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     info!(
+        event_name = "gateway_starting",
+        log_type = "ops",
         bind = %args.bind,
         environment = %args.frontdoor.environment,
         deployment_topology = args.deployment_topology.as_str(),
         node_role = args.node_role.as_str(),
+        frontdoor_mode = "compatibility_frontdoor",
         log_format = ?args.logging.log_format,
         log_destination = args.logging.log_destination.as_str(),
+        video_task_truth_source_mode = ?args.video_task_truth_source_mode,
+        "aether-gateway starting"
+    );
+    debug!(
+        event_name = "gateway_startup_config",
+        log_type = "ops",
         log_dir = args.logging.log_dir.as_deref().unwrap_or("-"),
         log_rotation = args.logging.log_rotation.as_str(),
         log_retention_days = args.logging.log_retention_days,
         log_max_files = args.logging.log_max_files,
-        frontdoor_mode = "compatibility_frontdoor",
         static_dir = args.static_dir.as_deref().unwrap_or("-"),
         cors_origins = args.frontdoor.cors_origins.as_deref().unwrap_or("-"),
         cors_allow_credentials = args.frontdoor.cors_allow_credentials,
@@ -803,22 +813,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         frontdoor_rpm_key_ttl_seconds = args.rate_limit.key_ttl_seconds,
         frontdoor_rpm_fail_open = args.rate_limit.fail_open,
         frontdoor_rpm_allow_local_fallback = rate_limit_config.allow_local_fallback(),
-        video_task_truth_source_mode = ?args.video_task_truth_source_mode,
         video_task_poller_interval_ms = args.video_task_poller_interval_ms,
         video_task_poller_batch_size = args.video_task_poller_batch_size,
         video_task_store_path = args.video_task_store_path.as_deref().unwrap_or("-"),
         max_in_flight_requests = args.max_in_flight_requests.unwrap_or_default(),
         distributed_request_limit = args.distributed_request_limit.unwrap_or_default(),
-        distributed_request_redis_url = args
+        distributed_request_redis_configured = args
             .distributed_request_redis_url
             .as_deref()
             .or(data_redis_url.as_deref())
-            .unwrap_or("-"),
-        data_postgres_url = data_postgres_url.as_deref().unwrap_or("-"),
-        data_redis_url = data_redis_url.as_deref().unwrap_or("-"),
+            .is_some(),
+        data_postgres_configured = data_postgres_url.is_some(),
+        data_redis_configured = data_redis_url.is_some(),
         data_has_encryption_key = data_config.encryption_key().is_some(),
         data_postgres_require_ssl = args.data.postgres_require_ssl,
-        "aether-gateway started"
+        "aether-gateway startup configuration"
     );
 
     let mut state = AppState::new()?
@@ -921,6 +930,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Vec::new()
     };
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
+    let public_base_url = resolve_bind_http_base_url(&args.bind)
+        .unwrap_or_else(|_| format!("http://{}", args.bind.trim()));
+    let frontdoor_health_url = format!("{public_base_url}/_gateway/health");
     let api_router = build_router_with_state(state);
 
     // Compose the final router: API routes + optional static file serving + CF header stripping
@@ -938,6 +950,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             aether_gateway::strip_cf_headers_middleware,
         ))
     };
+
+    info!(
+        event_name = "gateway_ready",
+        log_type = "ops",
+        bind = %args.bind,
+        public_url = %public_base_url,
+        healthcheck_url = %frontdoor_health_url,
+        legacy_route_policy = "fail_closed",
+        "aether-gateway ready"
+    );
 
     axum::serve(
         listener,

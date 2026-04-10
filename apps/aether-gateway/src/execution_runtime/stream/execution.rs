@@ -3,7 +3,9 @@ use std::io::Error as IoError;
 
 use aether_contracts::{ExecutionPlan, ExecutionTelemetry, StreamFrame, StreamFramePayload};
 use aether_data_contracts::repository::candidates::RequestCandidateStatus;
-use aether_scheduler_core::SchedulerRequestCandidateStatusUpdate;
+use aether_scheduler_core::{
+    parse_request_candidate_report_context, SchedulerRequestCandidateStatusUpdate,
+};
 use async_stream::stream;
 use axum::body::{Body, Bytes};
 use axum::http::Response;
@@ -47,8 +49,9 @@ use crate::execution_runtime::transport::{
 };
 use crate::execution_runtime::{
     local_failover_response_text, resolve_core_stream_direct_finalize_report_kind,
-    resolve_core_stream_error_finalize_report_kind, should_fallback_to_control_stream,
-    should_retry_next_local_candidate_stream, should_stop_local_candidate_failover_stream,
+    resolve_core_stream_error_finalize_report_kind,
+    resolve_local_candidate_failover_decision_stream, should_fallback_to_control_stream,
+    should_retry_next_local_candidate_stream, LocalFailoverDecision,
 };
 use crate::execution_runtime::{MAX_STREAM_PREFETCH_BYTES, MAX_STREAM_PREFETCH_FRAMES};
 use crate::log_ids::short_request_id;
@@ -75,6 +78,14 @@ pub(crate) async fn execute_execution_runtime_stream(
         .record_pending(state.data.as_ref(), &plan, report_context.as_ref())
         .await;
     let plan_request_id_for_log = short_request_id(plan.request_id.as_str());
+    let provider_name = plan.provider_name.as_deref().unwrap_or("-");
+    let endpoint_id = plan.endpoint_id.as_str();
+    let key_id = plan.key_id.as_str();
+    let model_name = plan.model_name.as_deref().unwrap_or("-");
+    let candidate_index = parse_request_candidate_report_context(report_context.as_ref())
+        .and_then(|context| context.candidate_index)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
     #[cfg(not(test))]
     {
         let execution = match DirectSyncExecutionRuntime::new()
@@ -89,6 +100,11 @@ pub(crate) async fn execute_execution_runtime_stream(
                     trace_id = %trace_id,
                     request_id = %plan_request_id_for_log,
                     candidate_id = ?plan.candidate_id,
+                    provider_name,
+                    endpoint_id,
+                    key_id,
+                    model_name,
+                    candidate_index = candidate_index.as_str(),
                     error = %err,
                     "gateway in-process stream execution unavailable"
                 );
@@ -126,6 +142,11 @@ pub(crate) async fn execute_execution_runtime_stream(
                         trace_id = %trace_id,
                         request_id = %plan_request_id_for_log,
                         candidate_id = ?plan.candidate_id,
+                        provider_name,
+                        endpoint_id,
+                        key_id,
+                        model_name,
+                        candidate_index = candidate_index.as_str(),
                         error = %err,
                         "gateway in-process stream execution unavailable"
                     );
@@ -252,6 +273,37 @@ fn should_refresh_stream_usage_telemetry(
         || (next_elapsed.is_some() && next_elapsed != previous_elapsed)
 }
 
+fn should_skip_direct_finalize_prefetch(
+    direct_stream_finalize_kind: Option<&str>,
+    content_type: Option<&str>,
+    provider_api_format: &str,
+    client_api_format: &str,
+    has_private_stream_normalizer: bool,
+    has_local_stream_rewriter: bool,
+) -> bool {
+    if direct_stream_finalize_kind.is_none()
+        || has_private_stream_normalizer
+        || has_local_stream_rewriter
+    {
+        return false;
+    }
+
+    if !provider_api_format.eq_ignore_ascii_case(client_api_format) {
+        return false;
+    }
+
+    let content_type = content_type
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if content_type.is_empty() {
+        return true;
+    }
+
+    !(content_type.contains("json") || content_type.ends_with("+json"))
+}
+
 async fn probe_local_stream_success_failover_text<R>(
     buffered_frames: &mut VecDeque<StreamFrame>,
     lines: &mut FramedRead<R, LinesCodec>,
@@ -294,6 +346,12 @@ async fn execute_stream_from_frame_stream(
     let request_id = plan.request_id.as_str();
     let request_id_for_log = short_request_id(request_id);
     let candidate_id = plan.candidate_id.as_deref();
+    let provider_name = plan.provider_name.as_deref().unwrap_or("-");
+    let model_name = plan.model_name.as_deref().unwrap_or("-");
+    let candidate_index = parse_request_candidate_report_context(report_context.as_ref())
+        .and_then(|context| context.candidate_index)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
     let reader = StreamReader::new(frame_stream);
     let mut lines = FramedRead::new(reader, LinesCodec::new());
 
@@ -310,7 +368,6 @@ async fn execute_stream_from_frame_stream(
         ));
     };
     let mut buffered_frames = VecDeque::new();
-
     if status_code == 200 {
         let success_probe_text =
             probe_local_stream_success_failover_text(&mut buffered_frames, &mut lines).await?;
@@ -349,6 +406,11 @@ async fn execute_stream_from_frame_stream(
                 trace_id = %trace_id,
                 request_id = %request_id_for_log,
                 status_code,
+                provider_name = provider_name,
+                endpoint_id = %plan.endpoint_id,
+                key_id = %plan.key_id,
+                model_name,
+                candidate_index = candidate_index.as_str(),
                 "gateway local stream decision retrying next candidate after success failover rule match"
             );
             return Ok(None);
@@ -363,26 +425,31 @@ async fn execute_stream_from_frame_stream(
         let (body_json, body_base64) = decode_stream_error_body(&headers, &error_body);
         let error_response_text =
             local_failover_response_text(body_json.as_ref(), &error_body, None);
-        let stop_local_failover = should_stop_local_candidate_failover_stream(
+        let failover_decision = resolve_local_candidate_failover_decision_stream(
             state,
             &plan,
-            plan_kind,
             report_context.as_ref(),
             status_code,
             error_response_text.as_deref(),
         )
         .await;
-        if !stop_local_failover
-            && should_retry_next_local_candidate_stream(
-                state,
-                &plan,
-                plan_kind,
-                report_context.as_ref(),
-                status_code,
-                error_response_text.as_deref(),
-            )
-            .await
-        {
+        debug!(
+            event_name = "execution_runtime_stream_failover_decided",
+            log_type = "debug",
+            trace_id = %trace_id,
+            request_id = %request_id_for_log,
+            candidate_id = ?candidate_id,
+            plan_kind,
+            status_code,
+            provider_name,
+            endpoint_id = %plan.endpoint_id,
+            key_id = %plan.key_id,
+            model_name,
+            candidate_index = candidate_index.as_str(),
+            failover_decision = failover_decision.as_str(),
+            "gateway resolved execution runtime stream failover decision"
+        );
+        if matches!(failover_decision, LocalFailoverDecision::RetryNextCandidate) {
             let terminal_unix_secs = current_request_candidate_unix_ms();
             record_local_request_candidate_status(
                 state,
@@ -407,12 +474,17 @@ async fn execute_stream_from_frame_stream(
                 trace_id = %trace_id,
                 request_id = %request_id_for_log,
                 status_code,
+                provider_name = provider_name,
+                endpoint_id = %plan.endpoint_id,
+                key_id = %plan.key_id,
+                model_name,
+                candidate_index = candidate_index.as_str(),
                 "gateway local stream decision retrying next candidate after retryable execution runtime status"
             );
             return Ok(None);
         }
 
-        if !stop_local_failover
+        if !matches!(failover_decision, LocalFailoverDecision::StopLocalFailover)
             && should_fallback_to_control_stream(
                 plan_kind,
                 status_code,
@@ -529,13 +601,44 @@ async fn execute_stream_from_frame_stream(
         headers.remove("content-length");
         headers.insert("content-type".to_string(), "text/event-stream".to_string());
     }
+    let content_type = headers.get("content-type").map(String::as_str);
+    let skip_direct_finalize_prefetch = should_skip_direct_finalize_prefetch(
+        direct_stream_finalize_kind.as_deref(),
+        content_type,
+        plan.provider_api_format.as_str(),
+        plan.client_api_format.as_str(),
+        private_stream_normalizer.is_some(),
+        local_stream_rewriter.is_some(),
+    );
     let mut prefetched_chunks: Vec<Bytes> = Vec::new();
     let mut provider_prefetched_body = Vec::new();
     let mut prefetched_body = Vec::new();
     let mut prefetched_inspection_body = Vec::new();
     let mut prefetched_telemetry: Option<ExecutionTelemetry> = None;
     let mut reached_eof = false;
-    if let Some(ref report_kind) = direct_stream_finalize_kind {
+    if skip_direct_finalize_prefetch {
+        debug!(
+            event_name = "execution_runtime_stream_prefetch_skipped",
+            log_type = "debug",
+            trace_id = %trace_id,
+            request_id = %request_id_for_log,
+            candidate_id = ?candidate_id,
+            plan_kind,
+            provider_name,
+            endpoint_id = %plan.endpoint_id,
+            key_id = %plan.key_id,
+            model_name,
+            candidate_index = candidate_index.as_str(),
+            content_type = content_type.unwrap_or("-"),
+            provider_api_format = plan.provider_api_format.as_str(),
+            client_api_format = plan.client_api_format.as_str(),
+            "gateway skipped direct finalize prefetch for same-format passthrough stream"
+        );
+    }
+    if let Some(report_kind) = direct_stream_finalize_kind
+        .as_ref()
+        .filter(|_| !skip_direct_finalize_prefetch)
+    {
         while prefetched_chunks.len() < MAX_STREAM_PREFETCH_FRAMES
             && prefetched_inspection_body.len() < MAX_STREAM_PREFETCH_BYTES
         {
@@ -609,6 +712,22 @@ async fn execute_stream_from_frame_stream(
                         inspect_prefetched_stream_body(&headers, &prefetched_inspection_body);
                     match inspection {
                         StreamPrefetchInspection::EmbeddedError(body_json) => {
+                            debug!(
+                                event_name = "execution_runtime_stream_prefetch_embedded_error_detected",
+                                log_type = "debug",
+                                trace_id = %trace_id,
+                                request_id = %request_id_for_log,
+                                candidate_id = ?candidate_id,
+                                plan_kind,
+                                report_kind,
+                                provider_name,
+                                endpoint_id = %plan.endpoint_id,
+                                key_id = %plan.key_id,
+                                model_name,
+                                candidate_index = candidate_index.as_str(),
+                                provider_prefetched_body_bytes = provider_prefetched_body.len(),
+                                "gateway detected embedded error while prefetching execution runtime stream"
+                            );
                             let payload = GatewaySyncReportRequest {
                                 trace_id: trace_id.to_string(),
                                 report_kind: report_kind.clone(),
@@ -1259,4 +1378,57 @@ async fn execute_stream_from_frame_stream(
         trace_id,
         Some(decision),
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_skip_direct_finalize_prefetch;
+
+    #[test]
+    fn skips_prefetch_for_same_format_passthrough_event_streams() {
+        assert!(should_skip_direct_finalize_prefetch(
+            Some("claude_cli_sync_finalize"),
+            Some("text/event-stream"),
+            "claude:cli",
+            "claude:cli",
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn skips_prefetch_for_same_format_passthrough_streams_without_content_type() {
+        assert!(should_skip_direct_finalize_prefetch(
+            Some("claude_cli_sync_finalize"),
+            None,
+            "claude:cli",
+            "claude:cli",
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn keeps_prefetch_for_same_format_json_streams() {
+        assert!(!should_skip_direct_finalize_prefetch(
+            Some("claude_cli_sync_finalize"),
+            Some("application/json"),
+            "claude:cli",
+            "claude:cli",
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn keeps_prefetch_for_cross_format_or_rewritten_streams() {
+        assert!(!should_skip_direct_finalize_prefetch(
+            Some("claude_cli_sync_finalize"),
+            Some("text/event-stream"),
+            "openai:chat",
+            "claude:cli",
+            false,
+            true,
+        ));
+    }
 }

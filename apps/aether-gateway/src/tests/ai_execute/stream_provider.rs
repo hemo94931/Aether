@@ -572,7 +572,8 @@ async fn gateway_executes_kiro_claude_cli_stream_via_local_provider_catalog_cand
 }
 
 #[tokio::test]
-async fn gateway_executes_claude_cli_stream_via_local_decision_gate_with_local_stream_decision() {
+async fn gateway_executes_claude_cli_stream_via_local_decision_gate_without_waiting_for_same_format_prefetch(
+) {
     #[derive(Debug, Clone)]
     struct SeenExecutionRuntimeStreamRequest {
         trace_id: String,
@@ -869,15 +870,24 @@ async fn gateway_executes_claude_cli_stream_via_local_decision_gate_with_local_s
                             .unwrap_or_default()
                             .to_string(),
                     });
-                let frames = concat!(
-                    "{\"type\":\"headers\",\"payload\":{\"kind\":\"headers\",\"status_code\":200,\"headers\":{\"content-type\":\"text/event-stream\"}}}\n",
-                    "{\"type\":\"data\",\"payload\":{\"kind\":\"data\",\"text\":\"event: message_start\\ndata: {\\\"type\\\":\\\"message_start\\\"}\\n\\n\"}}\n",
-                    "{\"type\":\"telemetry\",\"payload\":{\"kind\":\"telemetry\",\"telemetry\":{\"elapsed_ms\":31,\"ttfb_ms\":11,\"upstream_bytes\":37}}}\n",
-                    "{\"type\":\"eof\",\"payload\":{\"kind\":\"eof\"}}\n"
-                );
+                let body_stream = async_stream::stream! {
+                    yield Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(
+                        b"{\"type\":\"headers\",\"payload\":{\"kind\":\"headers\",\"status_code\":200,\"headers\":{\"content-type\":\"text/event-stream\"}}}\n"
+                    ));
+                    yield Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(
+                        b"{\"type\":\"data\",\"payload\":{\"kind\":\"data\",\"text\":\"event: message_start\\ndata: {\\\"type\\\":\\\"message_start\\\"}\\n\\n\"}}\n"
+                    ));
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    yield Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(
+                        b"{\"type\":\"telemetry\",\"payload\":{\"kind\":\"telemetry\",\"telemetry\":{\"elapsed_ms\":31,\"ttfb_ms\":11,\"upstream_bytes\":37}}}\n"
+                    ));
+                    yield Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(
+                        b"{\"type\":\"eof\",\"payload\":{\"kind\":\"eof\"}}\n"
+                    ));
+                };
                 let mut response = Response::builder()
                     .status(StatusCode::OK)
-                    .body(Body::from(frames))
+                    .body(Body::from_stream(body_stream))
                     .expect("response should build");
                 response.headers_mut().insert(
                     http::header::CONTENT_TYPE,
@@ -918,7 +928,7 @@ async fn gateway_executes_claude_cli_stream_via_local_decision_gate_with_local_s
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
-    let response = reqwest::Client::new()
+    let mut response = reqwest::Client::new()
         .post(format!("{gateway_url}/v1/messages"))
         .header(http::header::CONTENT_TYPE, "application/json")
         .header(
@@ -935,8 +945,16 @@ async fn gateway_executes_claude_cli_stream_via_local_decision_gate_with_local_s
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response.text().await.expect("body should read"),
-        "event: message_start\ndata: {\"type\":\"message_start\"}\n\n"
+        tokio::time::timeout(std::time::Duration::from_millis(100), response.chunk())
+            .await
+            .expect("same-format passthrough should yield first chunk before eof")
+            .expect("first chunk should read")
+            .expect("first chunk should exist"),
+        Bytes::from_static(b"event: message_start\ndata: {\"type\":\"message_start\"}\n\n")
+    );
+    assert_eq!(
+        response.text().await.expect("remaining body should read"),
+        ""
     );
 
     let seen_execution_runtime_request = seen_execution_runtime

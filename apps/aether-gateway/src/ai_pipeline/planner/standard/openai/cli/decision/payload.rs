@@ -8,7 +8,8 @@ use crate::ai_pipeline::transport::{
     resolve_transport_tls_profile,
 };
 use crate::{
-    append_execution_contract_fields_to_value, AppState, GatewayControlSyncDecisionResponse,
+    append_execution_contract_fields_to_value, append_local_failover_policy_to_value, AppState,
+    GatewayControlSyncDecisionResponse,
 };
 
 use super::request::resolve_local_openai_cli_candidate_payload_parts;
@@ -91,43 +92,46 @@ pub(crate) async fn maybe_build_local_openai_cli_decision_payload_for_candidate(
         timeouts: resolve_transport_execution_timeouts(&resolved.transport),
         upstream_is_stream: resolved.upstream_is_stream,
         report_kind: Some(spec.report_kind.to_string()),
-        report_context: Some(append_execution_contract_fields_to_value(
-            json!({
-                "user_id": input.auth_context.user_id,
-                "api_key_id": input.auth_context.api_key_id,
-                "username": input.auth_context.username,
-                "api_key_name": input.auth_context.api_key_name,
-                "request_id": trace_id,
-                "candidate_id": candidate_id,
-                "candidate_index": candidate_index,
-                "retry_index": 0,
-                "model": input.requested_model,
-                "provider_name": resolved.transport.provider.name,
-                "provider_id": candidate.provider_id,
-                "endpoint_id": candidate.endpoint_id,
-                "key_id": candidate.key_id,
-                "key_name": candidate.key_name,
-                "provider_api_format": resolved.provider_api_format,
-                "client_api_format": spec.api_format,
-                "mapped_model": resolved.mapped_model,
-                "upstream_url": resolved.upstream_url,
-                "provider_request_method": serde_json::Value::Null,
-                "provider_request_headers": resolved.provider_request_headers,
-                "provider_request_body": resolved.provider_request_body,
-                "original_headers": collect_control_headers(&parts.headers),
-                "original_request_body": body_json,
-                "has_envelope": resolved.is_antigravity,
-                "envelope_name": if resolved.is_antigravity {
-                    Some("antigravity:v1internal")
-                } else {
-                    None
-                },
-                "needs_conversion": matches!(resolved.conversion_mode, crate::ai_pipeline::ConversionMode::Bidirectional),
-            }),
-            resolved.execution_strategy,
-            resolved.conversion_mode,
-            spec.api_format,
-            candidate.endpoint_api_format.as_str(),
+        report_context: Some(append_local_failover_policy_to_value(
+            append_execution_contract_fields_to_value(
+                json!({
+                    "user_id": input.auth_context.user_id,
+                    "api_key_id": input.auth_context.api_key_id,
+                    "username": input.auth_context.username,
+                    "api_key_name": input.auth_context.api_key_name,
+                    "request_id": trace_id,
+                    "candidate_id": candidate_id,
+                    "candidate_index": candidate_index,
+                    "retry_index": 0,
+                    "model": input.requested_model,
+                    "provider_name": resolved.transport.provider.name,
+                    "provider_id": candidate.provider_id,
+                    "endpoint_id": candidate.endpoint_id,
+                    "key_id": candidate.key_id,
+                    "key_name": candidate.key_name,
+                    "provider_api_format": resolved.provider_api_format,
+                    "client_api_format": spec.api_format,
+                    "mapped_model": resolved.mapped_model,
+                    "upstream_url": resolved.upstream_url,
+                    "provider_request_method": serde_json::Value::Null,
+                    "provider_request_headers": resolved.provider_request_headers,
+                    "provider_request_body": resolved.provider_request_body,
+                    "original_headers": collect_control_headers(&parts.headers),
+                    "original_request_body": body_json,
+                    "has_envelope": resolved.is_antigravity,
+                    "envelope_name": if resolved.is_antigravity {
+                        Some("antigravity:v1internal")
+                    } else {
+                        None
+                    },
+                    "needs_conversion": matches!(resolved.conversion_mode, crate::ai_pipeline::ConversionMode::Bidirectional),
+                }),
+                resolved.execution_strategy,
+                resolved.conversion_mode,
+                spec.api_format,
+                candidate.endpoint_api_format.as_str(),
+            ),
+            &resolved.transport,
         )),
         auth_context: Some(input.auth_context.clone()),
     })

@@ -211,9 +211,14 @@ pub fn maybe_build_openai_cli_cross_format_sync_product_from_normalized_payload(
         .trim()
         .to_ascii_lowercase();
 
-    if client_api_format != "openai:cli"
-        || sync_cli_response_conversion_kind(&provider_api_format, &client_api_format).is_none()
-    {
+    if !matches!(client_api_format.as_str(), "openai:cli" | "openai:compact") {
+        return Ok(None);
+    }
+
+    if !matches!(
+        provider_api_format.as_str(),
+        "openai:cli" | "claude:chat" | "claude:cli" | "gemini:chat" | "gemini:cli"
+    ) {
         return Ok(None);
     }
 
@@ -434,15 +439,8 @@ fn maybe_build_openai_cli_same_family_sync_body(
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
-    let needs_conversion = report_context
-        .get("needs_conversion")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
     if !is_openai_cli_family_api_format(&provider_api_format)
         || !is_openai_cli_family_api_format(&client_api_format)
-        || provider_api_format != client_api_format
-        || needs_conversion
     {
         return None;
     }
@@ -481,15 +479,8 @@ fn maybe_build_openai_cli_same_family_stream_sync_body(
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
-    let needs_conversion = report_context
-        .get("needs_conversion")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
     if !is_openai_cli_family_api_format(&provider_api_format)
         || !is_openai_cli_family_api_format(&client_api_format)
-        || provider_api_format != client_api_format
-        || needs_conversion
     {
         return Ok(None);
     }
@@ -521,7 +512,8 @@ fn maybe_build_openai_cross_format_provider_body_from_normalized_payload(
         None => None,
     };
 
-    Ok(aggregated_stream_body.or_else(|| body_json.cloned()))
+    let provider_body_json = aggregated_stream_body.or_else(|| body_json.cloned());
+    Ok(provider_body_json.filter(|value| !is_error_like_sync_body(value)))
 }
 
 fn is_error_like_sync_body(value: &Value) -> bool {
@@ -1501,27 +1493,28 @@ mod tests {
     }
 
     #[test]
-    fn rejects_openai_cli_same_family_exact_same_stream_when_needs_conversion_is_true() {
+    fn accepts_openai_cli_same_family_stream_when_needs_conversion_is_true() {
         let body = concat!(
             "event: response.completed\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_123\",\"object\":\"response\",\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[]}}\n\n",
         );
         let report_context = json!({
             "provider_api_format": "openai:cli",
-            "client_api_format": "openai:cli",
+            "client_api_format": "openai:compact",
             "needs_conversion": true,
         });
 
         let body_json = maybe_build_openai_cli_same_family_sync_body_from_normalized_payload(
-            "openai_cli_sync_finalize",
+            "openai_compact_sync_finalize",
             200,
             Some(&report_context),
             None,
             Some(&base64::engine::general_purpose::STANDARD.encode(body)),
         )
-        .expect("openai-cli same-family guard should not error");
+        .expect("openai-cli same-family aggregation should not error")
+        .expect("aggregated body should exist");
 
-        assert!(body_json.is_none());
+        assert_eq!(body_json["id"], "resp_123");
     }
 
     #[test]
@@ -1734,6 +1727,60 @@ mod tests {
             product.client_body_json["output"][0]["content"][0]["text"],
             "Hello Gemini CLI"
         );
+    }
+
+    #[test]
+    fn rejects_openai_cli_cross_format_error_body_json() {
+        let report_context = json!({
+            "provider_api_format": "openai:cli",
+            "client_api_format": "openai:compact",
+            "model": "gpt-5",
+            "mapped_model": "gpt-5",
+        });
+        let provider_body_json = json!({
+            "error": {
+                "message": "quota reached",
+                "type": "rate_limit_error"
+            }
+        });
+
+        let product = maybe_build_openai_cli_cross_format_sync_product_from_normalized_payload(
+            "openai_compact_sync_finalize",
+            200,
+            Some(&report_context),
+            Some(&provider_body_json),
+            None,
+        )
+        .expect("openai-cli cross-format error guard should not error");
+
+        assert!(product.is_none());
+    }
+
+    #[test]
+    fn rejects_openai_cli_cross_format_for_openai_family_provider() {
+        let report_context = json!({
+            "provider_api_format": "openai:compact",
+            "client_api_format": "openai:cli",
+            "model": "gpt-5",
+            "mapped_model": "gpt-5",
+        });
+        let provider_body_json = json!({
+            "id": "resp_123",
+            "object": "response",
+            "status": "completed",
+            "output": []
+        });
+
+        let product = maybe_build_openai_cli_cross_format_sync_product_from_normalized_payload(
+            "openai_cli_sync_finalize",
+            200,
+            Some(&report_context),
+            Some(&provider_body_json),
+            None,
+        )
+        .expect("openai-cli cross-format openai-family guard should not error");
+
+        assert!(product.is_none());
     }
 
     #[test]

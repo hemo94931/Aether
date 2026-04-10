@@ -6,10 +6,10 @@ use crate::ai_pipeline::{
 };
 use crate::scheduler::affinity::SCHEDULER_AFFINITY_TTL;
 use crate::scheduler::config::{read_scheduler_ordering_config, SchedulerOrderingConfig};
+use aether_scheduler_core::SchedulerMinimalCandidateSelectionCandidate;
 use aether_scheduler_core::{
     build_scheduler_affinity_cache_key_for_api_key_id, compare_candidates_by_priority_mode,
     requested_capability_priority_for_candidate, SchedulerAffinityTarget,
-    SchedulerMinimalCandidateSelectionCandidate,
 };
 
 const PLANNER_SCHEDULER_AFFINITY_MAX_ENTRIES: usize = 10_000;

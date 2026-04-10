@@ -52,7 +52,7 @@ pub(crate) fn should_downgrade_access_log(method: &Method, path: &str) -> bool {
         || normalized_path.starts_with("/api/admin/monitoring/trace/")
 }
 
-pub(crate) async fn access_log_middleware(request: Request<Body>, next: Next) -> Response {
+pub(crate) async fn access_log_middleware(mut request: Request<Body>, next: Next) -> Response {
     let started_at = Instant::now();
     let method = request.method().clone();
     let path = request
@@ -61,6 +61,12 @@ pub(crate) async fn access_log_middleware(request: Request<Body>, next: Next) ->
         .map(|value| value.as_str().to_string())
         .unwrap_or_else(|| "/".to_string());
     let trace_id = extract_or_generate_trace_id(request.headers());
+    if !request.headers().contains_key(TRACE_ID_HEADER) {
+        request.headers_mut().insert(
+            HeaderName::from_static(TRACE_ID_HEADER),
+            HeaderValue::from_str(&trace_id).expect("trace id should be a valid header value"),
+        );
+    }
     if should_downgrade_access_log(&method, &path) {
         trace!(
             event_name = "http_request_started",
@@ -279,6 +285,53 @@ mod tests {
         assert_eq!(logs[1]["request_id"], "req-123");
         assert_eq!(logs[1]["route_class"], "local");
         assert_eq!(logs[1]["execution_path"], "local_route");
+    }
+
+    #[tokio::test]
+    async fn access_log_propagates_generated_trace_id_to_downstream_handler() {
+        let app = Router::new()
+            .route(
+                "/trace",
+                get(|headers: http::HeaderMap| async move {
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(
+                            "x-seen-trace-id",
+                            headers
+                                .get(TRACE_ID_HEADER)
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or("-"),
+                        )
+                        .body(Body::empty())
+                        .expect("response should build")
+                }),
+            )
+            .layer(axum::middleware::from_fn(access_log_middleware));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/trace")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        let response_trace_id = response
+            .headers()
+            .get(TRACE_ID_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .expect("response trace id should exist")
+            .to_string();
+        let seen_trace_id = response
+            .headers()
+            .get("x-seen-trace-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("downstream seen trace id should exist")
+            .to_string();
+
+        assert_eq!(seen_trace_id, response_trace_id);
     }
 
     #[tokio::test]

@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use aether_contracts::{ExecutionPlan, ExecutionResult, ExecutionTelemetry};
 use aether_data_contracts::repository::candidates::RequestCandidateStatus;
-use aether_scheduler_core::{execution_error_details, SchedulerRequestCandidateStatusUpdate};
+use aether_scheduler_core::{
+    execution_error_details, parse_request_candidate_report_context,
+    SchedulerRequestCandidateStatusUpdate,
+};
 use axum::body::Body;
 use axum::http::Response;
 use base64::Engine as _;
@@ -86,6 +89,14 @@ pub(crate) async fn execute_execution_runtime_sync(
     let plan_request_id = plan.request_id.as_str();
     let plan_request_id_for_log = short_request_id(plan_request_id);
     let plan_candidate_id = plan.candidate_id.as_deref();
+    let provider_name = plan.provider_name.as_deref().unwrap_or("-");
+    let endpoint_id = plan.endpoint_id.as_str();
+    let key_id = plan.key_id.as_str();
+    let model_name = plan.model_name.as_deref().unwrap_or("-");
+    let candidate_index = parse_request_candidate_report_context(report_context.as_ref())
+        .and_then(|context| context.candidate_index)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
     let candidate_started_unix_secs = current_request_candidate_unix_ms();
     state
         .usage_runtime
@@ -105,6 +116,11 @@ pub(crate) async fn execute_execution_runtime_sync(
                     trace_id = %trace_id,
                     request_id = %plan_request_id_for_log,
                     candidate_id = ?plan_candidate_id,
+                    provider_name,
+                    endpoint_id,
+                    key_id,
+                    model_name,
+                    candidate_index = candidate_index.as_str(),
                     error = %err,
                     "gateway in-process sync execution unavailable"
                 );
@@ -130,6 +146,11 @@ pub(crate) async fn execute_execution_runtime_sync(
                         trace_id = %trace_id,
                         request_id = %plan_request_id_for_log,
                         candidate_id = ?plan_candidate_id,
+                        provider_name,
+                        endpoint_id,
+                        key_id,
+                        model_name,
+                        candidate_index = candidate_index.as_str(),
                         error = %err,
                         "gateway in-process sync execution unavailable"
                     );
@@ -215,6 +236,11 @@ pub(crate) async fn execute_execution_runtime_sync(
             trace_id = %trace_id,
             request_id = %plan_request_id_for_log,
             status_code = result.status_code,
+            provider_name,
+            endpoint_id,
+            key_id,
+            model_name,
+            candidate_index = candidate_index.as_str(),
             "gateway local sync decision retrying next candidate after retryable execution runtime result"
         );
         return Ok(None);

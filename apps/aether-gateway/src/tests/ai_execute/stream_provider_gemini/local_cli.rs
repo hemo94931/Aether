@@ -1836,9 +1836,32 @@ async fn gateway_executes_antigravity_gemini_cli_stream_via_local_decision_gate_
         .expect("request should succeed");
 
     assert_eq!(response.status(), StatusCode::OK);
+    let response_text = response.text().await.expect("body should read");
+    let payload = response_text
+        .trim()
+        .strip_prefix("data: ")
+        .expect("response should start with sse data prefix");
+    let response_json: serde_json::Value =
+        serde_json::from_str(payload).expect("stream payload should parse");
     assert_eq!(
-        response.text().await.expect("body should read"),
-        "data: {\"_v1internal_response_id\":\"resp_antigravity_cli_local_stream_123\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello Antigravity Stream\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}],\"modelVersion\":\"claude-sonnet-4-5\",\"usageMetadata\":{\"candidatesTokenCount\":3,\"promptTokenCount\":2,\"totalTokenCount\":5}}\n\n"
+        response_json,
+        json!({
+            "_v1internal_response_id": "resp_antigravity_cli_local_stream_123",
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Hello Antigravity Stream"}],
+                    "role": "model"
+                },
+                "finishReason": "STOP",
+                "index": 0
+            }],
+            "modelVersion": "claude-sonnet-4-5",
+            "usageMetadata": {
+                "promptTokenCount": 2,
+                "candidatesTokenCount": 3,
+                "totalTokenCount": 5
+            }
+        })
     );
 
     let seen_refresh_request = seen_refresh

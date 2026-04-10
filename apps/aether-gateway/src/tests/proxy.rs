@@ -3,10 +3,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::{
     any, build_router, build_router_with_state, json, start_server, to_bytes, AppState, Arc, Body,
     HeaderValue, Json, Mutex, Request, Response, Router, StatusCode, DEPENDENCY_REASON_HEADER,
-    EXECUTION_PATH_HEADER, EXECUTION_PATH_LOCAL_ROUTE_NOT_FOUND, FORWARDED_FOR_HEADER,
-    GATEWAY_HEADER, TRACE_ID_HEADER, TRUSTED_AUTH_ACCESS_ALLOWED_HEADER,
-    TRUSTED_AUTH_API_KEY_ID_HEADER, TRUSTED_AUTH_USER_ID_HEADER,
-    TUNNEL_AFFINITY_FORWARDED_BY_HEADER, TUNNEL_AFFINITY_OWNER_INSTANCE_HEADER,
+    EXECUTION_PATH_HEADER, EXECUTION_PATH_LOCAL_EXECUTION_LOOP_DETECTED,
+    EXECUTION_PATH_LOCAL_ROUTE_NOT_FOUND, EXECUTION_RUNTIME_LOOP_GUARD_HEADER,
+    EXECUTION_RUNTIME_LOOP_GUARD_VALUE, FORWARDED_FOR_HEADER, GATEWAY_HEADER, TRACE_ID_HEADER,
+    TRUSTED_AUTH_ACCESS_ALLOWED_HEADER, TRUSTED_AUTH_API_KEY_ID_HEADER,
+    TRUSTED_AUTH_USER_ID_HEADER, TUNNEL_AFFINITY_FORWARDED_BY_HEADER,
+    TUNNEL_AFFINITY_OWNER_INSTANCE_HEADER,
 };
 
 use aether_data::repository::auth::{
@@ -244,6 +246,69 @@ async fn gateway_preserves_existing_trace_id_on_unknown_local_not_found() {
 
     gateway_handle.abort();
     upstream_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_rejects_execution_runtime_loop_guarded_ai_request() {
+    let gateway = build_router().expect("gateway should build");
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/v1/responses"))
+        .header(TRACE_ID_HEADER, "trace-loop-guard-123")
+        .header(
+            EXECUTION_RUNTIME_LOOP_GUARD_HEADER,
+            EXECUTION_RUNTIME_LOOP_GUARD_VALUE,
+        )
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(r#"{"model":"gpt-5.4","input":"hello"}"#)
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::LOOP_DETECTED);
+    assert_eq!(
+        response
+            .headers()
+            .get(EXECUTION_PATH_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some(EXECUTION_PATH_LOCAL_EXECUTION_LOOP_DETECTED)
+    );
+    let payload: serde_json::Value = response.json().await.expect("body should parse");
+    assert_eq!(payload["error"]["type"], "http_error");
+    assert_eq!(
+        payload["error"]["message"],
+        "Gateway detected an execution runtime request loop back into the local frontdoor"
+    );
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_rejects_execution_runtime_via_guarded_ai_request() {
+    let gateway = build_router().expect("gateway should build");
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/v1/messages"))
+        .header(TRACE_ID_HEADER, "trace-loop-via-123")
+        .header("via", "1.1 aether-execution-runtime")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(r#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hello"}]}"#)
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::LOOP_DETECTED);
+    assert_eq!(
+        response
+            .headers()
+            .get(EXECUTION_PATH_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some(EXECUTION_PATH_LOCAL_EXECUTION_LOOP_DETECTED)
+    );
+
+    gateway_handle.abort();
 }
 
 #[tokio::test]

@@ -331,7 +331,11 @@ async fn gateway_skips_unsupported_local_openai_chat_sync_candidate_before_tryin
             provider_catalog_repository,
             Arc::clone(&request_candidate_repository),
             DEVELOPMENT_ENCRYPTION_KEY,
-        ),
+        )
+        .with_system_config_values_for_tests(vec![(
+            "provider_priority_mode".to_string(),
+            json!("global_key"),
+        )]),
     );
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
@@ -1058,7 +1062,11 @@ async fn gateway_retries_next_local_openai_chat_sync_candidate_with_local_failov
             provider_catalog_repository,
             Arc::clone(&request_candidate_repository),
             DEVELOPMENT_ENCRYPTION_KEY,
-        ),
+        )
+        .with_system_config_values_for_tests(vec![(
+            "provider_priority_mode".to_string(),
+            json!("global_key"),
+        )]),
     );
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;

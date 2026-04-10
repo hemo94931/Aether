@@ -46,10 +46,6 @@ impl RuntimeLogIdentity {
             instance_id: config.observability.instance_id.clone(),
         }
     }
-
-    fn node_role_display(&self) -> &str {
-        self.node_role.as_deref().unwrap_or("-")
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -149,13 +145,16 @@ impl Visit for RuntimeFieldVisitor {
 
 #[derive(Debug, Clone)]
 struct PrettyRuntimeEventFormatter {
-    identity: RuntimeLogIdentity,
+    _identity: RuntimeLogIdentity,
     ansi: bool,
 }
 
 impl PrettyRuntimeEventFormatter {
     fn new(identity: RuntimeLogIdentity, ansi: bool) -> Self {
-        Self { identity, ansi }
+        Self {
+            _identity: identity,
+            ansi,
+        }
     }
 }
 
@@ -166,7 +165,7 @@ where
 {
     fn format_event(
         &self,
-        _ctx: &FmtContext<'_, S, N>,
+        ctx: &FmtContext<'_, S, N>,
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
@@ -176,6 +175,7 @@ where
 
         let level_color = self.ansi.then_some(level_ansi(meta.level()));
         let message = fields.take_message();
+        let depth = ctx.event_scope().map(|scope| scope.count()).unwrap_or(0);
 
         // timestamp (green)
         write_colored(
@@ -189,21 +189,16 @@ where
         write_colored(&mut writer, &format!("{:<8}", meta.level()), level_color)?;
         // separator
         write_separator(&mut writer, self.ansi)?;
-        // service:node_role (compact identity, dimmed)
-        let identity_label = format!(
-            "{}:{}",
-            self.identity.service,
-            self.identity.node_role_display(),
-        );
-        write_colored(&mut writer, &identity_label, self.ansi.then_some(ANSI_DIM))?;
-        // separator
-        write_separator(&mut writer, self.ansi)?;
-        // target (cyan, shortened to last 2 segments)
-        let short_target = shorten_target(meta.target(), 2);
-        write_colored(&mut writer, short_target, self.ansi.then_some(ANSI_CYAN))?;
+        // target (cyan, shortened/truncated to fixed width)
+        let target_cell = format_target_cell(meta.target(), TARGET_COLUMN_WIDTH);
+        write_colored(&mut writer, &target_cell, self.ansi.then_some(ANSI_CYAN))?;
         // message (level color, after " - ")
         if let Some(ref msg) = message {
             write_colored(&mut writer, " - ", self.ansi.then_some(ANSI_DIM))?;
+            let prefix = span_tree_prefix(depth);
+            if !prefix.is_empty() {
+                write_colored(&mut writer, &prefix, self.ansi.then_some(ANSI_DIM))?;
+            }
             write_colored(&mut writer, msg, level_color)?;
         }
         // remaining structured fields
@@ -233,13 +228,14 @@ where
 {
     fn format_event(
         &self,
-        _ctx: &FmtContext<'_, S, N>,
+        ctx: &FmtContext<'_, S, N>,
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
         let meta = event.metadata();
         let mut fields = RuntimeFieldVisitor::default();
         event.record(&mut fields);
+        let depth = ctx.event_scope().map(|scope| scope.count()).unwrap_or(0);
 
         let mut payload = Map::new();
         payload.insert(
@@ -271,6 +267,7 @@ where
             "target".to_string(),
             Value::String(meta.target().to_string()),
         );
+        payload.insert("span_depth".to_string(), Value::from(depth as u64));
         payload.insert(
             "fields".to_string(),
             Value::Object(fields.into_json_object()),
@@ -286,6 +283,8 @@ fn formatted_timestamp() -> String {
     Local::now().format("%Y-%m-%d %H:%M:%S%.3f %:z").to_string()
 }
 
+const TARGET_COLUMN_WIDTH: usize = 24;
+
 fn shorten_target(target: &str, max_segments: usize) -> &str {
     let mut count = 0usize;
     for (idx, _) in target.rmatch_indices("::") {
@@ -295,6 +294,38 @@ fn shorten_target(target: &str, max_segments: usize) -> &str {
         }
     }
     target
+}
+
+fn span_tree_prefix(depth: usize) -> String {
+    if depth == 0 {
+        return String::new();
+    }
+
+    let mut prefix = String::new();
+    for _ in 0..depth.saturating_sub(1) {
+        prefix.push_str("│  ");
+    }
+    prefix.push_str("├─ ");
+    prefix
+}
+
+fn format_target_cell(target: &str, width: usize) -> String {
+    let short_target = shorten_target(target, 2);
+    let len = short_target.chars().count();
+    if len <= width {
+        let padding = " ".repeat(width - len);
+        return format!("{short_target}{padding}");
+    }
+
+    let tail: String = short_target
+        .chars()
+        .rev()
+        .take(width.saturating_sub(1))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("~{tail}")
 }
 
 const ANSI_RESET: &str = "\u{1b}[0m";
@@ -806,9 +837,10 @@ fn select_log_files_for_cleanup(
 #[cfg(test)]
 mod tests {
     use super::{
-        bucketed_log_path, cleanup_log_files, log_bucket_key, select_log_files_for_cleanup,
-        FileLoggingConfig, JsonRuntimeEventFormatter, LogFileCandidate, LogRotation,
-        PrettyRuntimeEventFormatter, RollingFileSink, RuntimeLogIdentity,
+        bucketed_log_path, cleanup_log_files, format_target_cell, log_bucket_key,
+        select_log_files_for_cleanup, FileLoggingConfig, JsonRuntimeEventFormatter,
+        LogFileCandidate, LogRotation, PrettyRuntimeEventFormatter, RollingFileSink,
+        RuntimeLogIdentity,
     };
     use chrono::{Local, TimeZone};
     use std::fs;
@@ -955,7 +987,7 @@ mod tests {
     }
 
     #[test]
-    fn pretty_formatter_includes_service_identity_fields() {
+    fn pretty_formatter_omits_service_identity_fields() {
         let writer = SharedBuffer::default();
         let subscriber = tracing_subscriber::registry().with(
             tracing_subscriber::fmt::layer()
@@ -972,16 +1004,25 @@ mod tests {
         let dispatch = tracing::Dispatch::new(subscriber);
         let _guard = tracing::dispatcher::set_default(&dispatch);
 
-        tracing::info!(event_name = "test_event", value = 7_u64, "hello");
+        tracing::info!(
+            target: "runtime::tracing",
+            event_name = "test_event",
+            value = 7_u64,
+            "hello"
+        );
 
         let output = writer.contents();
         assert!(
-            output.contains("test-service:frontdoor"),
-            "should contain compact identity"
+            !output.contains("test-service:frontdoor"),
+            "should not contain compact identity"
         );
         assert!(
             output.contains(" | INFO"),
             "should contain pipe-separated level"
+        );
+        assert!(
+            output.contains("runtime::tracing"),
+            "should contain shortened target"
         );
         assert!(
             output.contains(" - hello"),
@@ -1017,11 +1058,93 @@ mod tests {
             "should contain ANSI escape sequences"
         );
         assert!(
-            output.contains("test-service:frontdoor"),
-            "should contain compact identity"
+            !output.contains("test-service:frontdoor"),
+            "should not contain compact identity"
         );
         assert!(output.contains("colored"), "should contain message text");
         assert!(output.contains("ansi_event"));
+    }
+
+    #[test]
+    fn pretty_formatter_adds_tree_prefix_inside_span() {
+        let writer = SharedBuffer::default();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(writer.clone())
+                .event_format(PrettyRuntimeEventFormatter::new(
+                    RuntimeLogIdentity {
+                        service: "test-service",
+                        node_role: Some("frontdoor".to_string()),
+                        instance_id: Some("gateway-a".to_string()),
+                    },
+                    false,
+                )),
+        );
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        tracing::info_span!("candidates").in_scope(|| {
+            tracing::debug!(
+                target: "executor::candidate_loop",
+                event_name = "candidate_loop_started",
+                "inside span"
+            );
+        });
+
+        let output = writer.contents();
+        assert!(output.contains("executor::candidate_loop"));
+        assert!(output.contains(" - ├─ inside span"));
+    }
+
+    #[test]
+    fn pretty_formatter_keeps_target_column_aligned() {
+        let writer = SharedBuffer::default();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(writer.clone())
+                .event_format(PrettyRuntimeEventFormatter::new(
+                    RuntimeLogIdentity {
+                        service: "test-service",
+                        node_role: Some("frontdoor".to_string()),
+                        instance_id: Some("gateway-a".to_string()),
+                    },
+                    false,
+                )),
+        );
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        tracing::info!(
+            target: "short::name",
+            event_name = "short_event",
+            "short message"
+        );
+        tracing::info!(
+            target: "root::supercalifragilistic::anotherverylongsegment",
+            event_name = "long_event",
+            "long message"
+        );
+
+        let output = writer.contents();
+        let lines = output.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2, "expected exactly two log lines");
+        let first_dash = lines[0]
+            .find(" - ")
+            .expect("short line should contain message separator");
+        let second_dash = lines[1]
+            .find(" - ")
+            .expect("long line should contain message separator");
+        assert_eq!(
+            first_dash, second_dash,
+            "message separator should stay aligned"
+        );
+        assert!(
+            lines[1].contains(&format_target_cell(
+                "root::supercalifragilistic::anotherverylongsegment",
+                super::TARGET_COLUMN_WIDTH,
+            )),
+            "long target should be truncated into the fixed-width cell"
+        );
     }
 
     #[test]
@@ -1053,8 +1176,36 @@ mod tests {
         assert_eq!(payload["service"], "test-service");
         assert_eq!(payload["node_role"], "proxy");
         assert_eq!(payload["instance_id"], "proxy-01");
+        assert_eq!(payload["span_depth"], 0);
         assert_eq!(payload["fields"]["event_name"], "test_event");
         assert_eq!(payload["fields"]["status"], "failed");
         assert_eq!(payload["fields"]["status_code"], 502);
+    }
+
+    #[test]
+    fn json_formatter_includes_span_depth() {
+        let writer = SharedBuffer::default();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(writer.clone())
+                .event_format(JsonRuntimeEventFormatter::new(RuntimeLogIdentity {
+                    service: "test-service",
+                    node_role: Some("proxy".to_string()),
+                    instance_id: Some("proxy-01".to_string()),
+                })),
+        );
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        tracing::info_span!("request").in_scope(|| {
+            tracing::info!(event_name = "nested_event", "inside request span");
+        });
+
+        let output = writer.contents();
+        let payload: serde_json::Value =
+            serde_json::from_str(output.trim()).expect("json log line should parse");
+        assert_eq!(payload["span_depth"], 1);
+        assert_eq!(payload["fields"]["event_name"], "nested_event");
     }
 }

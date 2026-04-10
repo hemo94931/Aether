@@ -13,6 +13,7 @@ pub fn should_skip_request_header(name: &str) -> bool {
             | "upgrade"
             | "x-aether-execution-path"
             | "x-aether-dependency-reason"
+            | "x-aether-execution-loop-guard"
             | "x-aether-control-execute-fallback"
             | "x-aether-rate-limit-preflight"
     )

@@ -74,6 +74,17 @@ fn header_map_has_non_empty_value(headers: &http::HeaderMap, header_name: &str) 
     })
 }
 
+fn btree_map_has_non_empty_value(headers: &BTreeMap<String, String>, header_name: &str) -> bool {
+    let target = header_name.trim().to_ascii_lowercase();
+    if target.is_empty() {
+        return false;
+    }
+
+    headers
+        .iter()
+        .any(|(name, value)| name.trim().eq_ignore_ascii_case(&target) && !value.trim().is_empty())
+}
+
 fn extract_codex_account_id(decrypted_auth_config_raw: Option<&str>) -> Option<String> {
     let raw = decrypted_auth_config_raw?.trim();
     if raw.is_empty() {
@@ -187,7 +198,42 @@ pub fn apply_codex_openai_cli_special_headers(
         .map(str::trim)
         .filter(|value| !value.is_empty());
 
-    if !header_map_has_non_empty_value(original_headers, "session_id") {
-        provider_request_headers.insert("session_id".to_string(), prompt_cache_key.unwrap().to_string());
+    if !header_map_has_non_empty_value(original_headers, "chatgpt-account-id")
+        && !btree_map_has_non_empty_value(provider_request_headers, "chatgpt-account-id")
+    {
+        if let Some(account_id) = extract_codex_account_id(decrypted_auth_config_raw) {
+            provider_request_headers.insert("chatgpt-account-id".to_string(), account_id);
+        }
+    }
+
+    if !header_map_has_non_empty_value(original_headers, "x-client-request-id")
+        && !btree_map_has_non_empty_value(provider_request_headers, "x-client-request-id")
+    {
+        if let Some(request_id) = request_id.map(str::trim).filter(|value| !value.is_empty()) {
+            provider_request_headers
+                .insert("x-client-request-id".to_string(), request_id.to_string());
+        }
+    }
+
+    let short_session_id = prompt_cache_key.and_then(build_short_codex_header_id);
+
+    if !header_map_has_non_empty_value(original_headers, "session_id")
+        && !btree_map_has_non_empty_value(provider_request_headers, "session_id")
+    {
+        if let Some(short_session_id) = short_session_id.as_deref() {
+            provider_request_headers.insert("session_id".to_string(), short_session_id.to_string());
+        }
+    }
+
+    if provider_api_format
+        .trim()
+        .eq_ignore_ascii_case("openai:cli")
+        && !header_map_has_non_empty_value(original_headers, "conversation_id")
+        && !btree_map_has_non_empty_value(provider_request_headers, "conversation_id")
+    {
+        if let Some(short_session_id) = short_session_id.as_deref() {
+            provider_request_headers
+                .insert("conversation_id".to_string(), short_session_id.to_string());
+        }
     }
 }

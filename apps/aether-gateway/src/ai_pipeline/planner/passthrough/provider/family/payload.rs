@@ -23,8 +23,9 @@ use crate::ai_pipeline::{
 };
 use crate::clock::current_unix_ms;
 use crate::{
-    append_execution_contract_fields_to_value, AppState, GatewayControlSyncDecisionResponse,
-    EXECUTION_RUNTIME_STREAM_DECISION_ACTION, EXECUTION_RUNTIME_SYNC_DECISION_ACTION,
+    append_execution_contract_fields_to_value, append_local_failover_policy_to_value, AppState,
+    GatewayControlSyncDecisionResponse, EXECUTION_RUNTIME_STREAM_DECISION_ACTION,
+    EXECUTION_RUNTIME_SYNC_DECISION_ACTION,
 };
 use aether_scheduler_core::SchedulerMinimalCandidateSelectionCandidate;
 
@@ -263,45 +264,48 @@ pub(crate) async fn maybe_build_local_same_format_provider_decision_payload_for_
         resolve_transport_proxy_snapshot_with_tunnel_affinity(planner_state.app(), &transport)
             .await;
     let tls_profile = resolve_transport_tls_profile(&transport);
-    let report_context = append_execution_contract_fields_to_value(
-        json!({
-            "user_id": input.auth_context.user_id,
-            "api_key_id": input.auth_context.api_key_id,
-            "username": input.auth_context.username,
-            "api_key_name": input.auth_context.api_key_name,
-            "request_id": trace_id,
-            "candidate_id": candidate_id,
-            "candidate_index": candidate_index,
-            "retry_index": 0,
-            "model": input.requested_model,
-            "provider_name": transport.provider.name,
-            "provider_id": candidate.provider_id,
-            "endpoint_id": candidate.endpoint_id,
-            "key_id": candidate.key_id,
-            "key_name": candidate.key_name,
-            "provider_api_format": spec.api_format,
-            "client_api_format": spec.api_format,
-            "mapped_model": mapped_model,
-            "upstream_url": upstream_url,
-            "provider_request_method": serde_json::Value::Null,
-            "provider_request_headers": provider_request_headers,
-            "provider_request_body": provider_request_body,
-            "original_headers": collect_control_headers(&parts.headers),
-            "original_request_body": body_json,
-            "has_envelope": is_kiro || is_antigravity,
-            "envelope_name": if is_kiro {
-                Some(KIRO_ENVELOPE_NAME)
-            } else if is_antigravity {
-                Some(super::super::ANTIGRAVITY_ENVELOPE_NAME)
-            } else {
-                None
-            },
-            "needs_conversion": false,
-        }),
-        ExecutionStrategy::LocalSameFormat,
-        ConversionMode::None,
-        spec.api_format,
-        spec.api_format,
+    let report_context = append_local_failover_policy_to_value(
+        append_execution_contract_fields_to_value(
+            json!({
+                "user_id": input.auth_context.user_id,
+                "api_key_id": input.auth_context.api_key_id,
+                "username": input.auth_context.username,
+                "api_key_name": input.auth_context.api_key_name,
+                "request_id": trace_id,
+                "candidate_id": candidate_id,
+                "candidate_index": candidate_index,
+                "retry_index": 0,
+                "model": input.requested_model,
+                "provider_name": transport.provider.name,
+                "provider_id": candidate.provider_id,
+                "endpoint_id": candidate.endpoint_id,
+                "key_id": candidate.key_id,
+                "key_name": candidate.key_name,
+                "provider_api_format": spec.api_format,
+                "client_api_format": spec.api_format,
+                "mapped_model": mapped_model,
+                "upstream_url": upstream_url,
+                "provider_request_method": serde_json::Value::Null,
+                "provider_request_headers": provider_request_headers,
+                "provider_request_body": provider_request_body,
+                "original_headers": collect_control_headers(&parts.headers),
+                "original_request_body": body_json,
+                "has_envelope": is_kiro || is_antigravity,
+                "envelope_name": if is_kiro {
+                    Some(KIRO_ENVELOPE_NAME)
+                } else if is_antigravity {
+                    Some(super::super::ANTIGRAVITY_ENVELOPE_NAME)
+                } else {
+                    None
+                },
+                "needs_conversion": false,
+            }),
+            ExecutionStrategy::LocalSameFormat,
+            ConversionMode::None,
+            spec.api_format,
+            spec.api_format,
+        ),
+        &transport,
     );
 
     Some(GatewayControlSyncDecisionResponse {

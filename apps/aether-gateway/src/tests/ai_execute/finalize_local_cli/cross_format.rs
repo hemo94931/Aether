@@ -122,7 +122,7 @@ async fn gateway_executes_openai_cli_cross_format_upstream_stream_via_local_fina
         .with_transport_fields(
             true,
             false,
-            false,
+            true,
             None,
             Some(2),
             None,
@@ -381,9 +381,12 @@ async fn gateway_executes_openai_cli_cross_format_upstream_stream_via_local_fina
         .await
         .expect("request should succeed");
     let elapsed = started_at.elapsed();
+    let response_status = response.status();
+    let response_body = response.text().await.expect("body should read");
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let response_json: serde_json::Value = response.json().await.expect("body should parse");
+    assert_eq!(response_status, StatusCode::OK);
+    let response_json: serde_json::Value =
+        serde_json::from_str(&response_body).expect("body should parse");
     assert_eq!(
         response_json,
         json!({
@@ -577,7 +580,7 @@ async fn gateway_executes_openai_cli_cross_format_function_call_upstream_stream_
         .with_transport_fields(
             true,
             false,
-            false,
+            true,
             None,
             Some(2),
             None,
@@ -1046,7 +1049,7 @@ async fn gateway_executes_openai_cli_antigravity_cross_format_upstream_stream_vi
         .with_transport_fields(
             true,
             false,
-            false,
+            true,
             None,
             Some(2),
             None,

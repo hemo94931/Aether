@@ -183,11 +183,4 @@ if ! wait_for_startup "${GATEWAY_PID}" "${GATEWAY_STARTUP_TIMEOUT_SECONDS}" "aet
     exit 1
 fi
 
-echo "=> 启动本地开发服务..."
-echo "=> Rust公开入口:     http://localhost:${APP_PORT}"
-echo "=> Frontdoor健康检查: http://localhost:${APP_PORT}/_gateway/health"
-echo "=> 数据库: ${DATABASE_URL}"
-echo "=> 提示: 未下沉到 Rust 的 legacy 路由会直接失败。"
-echo ""
-
 wait "${GATEWAY_PID}"

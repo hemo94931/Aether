@@ -124,7 +124,7 @@ async fn gateway_executes_openai_chat_sync_upstream_stream_via_local_finalize_re
         .with_transport_fields(
             true,
             false,
-            false,
+            true,
             None,
             Some(2),
             None,
@@ -614,7 +614,7 @@ async fn gateway_executes_openai_chat_cross_format_upstream_stream_via_local_fin
         .with_transport_fields(
             true,
             false,
-            false,
+            true,
             None,
             Some(2),
             None,
@@ -861,9 +861,12 @@ async fn gateway_executes_openai_chat_cross_format_upstream_stream_via_local_fin
         .await
         .expect("request should succeed");
     let elapsed = started_at.elapsed();
+    let response_status = response.status();
+    let response_body = response.text().await.expect("body should read");
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let response_json: serde_json::Value = response.json().await.expect("body should parse");
+    assert_eq!(response_status, StatusCode::OK);
+    let response_json: serde_json::Value =
+        serde_json::from_str(&response_body).expect("body should parse");
     assert_eq!(
         response_json,
         json!({
@@ -1047,7 +1050,7 @@ async fn gateway_executes_openai_chat_cross_format_tool_use_upstream_stream_via_
         .with_transport_fields(
             true,
             false,
-            false,
+            true,
             None,
             Some(2),
             None,
@@ -1311,9 +1314,12 @@ async fn gateway_executes_openai_chat_cross_format_tool_use_upstream_stream_via_
         .await
         .expect("request should succeed");
     let elapsed = started_at.elapsed();
+    let response_status = response.status();
+    let response_body = response.text().await.expect("body should read");
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let response_json: serde_json::Value = response.json().await.expect("body should parse");
+    assert_eq!(response_status, StatusCode::OK);
+    let response_json: serde_json::Value =
+        serde_json::from_str(&response_body).expect("body should parse");
     assert_eq!(
         response_json,
         json!({
@@ -1497,7 +1503,7 @@ async fn gateway_skips_openai_chat_antigravity_cross_format_sync_candidate_as_tr
         .with_transport_fields(
             true,
             false,
-            false,
+            true,
             None,
             Some(2),
             None,
@@ -1857,7 +1863,7 @@ async fn gateway_executes_openai_chat_cross_format_claude_upstream_sync_via_loca
         .with_transport_fields(
             true,
             false,
-            false,
+            true,
             None,
             Some(2),
             None,
@@ -2064,9 +2070,12 @@ async fn gateway_executes_openai_chat_cross_format_claude_upstream_sync_via_loca
         .await
         .expect("request should succeed");
     let elapsed = started_at.elapsed();
+    let response_status = response.status();
+    let response_body = response.text().await.expect("body should read");
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let response_json: serde_json::Value = response.json().await.expect("body should parse");
+    assert_eq!(response_status, StatusCode::OK);
+    let response_json: serde_json::Value =
+        serde_json::from_str(&response_body).expect("body should parse");
     assert_eq!(
         response_json,
         json!({
@@ -2205,7 +2214,7 @@ async fn gateway_executes_openai_chat_cross_format_gemini_upstream_sync_via_loca
         .with_transport_fields(
             true,
             false,
-            false,
+            true,
             None,
             Some(2),
             None,

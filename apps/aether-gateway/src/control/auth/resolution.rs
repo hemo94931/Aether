@@ -151,6 +151,10 @@ fn log_auth_context_resolution(
     decision: &GatewayControlDecision,
     auth_context: &GatewayControlAuthContext,
 ) {
+    let balance_remaining = auth_context
+        .balance_remaining
+        .map(|value| format!("{value:.4}"))
+        .unwrap_or_else(|| "-".to_string());
     info!(
         event_name = "auth_context_resolved",
         log_type = "event",
@@ -165,6 +169,8 @@ fn log_auth_context_resolution(
         route_kind = decision.route_kind.as_deref().unwrap_or("unknown"),
         user_id = auth_context.user_id.as_str(),
         api_key_id = auth_context.api_key_id.as_str(),
+        api_key_name = auth_context.api_key_name.as_deref().unwrap_or("-"),
+        balance_remaining = balance_remaining.as_str(),
         access_allowed = auth_context.access_allowed,
         api_key_is_standalone = auth_context.api_key_is_standalone,
         has_local_rejection = auth_context.local_rejection.is_some(),

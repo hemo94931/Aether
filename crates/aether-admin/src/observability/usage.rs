@@ -288,7 +288,11 @@ mod tests {
 
     #[test]
     fn explicit_completed_status_wins_over_legacy_failure_fields() {
-        let item = sample_usage("completed", Some(429), Some("rate limited on first attempt"));
+        let item = sample_usage(
+            "completed",
+            Some(429),
+            Some("rate limited on first attempt"),
+        );
         assert!(!admin_usage_is_failed(&item));
         assert!(!admin_usage_matches_status(&item, Some("failed")));
         assert!(admin_usage_matches_status(&item, Some("completed")));

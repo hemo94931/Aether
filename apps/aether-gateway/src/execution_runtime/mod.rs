@@ -19,12 +19,14 @@ pub(crate) use self::constants::{
     MAX_ERROR_BODY_BYTES, MAX_STREAM_PREFETCH_BYTES, MAX_STREAM_PREFETCH_FRAMES,
 };
 pub(crate) use self::fallback::{
-    local_failover_response_text, resolve_core_stream_direct_finalize_report_kind,
+    append_local_failover_policy_to_value, local_failover_response_text,
+    resolve_core_stream_direct_finalize_report_kind,
     resolve_core_stream_error_finalize_report_kind, resolve_core_sync_error_finalize_report_kind,
-    should_fallback_to_control_stream, should_fallback_to_control_sync,
-    should_finalize_sync_response, should_retry_next_local_candidate_stream,
-    should_retry_next_local_candidate_sync, should_stop_local_candidate_failover_stream,
-    should_stop_local_candidate_failover_sync,
+    resolve_local_candidate_failover_decision_stream, should_fallback_to_control_stream,
+    should_fallback_to_control_sync, should_finalize_sync_response,
+    should_retry_next_local_candidate_stream, should_retry_next_local_candidate_sync,
+    should_stop_local_candidate_failover_stream, should_stop_local_candidate_failover_sync,
+    LocalFailoverDecision,
 };
 pub use server::{
     build_execution_runtime_router, build_execution_runtime_router_with_request_concurrency_limit,

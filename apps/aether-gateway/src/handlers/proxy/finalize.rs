@@ -87,6 +87,13 @@ pub(super) fn finalize_gateway_response(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("-")
         .to_string();
+    let auth_context = control_decision.and_then(|decision| decision.auth_context.as_ref());
+    let user_id = auth_context
+        .map(|auth_context| auth_context.user_id.as_str())
+        .unwrap_or("-");
+    let api_key_id = auth_context
+        .map(|auth_context| auth_context.api_key_id.as_str())
+        .unwrap_or("-");
     let status_code = response.status().as_u16();
     emit_admin_audit(
         &mut response,
@@ -106,6 +113,8 @@ pub(super) fn finalize_gateway_response(
             remote_addr = %remote_addr,
             method = %method,
             path = %path_and_query,
+            user_id,
+            api_key_id,
             route_class,
             execution_path,
             dependency_reason = dependency_reason.as_str(),
@@ -124,6 +133,8 @@ pub(super) fn finalize_gateway_response(
             remote_addr = %remote_addr,
             method = %method,
             path = %path_and_query,
+            user_id,
+            api_key_id,
             route_class,
             execution_path,
             dependency_reason = dependency_reason.as_str(),
@@ -142,6 +153,8 @@ pub(super) fn finalize_gateway_response(
             remote_addr = %remote_addr,
             method = %method,
             path = %path_and_query,
+            user_id,
+            api_key_id,
             route_class,
             execution_path,
             dependency_reason = dependency_reason.as_str(),

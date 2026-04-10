@@ -15,9 +15,10 @@ use crate::constants::{
     EXECUTION_PATH_CONTROL_EXECUTE_SYNC, EXECUTION_PATH_DISTRIBUTED_OVERLOADED,
     EXECUTION_PATH_EXECUTION_RUNTIME_STREAM, EXECUTION_PATH_EXECUTION_RUNTIME_SYNC,
     EXECUTION_PATH_LOCAL_AI_PUBLIC, EXECUTION_PATH_LOCAL_AUTH_DENIED,
-    EXECUTION_PATH_LOCAL_EXECUTION_RUNTIME_MISS, EXECUTION_PATH_LOCAL_OVERLOADED,
-    EXECUTION_PATH_LOCAL_PROXY_PASSTHROUGH_REMOVED, EXECUTION_PATH_LOCAL_RATE_LIMITED,
-    EXECUTION_PATH_LOCAL_ROUTE_NOT_FOUND, EXECUTION_PATH_PUBLIC_PROXY_PASSTHROUGH,
+    EXECUTION_PATH_LOCAL_EXECUTION_LOOP_DETECTED, EXECUTION_PATH_LOCAL_EXECUTION_RUNTIME_MISS,
+    EXECUTION_PATH_LOCAL_OVERLOADED, EXECUTION_PATH_LOCAL_PROXY_PASSTHROUGH_REMOVED,
+    EXECUTION_PATH_LOCAL_RATE_LIMITED, EXECUTION_PATH_LOCAL_ROUTE_NOT_FOUND,
+    EXECUTION_PATH_PUBLIC_PROXY_PASSTHROUGH, EXECUTION_RUNTIME_LOOP_GUARD_HEADER,
     FORWARDED_FOR_HEADER, FORWARDED_HOST_HEADER, FORWARDED_PROTO_HEADER, GATEWAY_HEADER,
     LOCAL_EXECUTION_RUNTIME_MISS_REASON_HEADER, TRACE_ID_HEADER,
     TRUSTED_AUTH_ACCESS_ALLOWED_HEADER, TRUSTED_AUTH_API_KEY_ID_HEADER,
@@ -32,6 +33,9 @@ use crate::control::{
 use crate::executor::{
     maybe_execute_stream_request, maybe_execute_sync_request,
     record_failed_usage_for_exhausted_request, LocalExecutionRequestOutcome,
+};
+use crate::frontdoor_loop_guard::{
+    frontdoor_self_loop_public_ai_path, request_has_execution_runtime_loop_guard,
 };
 use crate::handlers::shared::{
     build_admin_proxy_auth_required_response, build_unhandled_admin_proxy_response,
@@ -48,7 +52,7 @@ use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{self, header::HeaderName, header::HeaderValue, Response};
 use std::time::Instant;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 const OPENAI_CHAT_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL: &str =
     "OpenAI chat execution runtime miss did not match a Rust execution path";
@@ -67,7 +71,22 @@ const GEMINI_FILES_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL: &str =
 const LOCAL_ROUTE_NOT_FOUND_DETAIL: &str = "Route not found";
 const LOCAL_PROXY_PASSTHROUGH_REMOVED_DETAIL: &str =
     "Route matched a removed compatibility passthrough; implement it in Rust or retire the route";
+const LOCAL_EXECUTION_LOOP_DETECTED_DETAIL: &str =
+    "Gateway detected an execution runtime request loop back into the local frontdoor";
 const EXECUTION_PATH_TUNNEL_AFFINITY_FORWARD: &str = "tunnel_affinity_forward";
+
+fn local_execution_outcome_label(outcome: &LocalExecutionRequestOutcome) -> &'static str {
+    match outcome {
+        LocalExecutionRequestOutcome::Responded(_) => "responded",
+        LocalExecutionRequestOutcome::Exhausted(_) => "exhausted",
+        LocalExecutionRequestOutcome::NoPath => "no_path",
+    }
+}
+
+fn request_hits_execution_loop_guard(parts: &http::request::Parts) -> bool {
+    request_has_execution_runtime_loop_guard(&parts.headers)
+        && frontdoor_self_loop_public_ai_path(parts.uri.path())
+}
 
 fn execution_runtime_candidate_header_value(decision: &GatewayControlDecision) -> &'static str {
     if decision.is_execution_runtime_candidate() {
@@ -322,6 +341,43 @@ pub(crate) async fn proxy_request(
     let (parts, body) = request.into_parts();
     let trace_id = extract_or_generate_trace_id(&parts.headers);
     state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
+    if request_hits_execution_loop_guard(&parts) {
+        warn!(
+            event_name = "frontdoor_execution_loop_detected",
+            log_type = "ops",
+            trace_id = %trace_id,
+            method = %parts.method,
+            path = %parts
+                .uri
+                .path_and_query()
+                .map(|value| value.as_str())
+                .unwrap_or("/"),
+            loop_guard_header = EXECUTION_RUNTIME_LOOP_GUARD_HEADER,
+            "gateway rejected execution runtime request loop into frontdoor"
+        );
+        let response = build_local_http_error_response(
+            &trace_id,
+            None,
+            http::StatusCode::LOOP_DETECTED,
+            LOCAL_EXECUTION_LOOP_DETECTED_DETAIL,
+        )?;
+        return Ok(finalize_gateway_response(
+            &state,
+            response,
+            &trace_id,
+            &remote_addr,
+            &parts.method,
+            parts
+                .uri
+                .path_and_query()
+                .map(|value| value.as_str())
+                .unwrap_or("/"),
+            None,
+            EXECUTION_PATH_LOCAL_EXECUTION_LOOP_DETECTED,
+            &started_at,
+            request_permit.take(),
+        ));
+    }
     let request_context_started_at = Instant::now();
     let request_context = crate::control::resolve_public_request_context(
         &state,
@@ -593,6 +649,27 @@ pub(crate) async fn proxy_request(
         .check_and_consume(&state, control_decision)
         .await?;
     if let FrontdoorUserRpmOutcome::Rejected(rejection) = &rate_limit_outcome {
+        let auth_context = control_decision.and_then(|decision| decision.auth_context.as_ref());
+        let user_id = auth_context
+            .map(|auth_context| auth_context.user_id.as_str())
+            .unwrap_or("-");
+        let api_key_id = auth_context
+            .map(|auth_context| auth_context.api_key_id.as_str())
+            .unwrap_or("-");
+        let path_and_query = request_context.request_path_and_query();
+        info!(
+            event_name = "frontdoor_user_rpm_rejected",
+            log_type = "event",
+            trace_id = %trace_id,
+            method = %parts.method,
+            path = %path_and_query,
+            user_id,
+            api_key_id,
+            scope = rejection.scope,
+            limit = rejection.limit,
+            retry_after = rejection.retry_after,
+            "gateway rejected request at frontdoor user rpm limit"
+        );
         let response =
             build_local_user_rpm_limited_response(&trace_id, control_decision, rejection)?;
         return Ok(finalize_gateway_response_with_context(
@@ -649,15 +726,29 @@ pub(crate) async fn proxy_request(
         let stream_request = request_wants_stream(&request_context, buffered_body);
         let mut local_execution_exhaustion = None;
         if stream_request {
-            match maybe_execute_stream_request(
+            let stream_outcome = maybe_execute_stream_request(
                 &state,
                 &parts,
                 buffered_body,
                 &trace_id,
                 control_decision,
             )
-            .await?
-            {
+            .await?;
+            debug!(
+                event_name = "proxy_stream_local_execute_outcome",
+                log_type = "debug",
+                trace_id = %trace_id,
+                outcome = local_execution_outcome_label(&stream_outcome),
+                route_family = control_decision
+                    .and_then(|decision| decision.route_family.as_deref())
+                    .unwrap_or("-"),
+                route_kind = control_decision
+                    .and_then(|decision| decision.route_kind.as_deref())
+                    .unwrap_or("-"),
+                request_path = %request_context.request_path_and_query(),
+                "gateway local stream execution returned to proxy"
+            );
+            match stream_outcome {
                 LocalExecutionRequestOutcome::Responded(execution_runtime_response) => {
                     state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
                     return Ok(finalize_gateway_response_with_context(

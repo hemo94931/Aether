@@ -40,6 +40,7 @@ mod error;
 mod execution_runtime;
 mod executor;
 mod fallback_metrics;
+mod frontdoor_loop_guard;
 mod handlers;
 mod headers;
 mod hooks;
@@ -68,7 +69,8 @@ pub use self::async_task::VideoTaskTruthSourceMode;
 pub use self::data::GatewayDataConfig;
 pub(crate) use self::error::GatewayError;
 pub(crate) use self::execution_runtime::{
-    append_execution_contract_fields_to_value, MAX_ERROR_BODY_BYTES, MAX_STREAM_PREFETCH_FRAMES,
+    append_execution_contract_fields_to_value, append_local_failover_policy_to_value,
+    MAX_ERROR_BODY_BYTES, MAX_STREAM_PREFETCH_FRAMES,
 };
 pub use self::execution_runtime::{
     build_execution_runtime_router, build_execution_runtime_router_with_request_concurrency_limit,

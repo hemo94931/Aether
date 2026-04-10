@@ -16,8 +16,13 @@ use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::constants::{
+    EXECUTION_RUNTIME_LOOP_GUARD_HEADER, EXECUTION_RUNTIME_LOOP_GUARD_VALUE,
+    EXECUTION_RUNTIME_LOOP_GUARD_VIA_TOKEN,
+};
 #[cfg(test)]
 use crate::execution_runtime::remote_compat::execute_sync_plan_via_remote_execution_runtime;
+use crate::frontdoor_loop_guard::gateway_frontdoor_self_loop_guard_error;
 use crate::{AppState, GatewayError};
 
 const HUB_RELAY_CONTENT_TYPE: &str = "application/vnd.aether.tunnel-envelope";
@@ -242,12 +247,17 @@ async fn send_request(
     plan: &ExecutionPlan,
     body_bytes: Vec<u8>,
 ) -> Result<reqwest::Response, ExecutionRuntimeTransportError> {
+    if let Some(detail) = gateway_frontdoor_self_loop_guard_error(plan.url.as_str()) {
+        return Err(ExecutionRuntimeTransportError::UpstreamRequest(detail));
+    }
+
     let method = plan.method.parse::<reqwest::Method>()?;
     let headers = build_request_headers(
         &plan.headers,
         plan.content_encoding.as_deref(),
         plan.body.body_bytes_b64.is_some(),
     )?;
+    let headers = append_execution_loop_guard_header(headers);
     let total_timeout = plan
         .timeouts
         .as_ref()
@@ -272,6 +282,34 @@ async fn send_request(
     request.send().await.map_err(|err| {
         ExecutionRuntimeTransportError::UpstreamRequest(format_upstream_request_error(&err))
     })
+}
+
+fn append_execution_loop_guard_header(mut headers: HeaderMap) -> HeaderMap {
+    headers.insert(
+        HeaderName::from_static(EXECUTION_RUNTIME_LOOP_GUARD_HEADER),
+        HeaderValue::from_static(EXECUTION_RUNTIME_LOOP_GUARD_VALUE),
+    );
+    let via_name = HeaderName::from_static("via");
+    let via_value = headers
+        .get(&via_name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            if value
+                .to_ascii_lowercase()
+                .contains(EXECUTION_RUNTIME_LOOP_GUARD_VIA_TOKEN)
+            {
+                value.to_string()
+            } else {
+                format!("{value}, 1.1 {EXECUTION_RUNTIME_LOOP_GUARD_VIA_TOKEN}")
+            }
+        })
+        .unwrap_or_else(|| format!("1.1 {EXECUTION_RUNTIME_LOOP_GUARD_VIA_TOKEN}"));
+    if let Ok(value) = HeaderValue::from_str(via_value.as_str()) {
+        headers.insert(via_name, value);
+    }
+    headers
 }
 
 async fn send_via_tunnel_relay(
@@ -647,6 +685,53 @@ mod tests {
     use serde_json::json;
 
     use super::DirectSyncExecutionRuntime;
+    use crate::frontdoor_loop_guard::{
+        frontdoor_self_loop_public_ai_path, gateway_frontdoor_self_loop_guard_error_with_bind,
+        gateway_frontdoor_self_loop_guard_matches_with_bind,
+    };
+
+    #[test]
+    fn gateway_frontdoor_self_loop_guard_matches_loopback_public_ai_route() {
+        assert!(gateway_frontdoor_self_loop_guard_matches_with_bind(
+            "0.0.0.0:8084",
+            "http://127.0.0.1:8084/v1/messages"
+        ));
+        assert!(gateway_frontdoor_self_loop_guard_matches_with_bind(
+            "0.0.0.0:8084",
+            "http://localhost:8084/v1/responses"
+        ));
+    }
+
+    #[test]
+    fn gateway_frontdoor_self_loop_guard_ignores_non_ai_routes() {
+        assert!(!gateway_frontdoor_self_loop_guard_matches_with_bind(
+            "0.0.0.0:8084",
+            "http://127.0.0.1:8084/_gateway/health"
+        ));
+        assert!(!frontdoor_self_loop_public_ai_path("/_gateway/health"));
+    }
+
+    #[test]
+    fn gateway_frontdoor_self_loop_guard_ignores_different_ports() {
+        assert!(!gateway_frontdoor_self_loop_guard_matches_with_bind(
+            "0.0.0.0:8084",
+            "http://127.0.0.1:9999/v1/messages"
+        ));
+    }
+
+    #[test]
+    fn gateway_frontdoor_self_loop_guard_reports_clear_error() {
+        assert_eq!(
+            gateway_frontdoor_self_loop_guard_error_with_bind(
+                "0.0.0.0:8084",
+                "http://localhost:8084/v1/responses"
+            ),
+            Some(
+                "upstream execution target resolves back to the local aether-gateway frontdoor: http://localhost:8084/v1/responses"
+                    .to_string()
+            )
+        );
+    }
 
     fn tunnel_proxy_snapshot(base_url: String) -> aether_contracts::ProxySnapshot {
         aether_contracts::ProxySnapshot {

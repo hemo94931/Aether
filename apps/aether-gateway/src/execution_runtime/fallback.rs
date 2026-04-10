@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use aether_contracts::{ExecutionPlan, ExecutionResult};
 use regex::Regex;
+use serde_json::{json, Value};
+use tracing::debug;
 
+use crate::provider_transport::GatewayProviderTransportSnapshot;
 use crate::AppState;
 
 fn local_candidate_index(report_context: Option<&serde_json::Value>) -> Option<u64> {
@@ -32,10 +35,20 @@ struct LocalFailoverRegexRule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalFailoverDecision {
+pub(crate) enum LocalFailoverDecision {
     UseDefault,
     RetryNextCandidate,
     StopLocalFailover,
+}
+
+impl LocalFailoverDecision {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::UseDefault => "use_default",
+            Self::RetryNextCandidate => "retry_next_candidate",
+            Self::StopLocalFailover => "stop_local_failover",
+        }
+    }
 }
 
 pub(crate) async fn should_retry_next_local_candidate_sync(
@@ -169,8 +182,14 @@ pub(crate) async fn should_retry_next_local_candidate_stream(
     response_text: Option<&str>,
 ) -> bool {
     matches!(
-        resolve_local_failover_decision(state, plan, report_context, status_code, response_text)
-            .await,
+        resolve_local_candidate_failover_decision_stream(
+            state,
+            plan,
+            report_context,
+            status_code,
+            response_text,
+        )
+        .await,
         LocalFailoverDecision::RetryNextCandidate
     )
 }
@@ -184,10 +203,26 @@ pub(crate) async fn should_stop_local_candidate_failover_stream(
     response_text: Option<&str>,
 ) -> bool {
     matches!(
-        resolve_local_failover_decision(state, plan, report_context, status_code, response_text)
-            .await,
+        resolve_local_candidate_failover_decision_stream(
+            state,
+            plan,
+            report_context,
+            status_code,
+            response_text,
+        )
+        .await,
         LocalFailoverDecision::StopLocalFailover
     )
+}
+
+pub(crate) async fn resolve_local_candidate_failover_decision_stream(
+    state: &AppState,
+    plan: &ExecutionPlan,
+    report_context: Option<&serde_json::Value>,
+    status_code: u16,
+    response_text: Option<&str>,
+) -> LocalFailoverDecision {
+    resolve_local_failover_decision(state, plan, report_context, status_code, response_text).await
 }
 
 pub(crate) fn local_failover_response_text(
@@ -217,7 +252,7 @@ async fn resolve_local_failover_decision(
     let Some(candidate_index) = local_candidate_index(report_context) else {
         return LocalFailoverDecision::UseDefault;
     };
-    let policy = resolve_local_failover_policy(state, plan).await;
+    let policy = resolve_local_failover_policy(state, plan, report_context).await;
     let response_text = response_text
         .map(str::trim)
         .filter(|value| !value.is_empty());
@@ -269,7 +304,27 @@ async fn resolve_local_failover_decision(
 async fn resolve_local_failover_policy(
     state: &AppState,
     plan: &ExecutionPlan,
+    report_context: Option<&serde_json::Value>,
 ) -> LocalFailoverPolicy {
+    if let Some(policy) = local_failover_policy_from_report_context(report_context) {
+        debug!(
+            event_name = "local_failover_policy_loaded",
+            log_type = "debug",
+            request_id = %plan.request_id,
+            provider_id = %plan.provider_id,
+            endpoint_id = %plan.endpoint_id,
+            key_id = %plan.key_id,
+            source = "report_context",
+            max_retries = ?policy.max_retries,
+            stop_status_code_count = policy.stop_status_codes.len(),
+            continue_status_code_count = policy.continue_status_codes.len(),
+            success_failover_pattern_count = policy.success_failover_patterns.len(),
+            error_stop_pattern_count = policy.error_stop_patterns.len(),
+            "gateway loaded local failover policy from report context"
+        );
+        return policy;
+    }
+
     let transport = match state
         .read_provider_transport_snapshot(&plan.provider_id, &plan.endpoint_id, &plan.key_id)
         .await
@@ -277,7 +332,28 @@ async fn resolve_local_failover_policy(
         Ok(Some(transport)) => transport,
         Ok(None) | Err(_) => return LocalFailoverPolicy::default(),
     };
+    let policy = local_failover_policy_from_transport(&transport);
+    debug!(
+        event_name = "local_failover_policy_loaded",
+        log_type = "debug",
+        request_id = %plan.request_id,
+        provider_id = %plan.provider_id,
+        endpoint_id = %plan.endpoint_id,
+        key_id = %plan.key_id,
+        source = "transport_snapshot",
+        max_retries = ?policy.max_retries,
+        stop_status_code_count = policy.stop_status_codes.len(),
+        continue_status_code_count = policy.continue_status_codes.len(),
+        success_failover_pattern_count = policy.success_failover_patterns.len(),
+        error_stop_pattern_count = policy.error_stop_patterns.len(),
+        "gateway loaded local failover policy from transport snapshot"
+    );
+    policy
+}
 
+fn local_failover_policy_from_transport(
+    transport: &GatewayProviderTransportSnapshot,
+) -> LocalFailoverPolicy {
     let rules = transport
         .provider
         .config
@@ -335,6 +411,69 @@ async fn resolve_local_failover_policy(
             .map(|value| parse_regex_rules(value, "error_stop_patterns"))
             .unwrap_or_default(),
     }
+}
+
+fn local_failover_policy_from_report_context(
+    report_context: Option<&Value>,
+) -> Option<LocalFailoverPolicy> {
+    let object = report_context
+        .and_then(Value::as_object)?
+        .get("local_failover_policy")?
+        .as_object()?;
+
+    Some(LocalFailoverPolicy {
+        max_retries: object.get("max_retries").and_then(parse_u64_value),
+        stop_status_codes: object
+            .get("stop_status_codes")
+            .map(parse_status_code_list)
+            .unwrap_or_default(),
+        continue_status_codes: object
+            .get("continue_status_codes")
+            .map(parse_status_code_list)
+            .unwrap_or_default(),
+        success_failover_patterns: parse_regex_rules(object, "success_failover_patterns"),
+        error_stop_patterns: parse_regex_rules(object, "error_stop_patterns"),
+    })
+}
+
+fn parse_status_code_list(value: &Value) -> BTreeSet<u16> {
+    value
+        .as_array()
+        .into_iter()
+        .flat_map(|values| values.iter())
+        .filter_map(|value| parse_u64_value(value).and_then(|value| u16::try_from(value).ok()))
+        .collect()
+}
+
+fn local_failover_policy_to_value(policy: &LocalFailoverPolicy) -> Value {
+    json!({
+        "max_retries": policy.max_retries,
+        "stop_status_codes": policy.stop_status_codes.iter().copied().collect::<Vec<_>>(),
+        "continue_status_codes": policy.continue_status_codes.iter().copied().collect::<Vec<_>>(),
+        "success_failover_patterns": policy.success_failover_patterns.iter().map(local_failover_regex_rule_to_value).collect::<Vec<_>>(),
+        "error_stop_patterns": policy.error_stop_patterns.iter().map(local_failover_regex_rule_to_value).collect::<Vec<_>>(),
+    })
+}
+
+fn local_failover_regex_rule_to_value(rule: &LocalFailoverRegexRule) -> Value {
+    json!({
+        "pattern": rule.pattern,
+        "status_codes": rule.status_codes.iter().copied().collect::<Vec<_>>(),
+    })
+}
+
+pub(crate) fn append_local_failover_policy_to_value(
+    value: Value,
+    transport: &GatewayProviderTransportSnapshot,
+) -> Value {
+    let Value::Object(mut object) = value else {
+        return value;
+    };
+    object.insert(
+        "local_failover_policy".to_string(),
+        local_failover_policy_to_value(&local_failover_policy_from_transport(transport)),
+    );
+    Value::Object(object)
 }
 
 fn parse_regex_rules(
@@ -800,7 +939,7 @@ mod tests {
         let plan = sample_plan();
         let runtime = tokio::runtime::Runtime::new().expect("runtime should build");
 
-        let policy = runtime.block_on(resolve_local_failover_policy(&state, &plan));
+        let policy = runtime.block_on(resolve_local_failover_policy(&state, &plan, None));
         assert_eq!(
             policy,
             LocalFailoverPolicy {
@@ -894,7 +1033,7 @@ mod tests {
         let plan = sample_plan();
         let runtime = tokio::runtime::Runtime::new().expect("runtime should build");
 
-        let policy = runtime.block_on(resolve_local_failover_policy(&state, &plan));
+        let policy = runtime.block_on(resolve_local_failover_policy(&state, &plan, None));
         assert_eq!(
             policy.success_failover_patterns,
             vec![LocalFailoverRegexRule {
