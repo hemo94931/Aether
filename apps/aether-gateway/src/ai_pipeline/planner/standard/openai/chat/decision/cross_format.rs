@@ -52,8 +52,7 @@ pub(super) async fn build_cross_format_local_openai_chat_decision_payload_for_ca
     else {
         return None;
     };
-    if !request_pair_allowed_for_transport(&transport, "openai:chat", provider_api_format.as_str())
-    {
+    if !request_pair_allowed_for_transport(transport, "openai:chat", provider_api_format.as_str()) {
         let skip_reason =
             if request_conversion_requires_enable_flag("openai:chat", provider_api_format.as_str())
                 && !transport.provider.enable_format_conversion

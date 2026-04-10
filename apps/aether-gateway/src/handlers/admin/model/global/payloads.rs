@@ -23,7 +23,10 @@ pub(crate) fn build_admin_global_model_response(
         "provider_count": global_model.provider_count,
         "active_provider_count": global_model.active_provider_count,
         "usage_count": global_model.usage_count,
-        "created_at": timestamp_or_now(global_model.created_at_unix_secs, now_unix_secs),
+        "created_at": timestamp_or_now(
+            global_model.created_at_unix_ms.map(|value| value / 1000),
+            now_unix_secs,
+        ),
         "updated_at": timestamp_or_now(global_model.updated_at_unix_secs, now_unix_secs),
     })
 }

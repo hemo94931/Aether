@@ -10,6 +10,16 @@ use super::{
 };
 use crate::DataLayerError;
 
+const MILLIS_PER_SECOND: u64 = 1000;
+
+fn unix_secs_to_ms(unix_secs: u64) -> u64 {
+    unix_secs.saturating_mul(MILLIS_PER_SECOND)
+}
+
+fn unix_ms_to_secs(unix_ms: u64) -> u64 {
+    unix_ms / MILLIS_PER_SECOND
+}
+
 #[derive(Debug, Default)]
 pub struct InMemoryUsageReadRepository {
     by_request_id: RwLock<BTreeMap<String, StoredRequestUsageAudit>>,
@@ -80,12 +90,12 @@ impl UsageReadRepository for InMemoryUsageReadRepository {
             .values()
             .filter(|item| {
                 if let Some(created_from_unix_secs) = query.created_from_unix_secs {
-                    if item.created_at_unix_ms < created_from_unix_secs {
+                    if item.created_at_unix_ms < unix_secs_to_ms(created_from_unix_secs) {
                         return false;
                     }
                 }
                 if let Some(created_until_unix_secs) = query.created_until_unix_secs {
-                    if item.created_at_unix_ms >= created_until_unix_secs {
+                    if item.created_at_unix_ms >= unix_secs_to_ms(created_until_unix_secs) {
                         return false;
                     }
                 }
@@ -200,7 +210,7 @@ impl UsageReadRepository for InMemoryUsageReadRepository {
                 entry
                     .last_used_at_unix_secs
                     .unwrap_or(0)
-                    .max(item.created_at_unix_secs),
+                    .max(unix_ms_to_secs(item.created_at_unix_ms)),
             );
         }
         Ok(summaries)
@@ -557,5 +567,45 @@ mod tests {
         assert_eq!(summary.failed_requests, 1);
         assert_eq!(summary.avg_response_time_ms, 180.0);
         assert_eq!(summary.total_cost_usd, 0.75);
+    }
+
+    #[tokio::test]
+    async fn list_usage_audits_applies_second_based_time_filters_to_millisecond_timestamps() {
+        let repository = InMemoryUsageReadRepository::seed(vec![
+            sample_usage("req-1", 1_000),
+            sample_usage("req-2", 2_000),
+            sample_usage("req-3", 3_000),
+        ]);
+
+        let items = repository
+            .list_usage_audits(&crate::repository::usage::UsageAuditListQuery {
+                created_from_unix_secs: Some(2),
+                created_until_unix_secs: Some(3),
+                ..Default::default()
+            })
+            .await
+            .expect("list should succeed");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].request_id, "req-2");
+    }
+
+    #[tokio::test]
+    async fn summarizes_provider_api_key_last_used_at_in_seconds() {
+        let repository = InMemoryUsageReadRepository::seed(vec![
+            sample_usage("req-1", 1_999),
+            sample_usage("req-2", 2_500),
+        ]);
+
+        let summary = repository
+            .summarize_usage_by_provider_api_key_ids(&["provider-key-1".to_string()])
+            .await
+            .expect("summary should succeed");
+
+        let usage = summary
+            .get("provider-key-1")
+            .expect("provider key summary should exist");
+        assert_eq!(usage.request_count, 2);
+        assert_eq!(usage.last_used_at_unix_secs, Some(2));
     }
 }

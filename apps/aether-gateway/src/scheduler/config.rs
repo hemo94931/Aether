@@ -2,17 +2,12 @@ use aether_scheduler_core::SchedulerPriorityMode;
 
 use crate::{AppState, GatewayError};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum SchedulerSchedulingMode {
     FixedOrder,
+    #[default]
     CacheAffinity,
     LoadBalance,
-}
-
-impl Default for SchedulerSchedulingMode {
-    fn default() -> Self {
-        Self::CacheAffinity
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

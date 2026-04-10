@@ -19,8 +19,9 @@ pub use candidate::{
     candidate_is_selectable_with_runtime_state, candidate_supports_required_capability,
     collect_global_model_names_for_required_capability, collect_selectable_candidates_from_keys,
     compare_candidates_by_priority_mode, reorder_candidates_by_scheduler_health,
-    requested_capability_priority_for_candidate, CandidateRuntimeSelectabilityInput,
-    SchedulerMinimalCandidateSelectionCandidate, SchedulerPriorityMode,
+    requested_capability_priority_for_candidate, BuildMinimalCandidateSelectionInput,
+    CandidateRuntimeSelectabilityInput, SchedulerMinimalCandidateSelectionCandidate,
+    SchedulerPriorityMode,
 };
 pub use health::{
     aggregate_provider_key_health_score, count_recent_active_requests_for_api_key,

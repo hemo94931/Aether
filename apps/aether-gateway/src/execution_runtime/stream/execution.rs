@@ -790,7 +790,6 @@ async fn execute_stream_from_frame_stream(
     let request_id_for_report = request_id.to_string();
     let request_id_for_report_log = short_request_id(request_id);
     let candidate_id_for_report = candidate_id.map(ToOwned::to_owned);
-    let mut buffered_frames = buffered_frames;
     tokio::spawn(async move {
         let mut provider_buffered_body = provider_prefetched_body_for_report;
         let mut buffered_body = prefetched_body_for_report;
