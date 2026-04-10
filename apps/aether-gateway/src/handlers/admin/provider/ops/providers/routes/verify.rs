@@ -3,13 +3,11 @@ use super::super::config::{
     resolve_admin_provider_ops_base_url,
 };
 use super::super::support::AdminProviderOpsSaveConfigRequest;
-use super::super::verify::{
-    admin_provider_ops_local_verify_response, admin_provider_ops_normalized_verify_architecture_id,
-    admin_provider_ops_verify_failure,
-};
+use super::super::verify::admin_provider_ops_local_verify_response;
 use crate::handlers::admin::request::AdminAppState;
 use crate::handlers::admin::shared::attach_admin_audit_response;
 use crate::GatewayError;
+use aether_admin::provider::ops::{admin_provider_ops_verify_failure, normalize_architecture_id};
 use axum::{
     body::{Body, Bytes},
     http,
@@ -60,13 +58,13 @@ pub(super) async fn handle_admin_provider_ops_verify(
         return Ok(Json(admin_provider_ops_verify_failure("请提供 API 地址")).into_response());
     };
 
-    let architecture_id =
-        admin_provider_ops_normalized_verify_architecture_id(&payload.architecture_id);
+    let architecture_id = normalize_architecture_id(&payload.architecture_id);
     let credentials = existing_provider.as_ref().map_or_else(
         || payload.connector.credentials.clone(),
         |provider| {
             admin_provider_ops_merge_credentials(
                 state,
+                architecture_id,
                 provider,
                 payload.connector.credentials.clone(),
             )
@@ -74,6 +72,7 @@ pub(super) async fn handle_admin_provider_ops_verify(
     );
     let payload = admin_provider_ops_local_verify_response(
         state,
+        existing_provider.as_ref(),
         &base_url,
         architecture_id,
         &payload.connector.config,

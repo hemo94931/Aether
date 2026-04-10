@@ -1,9 +1,11 @@
 use super::super::super::support::AdminProviderOpsCheckinOutcome;
+use super::super::super::verify::admin_provider_ops_execute_proxy_json_request;
 use super::super::support::{admin_provider_ops_json_object_map, admin_provider_ops_request_url};
 use super::shared::{
     admin_provider_ops_checkin_already_done, admin_provider_ops_checkin_auth_failure,
 };
 use crate::handlers::admin::request::AdminAppState;
+use aether_contracts::ProxySnapshot;
 use serde_json::json;
 
 pub(in super::super) async fn admin_provider_ops_probe_new_api_checkin(
@@ -12,6 +14,7 @@ pub(in super::super) async fn admin_provider_ops_probe_new_api_checkin(
     action_config: &serde_json::Map<String, serde_json::Value>,
     headers: &reqwest::header::HeaderMap,
     has_cookie: bool,
+    proxy_snapshot: Option<&ProxySnapshot>,
 ) -> Option<AdminProviderOpsCheckinOutcome> {
     let endpoint = action_config
         .get("checkin_endpoint")
@@ -24,22 +27,47 @@ pub(in super::super) async fn admin_provider_ops_probe_new_api_checkin(
         &admin_provider_ops_json_object_map(json!({ "endpoint": endpoint })),
         endpoint,
     );
-    let response = match state
-        .http_client()
-        .request(reqwest::Method::POST, url)
-        .headers(headers.clone())
-        .send()
+    let (status, response_json) = if let Some(proxy_snapshot) = proxy_snapshot {
+        match admin_provider_ops_execute_proxy_json_request(
+            state,
+            "provider-ops-action:probe_checkin",
+            reqwest::Method::POST,
+            &url,
+            headers,
+            None,
+            proxy_snapshot,
+        )
         .await
-    {
-        Ok(response) => response,
-        Err(_) => return None,
+        {
+            Ok(result) => result,
+            Err(_) => return None,
+        }
+    } else {
+        let response = match state
+            .http_client()
+            .request(reqwest::Method::POST, url)
+            .headers(headers.clone())
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(_) => return None,
+        };
+        let status = response.status();
+        let response_json = match response.bytes().await {
+            Ok(bytes) => {
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or_else(|_| json!({}))
+            }
+            Err(_) => json!({}),
+        };
+        (status, response_json)
     };
 
-    if response.status() == http::StatusCode::NOT_FOUND {
+    if status == http::StatusCode::NOT_FOUND {
         return None;
     }
     if matches!(
-        response.status(),
+        status,
         http::StatusCode::UNAUTHORIZED | http::StatusCode::FORBIDDEN
     ) {
         return has_cookie.then(|| AdminProviderOpsCheckinOutcome {
@@ -49,12 +77,6 @@ pub(in super::super) async fn admin_provider_ops_probe_new_api_checkin(
         });
     }
 
-    let response_json = match response.bytes().await {
-        Ok(bytes) => {
-            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or_else(|_| json!({}))
-        }
-        Err(_) => json!({}),
-    };
     let message = response_json
         .get("message")
         .and_then(serde_json::Value::as_str)

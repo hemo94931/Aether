@@ -385,8 +385,8 @@ fn admin_provider_ops_route_owners_stay_explicit() {
         "apps/aether-gateway/src/handlers/admin/provider/ops/providers/routes/verify.rs",
     );
     assert!(
-        verify.contains("super::super::verify::{"),
-        "verify.rs should depend directly on verify owner"
+        verify.contains("super::super::verify::admin_provider_ops_local_verify_response"),
+        "verify.rs should depend directly on gateway verify runtime owner"
     );
 
     let connect = read_workspace_file(
@@ -411,6 +411,28 @@ fn admin_provider_ops_route_owners_stay_explicit() {
     assert!(
         read.contains("super::super::config::{"),
         "read.rs should depend directly on config payload owner"
+    );
+}
+
+#[test]
+fn admin_provider_ops_architecture_registry_uses_pure_owner() {
+    let architectures =
+        read_workspace_file("apps/aether-gateway/src/handlers/admin/provider/ops/architectures.rs");
+    for pattern in [
+        "use aether_admin::provider::ops::{get_architecture, list_architectures};",
+        "list_architectures(false)",
+        "get_architecture(architecture_id)",
+    ] {
+        assert!(
+            architectures.contains(pattern),
+            "handlers/admin/provider/ops/architectures.rs should delegate architecture registry to pure owner {pattern}"
+        );
+    }
+    assert!(
+        !workspace_file_exists(
+            "apps/aether-gateway/src/handlers/admin/provider/ops/architectures.all.json"
+        ),
+        "handlers/admin/provider/ops/architectures.all.json should be removed after moving architecture registry into aether-admin"
     );
 }
 
@@ -1150,7 +1172,7 @@ fn admin_provider_ops_providers_mod_stays_thin() {
         "pub(super) struct AdminProviderOpsSaveConfigRequest",
         "pub(super) struct AdminProviderOpsConnectRequest",
         "pub(super) struct AdminProviderOpsExecuteActionRequest",
-        "pub(super) struct AdminProviderOpsCheckinOutcome",
+        "ProviderOpsCheckinOutcome as AdminProviderOpsCheckinOutcome",
     ] {
         assert!(
             providers_support.contains(pattern),
@@ -1234,10 +1256,11 @@ fn admin_provider_ops_actions_mod_stays_thin() {
         "apps/aether-gateway/src/handlers/admin/provider/ops/providers/actions/support.rs",
     );
     for pattern in [
-        "pub(super) fn admin_provider_ops_resolved_action_config(",
+        "pub(super) fn admin_provider_ops_checkin_data(",
+        "pub(super) fn admin_provider_ops_json_object_map(",
         "pub(super) fn admin_provider_ops_request_url(",
         "pub(super) fn admin_provider_ops_request_method(",
-        "pub(super) fn admin_provider_ops_should_use_rust_only_action_stub(",
+        "pub(super) fn admin_provider_ops_parse_rfc3339_unix_secs(",
     ] {
         assert!(
             actions_support.contains(pattern),
@@ -1298,29 +1321,34 @@ fn admin_provider_ops_actions_mod_stays_thin() {
         "apps/aether-gateway/src/handlers/admin/provider/ops/providers/actions/query_balance/mod.rs",
     );
     for pattern in [
-        "mod parsers;",
+        "mod sub2api;",
         "mod yescode;",
         "pub(super) async fn admin_provider_ops_run_query_balance_action(",
-        "parsers::admin_provider_ops_new_api_balance_payload(",
+        "parse_query_balance_payload(",
         "yescode::admin_provider_ops_yescode_balance_payload(",
+        "sub2api::admin_provider_ops_sub2api_balance_payload(",
     ] {
         assert!(
             actions_query_balance_mod.contains(pattern),
             "handlers/admin/provider/ops/providers/actions/query_balance/mod.rs should keep thin query_balance entry seam {pattern}"
         );
     }
-    let actions_query_balance_parsers = read_workspace_file(
-        "apps/aether-gateway/src/handlers/admin/provider/ops/providers/actions/query_balance/parsers.rs",
+    assert!(
+        !workspace_file_exists(
+            "apps/aether-gateway/src/handlers/admin/provider/ops/providers/actions/query_balance/parsers.rs"
+        ),
+        "handlers/admin/provider/ops/providers/actions/query_balance/parsers.rs should be removed after moving balance parsing into aether-admin"
     );
+    let pure_actions = read_workspace_file("crates/aether-admin/src/provider/ops/actions.rs");
     for pattern in [
-        "pub(super) fn admin_provider_ops_new_api_balance_payload(",
-        "pub(super) fn admin_provider_ops_cubence_balance_payload(",
-        "pub(super) fn admin_provider_ops_nekocode_balance_payload(",
-        "pub(super) fn admin_provider_ops_attach_balance_checkin_outcome(",
+        "pub fn parse_query_balance_payload(",
+        "pub fn parse_sub2api_balance_payload(",
+        "pub fn parse_yescode_combined_balance_payload(",
+        "pub fn attach_balance_checkin_outcome(",
     ] {
         assert!(
-            actions_query_balance_parsers.contains(pattern),
-            "handlers/admin/provider/ops/providers/actions/query_balance/parsers.rs should own {pattern}"
+            pure_actions.contains(pattern),
+            "crates/aether-admin/src/provider/ops/actions.rs should own {pattern}"
         );
     }
     let actions_query_balance_yescode = read_workspace_file(
@@ -1337,6 +1365,84 @@ fn admin_provider_ops_actions_mod_stays_thin() {
         ),
         "handlers/admin/provider/ops/providers/actions/query_balance.rs should be removed once query_balance is directoryized"
     );
+}
+
+#[test]
+fn admin_provider_ops_verify_runtime_and_pure_owners_stay_explicit() {
+    let verify_mod = read_workspace_file(
+        "apps/aether-gateway/src/handlers/admin/provider/ops/providers/verify/mod.rs",
+    );
+    for pattern in [
+        "mod proxy;",
+        "mod request;",
+        "mod sub2api;",
+        "pub(super) async fn admin_provider_ops_local_verify_response(",
+    ] {
+        assert!(
+            verify_mod.contains(pattern),
+            "handlers/admin/provider/ops/providers/verify/mod.rs should keep runtime verify entry seam {pattern}"
+        );
+    }
+
+    let verify_proxy = read_workspace_file(
+        "apps/aether-gateway/src/handlers/admin/provider/ops/providers/verify/proxy.rs",
+    );
+    for pattern in [
+        "struct AdminProviderOpsAnyrouterChallenge",
+        "fn admin_provider_ops_anyrouter_acw_cookie(",
+        "fn admin_provider_ops_resolve_proxy_snapshot(",
+    ] {
+        assert!(
+            verify_proxy.contains(pattern),
+            "handlers/admin/provider/ops/providers/verify/proxy.rs should own {pattern}"
+        );
+    }
+
+    let verify_request = read_workspace_file(
+        "apps/aether-gateway/src/handlers/admin/provider/ops/providers/verify/request.rs",
+    );
+    for pattern in [
+        "fn admin_provider_ops_execute_get_json(",
+        "fn admin_provider_ops_execute_proxy_json_request(",
+        "fn admin_provider_ops_verify_execution_error_message(",
+    ] {
+        assert!(
+            verify_request.contains(pattern),
+            "handlers/admin/provider/ops/providers/verify/request.rs should own {pattern}"
+        );
+    }
+
+    let verify_sub2api = read_workspace_file(
+        "apps/aether-gateway/src/handlers/admin/provider/ops/providers/verify/sub2api.rs",
+    );
+    for pattern in [
+        "fn admin_provider_ops_local_sub2api_verify_response(",
+        "fn admin_provider_ops_sub2api_exchange_token(",
+    ] {
+        assert!(
+            verify_sub2api.contains(pattern),
+            "handlers/admin/provider/ops/providers/verify/sub2api.rs should own {pattern}"
+        );
+    }
+
+    for path in [
+        "apps/aether-gateway/src/handlers/admin/provider/ops/providers/verify/helpers.rs",
+        "apps/aether-gateway/src/handlers/admin/provider/ops/providers/verify/headers.rs",
+        "apps/aether-gateway/src/handlers/admin/provider/ops/providers/verify/payload.rs",
+    ] {
+        assert!(
+            !workspace_file_exists(path),
+            "{path} should be removed after splitting verify runtime owners"
+        );
+    }
+
+    let pure_verify = read_workspace_file("crates/aether-admin/src/provider/ops/verify.rs");
+    for pattern in ["pub fn build_headers(", "pub fn parse_verify_payload("] {
+        assert!(
+            pure_verify.contains(pattern),
+            "crates/aether-admin/src/provider/ops/verify.rs should own {pattern}"
+        );
+    }
 }
 
 #[test]

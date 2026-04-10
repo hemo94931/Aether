@@ -1,4 +1,5 @@
 use super::super::super::support::ADMIN_PROVIDER_OPS_ACTION_RUST_ONLY_MESSAGE;
+use super::super::super::verify::admin_provider_ops_execute_proxy_json_request;
 use super::super::responses::{
     admin_provider_ops_action_error, admin_provider_ops_action_not_supported,
     admin_provider_ops_action_response,
@@ -9,17 +10,20 @@ use super::shared::{
     admin_provider_ops_checkin_payload,
 };
 use crate::handlers::admin::request::AdminAppState;
+use aether_admin::provider::ops::{ProviderOpsArchitectureSpec, ProviderOpsCheckinMode};
+use aether_contracts::ProxySnapshot;
 
 pub(in super::super) async fn admin_provider_ops_run_checkin_action(
     state: &AdminAppState<'_>,
     base_url: &str,
-    architecture_id: &str,
+    architecture: &ProviderOpsArchitectureSpec,
     action_config: &serde_json::Map<String, serde_json::Value>,
     headers: &reqwest::header::HeaderMap,
     has_cookie: bool,
+    proxy_snapshot: Option<&ProxySnapshot>,
 ) -> serde_json::Value {
     let start = std::time::Instant::now();
-    if !matches!(architecture_id, "generic_api" | "new_api") {
+    if architecture.checkin_mode != ProviderOpsCheckinMode::NewApiCompatible {
         return admin_provider_ops_action_not_supported(
             "checkin",
             ADMIN_PROVIDER_OPS_ACTION_RUST_ONLY_MESSAGE,
@@ -28,49 +32,82 @@ pub(in super::super) async fn admin_provider_ops_run_checkin_action(
 
     let url = admin_provider_ops_request_url(base_url, action_config, "/api/user/checkin");
     let method = admin_provider_ops_request_method(action_config, "POST");
-    let response = match state
-        .http_client()
-        .request(method, url)
-        .headers(headers.clone())
-        .send()
+    let (status, response_json) = if let Some(proxy_snapshot) = proxy_snapshot {
+        match admin_provider_ops_execute_proxy_json_request(
+            state,
+            &format!(
+                "provider-ops-action:{}:checkin",
+                architecture.architecture_id
+            ),
+            method,
+            &url,
+            headers,
+            None,
+            proxy_snapshot,
+        )
         .await
-    {
-        Ok(response) => response,
-        Err(err) if err.is_timeout() => {
-            return admin_provider_ops_action_error("network_error", "checkin", "请求超时", None);
-        }
-        Err(err) => {
-            return admin_provider_ops_action_error(
-                "network_error",
-                "checkin",
-                format!("网络错误: {err}"),
-                None,
-            );
-        }
-    };
-    let response_time_ms = Some(start.elapsed().as_millis() as u64);
-    let status = response.status();
-    let response_json = match response.bytes().await {
-        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-            Ok(value) => value,
-            Err(_) => {
+        {
+            Ok(result) => result,
+            Err(err) => {
                 return admin_provider_ops_action_error(
-                    "parse_error",
+                    "network_error",
                     "checkin",
-                    "响应不是有效的 JSON",
-                    response_time_ms,
+                    admin_provider_ops_network_error_message(&err),
+                    None,
                 );
             }
-        },
-        Err(err) => {
-            return admin_provider_ops_action_error(
-                "network_error",
-                "checkin",
-                format!("网络错误: {err}"),
-                response_time_ms,
-            );
         }
+    } else {
+        let response = match state
+            .http_client()
+            .request(method, url)
+            .headers(headers.clone())
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(err) if err.is_timeout() => {
+                return admin_provider_ops_action_error(
+                    "network_error",
+                    "checkin",
+                    "请求超时",
+                    None,
+                );
+            }
+            Err(err) => {
+                return admin_provider_ops_action_error(
+                    "network_error",
+                    "checkin",
+                    format!("网络错误: {err}"),
+                    None,
+                );
+            }
+        };
+        let status = response.status();
+        let response_json = match response.bytes().await {
+            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                Ok(value) => value,
+                Err(_) => {
+                    return admin_provider_ops_action_error(
+                        "parse_error",
+                        "checkin",
+                        "响应不是有效的 JSON",
+                        Some(start.elapsed().as_millis() as u64),
+                    );
+                }
+            },
+            Err(err) => {
+                return admin_provider_ops_action_error(
+                    "network_error",
+                    "checkin",
+                    format!("网络错误: {err}"),
+                    Some(start.elapsed().as_millis() as u64),
+                );
+            }
+        };
+        (status, response_json)
     };
+    let response_time_ms = Some(start.elapsed().as_millis() as u64);
 
     if status == http::StatusCode::NOT_FOUND {
         return admin_provider_ops_action_error(
@@ -193,4 +230,13 @@ pub(in super::super) async fn admin_provider_ops_run_checkin_action(
         },
         response_time_ms,
     )
+}
+
+fn admin_provider_ops_network_error_message(error: &str) -> String {
+    let normalized = error.trim();
+    let lower = normalized.to_ascii_lowercase();
+    if lower.contains("timeout") || normalized.contains("超时") {
+        return "请求超时".to_string();
+    }
+    format!("网络错误: {normalized}")
 }

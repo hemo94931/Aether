@@ -8,8 +8,13 @@ use super::config::{
     admin_provider_ops_decrypted_credentials, resolve_admin_provider_ops_base_url,
 };
 use super::support::ADMIN_PROVIDER_OPS_ACTION_RUST_ONLY_MESSAGE;
-use super::verify::admin_provider_ops_verify_headers;
+use super::verify::{
+    admin_provider_ops_anyrouter_acw_cookie, admin_provider_ops_resolve_proxy_snapshot,
+};
 use crate::handlers::admin::request::AdminAppState;
+use aether_admin::provider::ops::{
+    build_headers, get_architecture, normalize_architecture_id, resolve_action_config,
+};
 use aether_data_contracts::repository::provider_catalog::{
     StoredProviderCatalogEndpoint, StoredProviderCatalogProvider,
 };
@@ -29,7 +34,7 @@ pub(super) fn admin_provider_ops_is_valid_action_type(action_type: &str) -> bool
 
 pub(crate) async fn admin_provider_ops_local_action_response(
     state: &AdminAppState<'_>,
-    _provider_id: &str,
+    provider_id: &str,
     provider: Option<&StoredProviderCatalogProvider>,
     endpoints: &[StoredProviderCatalogEndpoint],
     action_type: &str,
@@ -44,24 +49,14 @@ pub(crate) async fn admin_provider_ops_local_action_response(
     let architecture_id = provider_ops_config
         .get("architecture_id")
         .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
         .unwrap_or("generic_api");
-    let connector_config = admin_provider_ops_connector_object(provider_ops_config)
-        .and_then(|connector| connector.get("config"))
-        .and_then(serde_json::Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    if support::admin_provider_ops_should_use_rust_only_action_stub(
-        architecture_id,
-        &connector_config,
-    ) {
+    let architecture_id = normalize_architecture_id(architecture_id);
+    let Some(architecture) = get_architecture(architecture_id) else {
         return responses::admin_provider_ops_action_not_supported(
             action_type,
             ADMIN_PROVIDER_OPS_ACTION_RUST_ONLY_MESSAGE,
         );
-    }
-
+    };
     let Some(base_url) =
         resolve_admin_provider_ops_base_url(provider, endpoints, Some(provider_ops_config))
     else {
@@ -70,20 +65,42 @@ pub(crate) async fn admin_provider_ops_local_action_response(
             "Provider 未配置 base_url",
         );
     };
+
+    let mut connector_config = admin_provider_ops_connector_object(provider_ops_config)
+        .and_then(|connector| connector.get("config"))
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if architecture_id == "anyrouter" {
+        if let Some(challenge) =
+            admin_provider_ops_anyrouter_acw_cookie(state, &base_url, Some(&connector_config)).await
+        {
+            connector_config.insert(
+                "acw_cookie".to_string(),
+                serde_json::Value::String(challenge.acw_cookie),
+            );
+        }
+    }
+    let proxy_snapshot =
+        admin_provider_ops_resolve_proxy_snapshot(state, Some(&connector_config)).await;
+
     let credentials = admin_provider_ops_decrypted_credentials(
         state,
         admin_provider_ops_config_object(provider)
             .and_then(admin_provider_ops_connector_object)
             .and_then(|connector| connector.get("credentials")),
     );
-    let headers =
-        match admin_provider_ops_verify_headers(architecture_id, &connector_config, &credentials) {
-            Ok(headers) => headers,
-            Err(message) => {
-                return responses::admin_provider_ops_action_not_configured(action_type, message);
-            }
-        };
-    let Some(action_config) = support::admin_provider_ops_resolved_action_config(
+    let headers = match build_headers(
+        architecture.architecture_id,
+        &connector_config,
+        &credentials,
+    ) {
+        Ok(headers) => headers,
+        Err(message) => {
+            return responses::admin_provider_ops_action_not_configured(action_type, message);
+        }
+    };
+    let Some(action_config) = resolve_action_config(
         architecture_id,
         provider_ops_config,
         action_type,
@@ -99,26 +116,32 @@ pub(crate) async fn admin_provider_ops_local_action_response(
         "query_balance" => {
             query_balance::admin_provider_ops_run_query_balance_action(
                 state,
+                provider_id,
+                provider,
+                &architecture,
                 &base_url,
-                architecture_id,
                 &action_config,
                 &headers,
                 &credentials,
+                proxy_snapshot.as_ref(),
             )
             .await
         }
         "checkin" => {
-            let has_cookie = credentials
-                .get("cookie")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| !value.trim().is_empty());
+            let has_cookie = ["cookie", "session_cookie"].into_iter().any(|key| {
+                credentials
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+            });
             checkin::admin_provider_ops_run_checkin_action(
                 state,
                 &base_url,
-                architecture_id,
+                &architecture,
                 &action_config,
                 &headers,
                 has_cookie,
+                proxy_snapshot.as_ref(),
             )
             .await
         }

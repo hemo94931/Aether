@@ -1,10 +1,13 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+pub(super) use aether_admin::provider::ops::ProviderOpsCheckinOutcome as AdminProviderOpsCheckinOutcome;
+
 pub(super) const ADMIN_PROVIDER_OPS_SENSITIVE_FIELDS: &[&str] = &[
     "api_key",
     "password",
     "refresh_token",
+    "_cached_access_token",
     "session_token",
     "session_cookie",
     "token_cookie",
@@ -59,13 +62,6 @@ pub(super) struct AdminProviderOpsConnectRequest {
 pub(super) struct AdminProviderOpsExecuteActionRequest {
     #[serde(default)]
     pub(crate) config: Option<serde_json::Map<String, serde_json::Value>>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct AdminProviderOpsCheckinOutcome {
-    pub(crate) success: Option<bool>,
-    pub(crate) message: String,
-    pub(crate) cookie_expired: bool,
 }
 
 fn default_admin_provider_ops_architecture_id() -> String {

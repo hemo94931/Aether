@@ -1,50 +1,71 @@
-mod parsers;
+mod sub2api;
 mod yescode;
 
-use super::super::support::{
-    AdminProviderOpsCheckinOutcome, ADMIN_PROVIDER_OPS_ACTION_RUST_ONLY_MESSAGE,
-};
+use super::super::support::AdminProviderOpsCheckinOutcome;
+use super::super::verify::admin_provider_ops_execute_proxy_json_request;
 use super::checkin::admin_provider_ops_probe_new_api_checkin;
-use super::responses::{
-    admin_provider_ops_action_error, admin_provider_ops_action_not_supported,
-    admin_provider_ops_action_response,
-};
-use super::support::{
-    admin_provider_ops_is_cookie_auth_architecture, admin_provider_ops_request_method,
-    admin_provider_ops_request_url,
-};
+use super::responses::{admin_provider_ops_action_error, admin_provider_ops_action_response};
+use super::support::{admin_provider_ops_request_method, admin_provider_ops_request_url};
 use crate::handlers::admin::request::AdminAppState;
+use aether_admin::provider::ops::{
+    attach_balance_checkin_outcome, parse_query_balance_payload, ProviderOpsArchitectureSpec,
+    ProviderOpsBalanceMode, ProviderOpsCheckinMode,
+};
+use aether_contracts::ProxySnapshot;
+use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogProvider;
 
 pub(super) async fn admin_provider_ops_run_query_balance_action(
     state: &AdminAppState<'_>,
+    provider_id: &str,
+    provider: &StoredProviderCatalogProvider,
+    architecture: &ProviderOpsArchitectureSpec,
     base_url: &str,
-    architecture_id: &str,
     action_config: &serde_json::Map<String, serde_json::Value>,
     headers: &reqwest::header::HeaderMap,
     credentials: &serde_json::Map<String, serde_json::Value>,
+    proxy_snapshot: Option<&ProxySnapshot>,
 ) -> serde_json::Value {
-    if architecture_id == "yescode" {
-        return yescode::admin_provider_ops_yescode_balance_payload(
-            state,
-            base_url,
-            headers,
-            action_config,
-        )
-        .await;
+    match architecture.balance_mode {
+        ProviderOpsBalanceMode::YescodeCombined => {
+            return yescode::admin_provider_ops_yescode_balance_payload(
+                state,
+                base_url,
+                headers,
+                action_config,
+                proxy_snapshot,
+            )
+            .await;
+        }
+        ProviderOpsBalanceMode::Sub2ApiDualRequest => {
+            return sub2api::admin_provider_ops_sub2api_balance_payload(
+                state,
+                provider_id,
+                provider,
+                base_url,
+                action_config,
+                credentials,
+                proxy_snapshot,
+            )
+            .await;
+        }
+        ProviderOpsBalanceMode::SingleRequest => {}
     }
 
     let mut balance_checkin = None::<AdminProviderOpsCheckinOutcome>;
-    if matches!(architecture_id, "generic_api" | "new_api") {
-        let has_cookie = credentials
-            .get("cookie")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| !value.trim().is_empty());
+    if architecture.checkin_mode == ProviderOpsCheckinMode::NewApiCompatible {
+        let has_cookie = ["session_cookie", "cookie"].into_iter().any(|key| {
+            credentials
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        });
         balance_checkin = admin_provider_ops_probe_new_api_checkin(
             state,
             base_url,
             action_config,
             headers,
             has_cookie,
+            proxy_snapshot,
         )
         .await;
     }
@@ -52,57 +73,85 @@ pub(super) async fn admin_provider_ops_run_query_balance_action(
     let start = std::time::Instant::now();
     let url = admin_provider_ops_request_url(base_url, action_config, "/api/user/balance");
     let method = admin_provider_ops_request_method(action_config, "GET");
-    let response = match state
-        .http_client()
-        .request(method, url)
-        .headers(headers.clone())
-        .send()
+    let (status, response_json) = if let Some(proxy_snapshot) = proxy_snapshot {
+        match admin_provider_ops_execute_proxy_json_request(
+            state,
+            &format!(
+                "provider-ops-action:{}:query_balance:{provider_id}",
+                architecture.architecture_id
+            ),
+            method,
+            &url,
+            headers,
+            None,
+            proxy_snapshot,
+        )
         .await
-    {
-        Ok(response) => response,
-        Err(err) if err.is_timeout() => {
-            return admin_provider_ops_action_error(
-                "network_error",
-                "query_balance",
-                "请求超时",
-                None,
-            );
-        }
-        Err(err) => {
-            return admin_provider_ops_action_error(
-                "network_error",
-                "query_balance",
-                format!("网络错误: {err}"),
-                None,
-            );
-        }
-    };
-    let response_time_ms = Some(start.elapsed().as_millis() as u64);
-    let status = response.status();
-    let response_json = match response.bytes().await {
-        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-            Ok(value) => value,
-            Err(_) => {
+        {
+            Ok(result) => result,
+            Err(err) => {
                 return admin_provider_ops_action_error(
-                    "parse_error",
+                    "network_error",
                     "query_balance",
-                    "响应不是有效的 JSON",
-                    response_time_ms,
+                    admin_provider_ops_network_error_message(&err),
+                    None,
                 );
             }
-        },
-        Err(err) => {
-            return admin_provider_ops_action_error(
-                "network_error",
-                "query_balance",
-                format!("网络错误: {err}"),
-                response_time_ms,
-            );
         }
+    } else {
+        let response = match state
+            .http_client()
+            .request(method, url)
+            .headers(headers.clone())
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(err) if err.is_timeout() => {
+                return admin_provider_ops_action_error(
+                    "network_error",
+                    "query_balance",
+                    "请求超时",
+                    None,
+                );
+            }
+            Err(err) => {
+                return admin_provider_ops_action_error(
+                    "network_error",
+                    "query_balance",
+                    format!("网络错误: {err}"),
+                    None,
+                );
+            }
+        };
+        let status = response.status();
+        let response_json = match response.bytes().await {
+            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                Ok(value) => value,
+                Err(_) => {
+                    return admin_provider_ops_action_error(
+                        "parse_error",
+                        "query_balance",
+                        "响应不是有效的 JSON",
+                        Some(start.elapsed().as_millis() as u64),
+                    );
+                }
+            },
+            Err(err) => {
+                return admin_provider_ops_action_error(
+                    "network_error",
+                    "query_balance",
+                    format!("网络错误: {err}"),
+                    Some(start.elapsed().as_millis() as u64),
+                );
+            }
+        };
+        (status, response_json)
     };
+    let response_time_ms = Some(start.elapsed().as_millis() as u64);
 
     if status != http::StatusCode::OK {
-        let cookie_auth = admin_provider_ops_is_cookie_auth_architecture(architecture_id);
+        let cookie_auth = architecture.query_balance_cookie_auth_errors;
         return match status {
             http::StatusCode::UNAUTHORIZED => admin_provider_ops_action_error(
                 "auth_failed",
@@ -149,50 +198,25 @@ pub(super) async fn admin_provider_ops_run_query_balance_action(
         };
     }
 
-    let data = match architecture_id {
-        "generic_api" | "new_api" => {
-            match parsers::admin_provider_ops_new_api_balance_payload(action_config, &response_json)
-            {
-                Ok(data) => data,
-                Err(message) => {
-                    return admin_provider_ops_action_error(
-                        "unknown_error",
-                        "query_balance",
-                        message,
-                        response_time_ms,
-                    );
-                }
-            }
-        }
-        "cubence" => {
-            match parsers::admin_provider_ops_cubence_balance_payload(action_config, &response_json)
-            {
-                Ok(data) => data,
-                Err(message) => {
-                    return admin_provider_ops_action_error(
-                        "parse_error",
-                        "query_balance",
-                        message,
-                        response_time_ms,
-                    );
-                }
-            }
-        }
-        "nekocode" => match parsers::admin_provider_ops_nekocode_balance_payload(&response_json) {
-            Ok(data) => data,
-            Err(message) => {
-                return admin_provider_ops_action_error(
-                    "parse_error",
-                    "query_balance",
-                    message,
-                    response_time_ms,
-                );
-            }
-        },
-        _ => {
-            return admin_provider_ops_action_not_supported(
+    let data = match parse_query_balance_payload(
+        architecture.architecture_id,
+        action_config,
+        &response_json,
+    ) {
+        Ok(data) => data,
+        Err(message) => {
+            return admin_provider_ops_action_error(
+                if architecture.architecture_id == "generic_api"
+                    || architecture.architecture_id == "new_api"
+                    || architecture.architecture_id == "anyrouter"
+                {
+                    "unknown_error"
+                } else {
+                    "parse_error"
+                },
                 "query_balance",
-                ADMIN_PROVIDER_OPS_ACTION_RUST_ONLY_MESSAGE,
+                message,
+                response_time_ms,
             );
         }
     };
@@ -206,7 +230,16 @@ pub(super) async fn admin_provider_ops_run_query_balance_action(
         86400,
     );
     if let Some(outcome) = balance_checkin.as_ref() {
-        parsers::admin_provider_ops_attach_balance_checkin_outcome(&mut payload, outcome);
+        attach_balance_checkin_outcome(&mut payload, outcome);
     }
     payload
+}
+
+fn admin_provider_ops_network_error_message(error: &str) -> String {
+    let normalized = error.trim();
+    let lower = normalized.to_ascii_lowercase();
+    if lower.contains("timeout") || normalized.contains("超时") {
+        return "请求超时".to_string();
+    }
+    format!("网络错误: {normalized}")
 }

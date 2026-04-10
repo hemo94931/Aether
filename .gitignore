@@ -213,6 +213,10 @@ backups/
 
 # Runtime lock files
 .locks/
+
+# Local Rust/Cargo configuration
+.cargo/
+
 # Demo and test files
 frontend/public/*-demo.html
 frontend/public/*-measure.html

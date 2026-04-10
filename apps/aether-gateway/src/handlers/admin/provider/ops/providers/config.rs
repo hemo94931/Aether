@@ -1,10 +1,12 @@
 use super::support::{AdminProviderOpsSaveConfigRequest, ADMIN_PROVIDER_OPS_SENSITIVE_FIELDS};
 use crate::handlers::admin::request::AdminAppState;
+use crate::GatewayError;
 use aether_admin::provider::ops as admin_provider_ops_pure;
 use aether_data_contracts::repository::provider_catalog::{
     StoredProviderCatalogEndpoint, StoredProviderCatalogProvider,
 };
 use serde_json::json;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) fn admin_provider_ops_config_object(
     provider: &StoredProviderCatalogProvider,
@@ -61,6 +63,9 @@ fn admin_provider_ops_masked_credentials(
 
     let mut masked = serde_json::Map::new();
     for (key, value) in credentials {
+        if key.starts_with('_') {
+            continue;
+        }
         if ADMIN_PROVIDER_OPS_SENSITIVE_FIELDS.contains(&key.as_str()) {
             if let Some(ciphertext) = value.as_str().filter(|value| !value.is_empty()) {
                 masked.insert(
@@ -77,13 +82,6 @@ fn admin_provider_ops_masked_credentials(
 
 fn admin_provider_ops_is_supported_auth_type(auth_type: &str) -> bool {
     admin_provider_ops_pure::admin_provider_ops_is_supported_auth_type(auth_type)
-}
-
-pub(super) fn admin_provider_ops_uses_python_verify_fallback(
-    architecture_id: &str,
-    config: &serde_json::Map<String, serde_json::Value>,
-) -> bool {
-    admin_provider_ops_pure::admin_provider_ops_uses_python_verify_fallback(architecture_id, config)
 }
 
 pub(super) fn admin_provider_ops_decrypted_credentials(
@@ -116,17 +114,26 @@ fn admin_provider_ops_sensitive_placeholder_or_empty(value: Option<&serde_json::
 
 pub(super) fn admin_provider_ops_merge_credentials(
     state: &AdminAppState<'_>,
+    architecture_id: &str,
     provider: &StoredProviderCatalogProvider,
     mut request_credentials: serde_json::Map<String, serde_json::Value>,
 ) -> serde_json::Map<String, serde_json::Value> {
-    let saved_credentials = admin_provider_ops_decrypted_credentials(
+    let mut saved_credentials = admin_provider_ops_decrypted_credentials(
         state,
         admin_provider_ops_config_object(provider)
             .and_then(admin_provider_ops_connector_object)
             .and_then(|connector| connector.get("credentials")),
     );
+    let preserve_internal_runtime_fields =
+        admin_provider_ops_pure::normalize_architecture_id(architecture_id) == "sub2api";
+    if !preserve_internal_runtime_fields {
+        saved_credentials.retain(|key, _| !key.starts_with('_'));
+    }
 
     for field in ADMIN_PROVIDER_OPS_SENSITIVE_FIELDS {
+        if field.starts_with('_') {
+            continue;
+        }
         if admin_provider_ops_sensitive_placeholder_or_empty(request_credentials.get(*field))
             && saved_credentials.contains_key(*field)
         {
@@ -136,9 +143,11 @@ pub(super) fn admin_provider_ops_merge_credentials(
         }
     }
 
-    for (key, value) in saved_credentials {
-        if key.starts_with('_') && !request_credentials.contains_key(&key) {
-            request_credentials.insert(key, value);
+    if preserve_internal_runtime_fields {
+        for (key, value) in saved_credentials {
+            if key.starts_with('_') && !request_credentials.contains_key(&key) {
+                request_credentials.insert(key, value);
+            }
         }
     }
 
@@ -169,6 +178,73 @@ fn admin_provider_ops_encrypt_credentials(
     Ok(encrypted)
 }
 
+pub(super) async fn persist_admin_provider_ops_runtime_credentials(
+    state: &AdminAppState<'_>,
+    provider: &StoredProviderCatalogProvider,
+    updated_credentials: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Option<StoredProviderCatalogProvider>, GatewayError> {
+    if updated_credentials.is_empty() || !state.has_provider_catalog_data_writer() {
+        return Ok(None);
+    }
+
+    let mut updated_provider = provider.clone();
+    let mut provider_config = updated_provider
+        .config
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let Some(provider_ops_config) = provider_config
+        .get("provider_ops")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let Some(connector_config) = provider_ops_config
+        .get("connector")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+
+    let mut decrypted_credentials =
+        admin_provider_ops_decrypted_credentials(state, connector_config.get("credentials"));
+    for (key, value) in updated_credentials {
+        decrypted_credentials.insert(key.clone(), value.clone());
+    }
+    let encrypted_credentials =
+        admin_provider_ops_encrypt_credentials(state, decrypted_credentials)
+            .map_err(GatewayError::Internal)?;
+
+    let mut updated_connector = connector_config.clone();
+    updated_connector.insert(
+        "credentials".to_string(),
+        serde_json::Value::Object(encrypted_credentials),
+    );
+
+    let mut updated_provider_ops = provider_ops_config.clone();
+    updated_provider_ops.insert(
+        "connector".to_string(),
+        serde_json::Value::Object(updated_connector),
+    );
+
+    provider_config.insert(
+        "provider_ops".to_string(),
+        serde_json::Value::Object(updated_provider_ops),
+    );
+    updated_provider.config = Some(serde_json::Value::Object(provider_config));
+    updated_provider.updated_at_unix_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs());
+
+    state
+        .update_provider_catalog_provider(&updated_provider)
+        .await
+}
+
 pub(super) fn build_admin_provider_ops_saved_config_value(
     state: &AdminAppState<'_>,
     provider: &StoredProviderCatalogProvider,
@@ -179,8 +255,12 @@ pub(super) fn build_admin_provider_ops_saved_config_value(
         return Err("connector.auth_type 必须是合法的认证类型".to_string());
     }
 
-    let merged_credentials =
-        admin_provider_ops_merge_credentials(state, provider, payload.connector.credentials);
+    let merged_credentials = admin_provider_ops_merge_credentials(
+        state,
+        payload.architecture_id.as_str(),
+        provider,
+        payload.connector.credentials,
+    );
     let encrypted_credentials = admin_provider_ops_encrypt_credentials(state, merged_credentials)?;
 
     let actions = payload

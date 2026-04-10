@@ -93,3 +93,45 @@ pub(crate) async fn build_admin_global_model_payload(
     }
     Some(payload)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::build_admin_global_model_response;
+    use aether_data_contracts::repository::global_models::StoredAdminGlobalModel;
+    use serde_json::json;
+
+    #[test]
+    fn admin_global_model_response_uses_stored_stats_and_usage_count() {
+        let global_model = StoredAdminGlobalModel::new(
+            "global-minimax".to_string(),
+            "MiniMax-M2.7".to_string(),
+            "MiniMax-M2.7".to_string(),
+            true,
+            None,
+            Some(json!({
+                "tiers": [{
+                    "up_to": null,
+                    "input_price_per_1m": 0.3,
+                    "output_price_per_1m": 1.2,
+                }]
+            })),
+            Some(json!(["cache_1h"])),
+            Some(json!({
+                "family": "minimax",
+                "streaming": true,
+            })),
+            3,
+            3,
+            1,
+            Some(1_711_000_000),
+            Some(1_711_000_100),
+        )
+        .expect("global model should build");
+
+        let payload = build_admin_global_model_response(&global_model, 1_711_000_100);
+
+        assert_eq!(payload["provider_count"], 3);
+        assert_eq!(payload["active_provider_count"], 3);
+        assert_eq!(payload["usage_count"], 1);
+    }
+}

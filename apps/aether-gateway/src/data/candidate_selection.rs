@@ -3,8 +3,8 @@ use aether_data_contracts::repository::candidate_selection::StoredMinimalCandida
 use aether_scheduler_core::{
     auth_constraints_allow_api_format, build_minimal_candidate_selection,
     collect_global_model_names_for_required_capability, normalize_api_format,
-    resolve_requested_global_model_name, SchedulerAuthConstraints,
-    SchedulerMinimalCandidateSelectionCandidate, SchedulerPriorityMode,
+    resolve_requested_global_model_name, BuildMinimalCandidateSelectionInput,
+    SchedulerAuthConstraints, SchedulerMinimalCandidateSelectionCandidate, SchedulerPriorityMode,
 };
 use async_trait::async_trait;
 use std::collections::BTreeSet;
@@ -167,17 +167,17 @@ pub(crate) async fn read_minimal_candidate_selection_with_priority_mode_and_affi
         return Ok(Vec::new());
     };
     let auth_constraints = auth_snapshot.map(auth_snapshot_constraints);
-    build_minimal_candidate_selection(
+    build_minimal_candidate_selection(BuildMinimalCandidateSelectionInput {
         rows,
-        &normalized_api_format,
+        normalized_api_format: &normalized_api_format,
         requested_model_name,
-        resolved_global_model_name.as_str(),
+        resolved_global_model_name: resolved_global_model_name.as_str(),
         require_streaming,
         required_capabilities,
-        auth_constraints.as_ref(),
+        auth_constraints: auth_constraints.as_ref(),
         affinity_key,
         priority_mode,
-    )
+    })
 }
 
 pub(crate) async fn read_global_model_names_for_required_capability(

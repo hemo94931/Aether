@@ -1,5 +1,5 @@
-use super::super::super::verify::admin_provider_ops_value_as_f64;
 use super::super::support::admin_provider_ops_checkin_data;
+use aether_admin::provider::ops::admin_provider_ops_value_as_f64;
 
 fn admin_provider_ops_message_contains_any(message: &str, indicators: &[&str]) -> bool {
     let normalized = message.trim().to_ascii_lowercase();

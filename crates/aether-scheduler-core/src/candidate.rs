@@ -5,16 +5,11 @@ use aether_data_contracts::repository::candidates::StoredRequestCandidate;
 use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey;
 use aether_data_contracts::DataLayerError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum SchedulerPriorityMode {
+    #[default]
     Provider,
     GlobalKey,
-}
-
-impl Default for SchedulerPriorityMode {
-    fn default() -> Self {
-        Self::Provider
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -36,6 +31,18 @@ pub struct SchedulerMinimalCandidateSelectionCandidate {
     pub global_model_name: String,
     pub selected_provider_model_name: String,
     pub mapping_matched_model: Option<String>,
+}
+
+pub struct BuildMinimalCandidateSelectionInput<'a> {
+    pub rows: Vec<StoredMinimalCandidateSelectionRow>,
+    pub normalized_api_format: &'a str,
+    pub requested_model_name: &'a str,
+    pub resolved_global_model_name: &'a str,
+    pub require_streaming: bool,
+    pub required_capabilities: Option<&'a serde_json::Value>,
+    pub auth_constraints: Option<&'a crate::SchedulerAuthConstraints>,
+    pub affinity_key: Option<&'a str>,
+    pub priority_mode: SchedulerPriorityMode,
 }
 
 pub fn candidate_supports_required_capability(
@@ -118,16 +125,20 @@ pub fn auth_api_key_concurrency_limit_reached(
 }
 
 pub fn build_minimal_candidate_selection(
-    rows: Vec<StoredMinimalCandidateSelectionRow>,
-    normalized_api_format: &str,
-    requested_model_name: &str,
-    resolved_global_model_name: &str,
-    require_streaming: bool,
-    required_capabilities: Option<&serde_json::Value>,
-    auth_constraints: Option<&crate::SchedulerAuthConstraints>,
-    affinity_key: Option<&str>,
-    priority_mode: SchedulerPriorityMode,
+    input: BuildMinimalCandidateSelectionInput<'_>,
 ) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, DataLayerError> {
+    let BuildMinimalCandidateSelectionInput {
+        rows,
+        normalized_api_format,
+        requested_model_name,
+        resolved_global_model_name,
+        require_streaming,
+        required_capabilities,
+        auth_constraints,
+        affinity_key,
+        priority_mode,
+    } = input;
+
     if normalized_api_format.is_empty() {
         return Ok(Vec::new());
     }
@@ -497,8 +508,8 @@ mod tests {
         candidate_is_selectable_with_runtime_state, candidate_supports_required_capability,
         collect_global_model_names_for_required_capability,
         collect_selectable_candidates_from_keys, reorder_candidates_by_scheduler_health,
-        CandidateRuntimeSelectabilityInput, SchedulerMinimalCandidateSelectionCandidate,
-        SchedulerPriorityMode,
+        BuildMinimalCandidateSelectionInput, CandidateRuntimeSelectabilityInput,
+        SchedulerMinimalCandidateSelectionCandidate, SchedulerPriorityMode,
     };
     use crate::SchedulerAuthConstraints;
 
@@ -647,17 +658,17 @@ mod tests {
             allowed_api_formats: Some(vec!["OPENAI:CHAT".to_string()]),
             allowed_models: Some(vec!["gpt-5".to_string()]),
         };
-        let candidates = build_minimal_candidate_selection(
-            vec![sample_row("1"), disallowed],
-            "openai:chat",
-            "gpt-5",
-            "gpt-5",
-            false,
-            None,
-            Some(&constraints),
-            None,
-            SchedulerPriorityMode::Provider,
-        )
+        let candidates = build_minimal_candidate_selection(BuildMinimalCandidateSelectionInput {
+            rows: vec![sample_row("1"), disallowed],
+            normalized_api_format: "openai:chat",
+            requested_model_name: "gpt-5",
+            resolved_global_model_name: "gpt-5",
+            require_streaming: false,
+            required_capabilities: None,
+            auth_constraints: Some(&constraints),
+            affinity_key: None,
+            priority_mode: SchedulerPriorityMode::Provider,
+        })
         .expect("candidate selection should build");
 
         assert_eq!(candidates.len(), 1);
@@ -699,17 +710,17 @@ mod tests {
         matching_capability.provider_priority = 10;
 
         let required_capabilities = serde_json::json!({"cache_1h": true});
-        let candidates = build_minimal_candidate_selection(
-            vec![missing_capability, matching_capability],
-            "openai:chat",
-            "gpt-5",
-            "gpt-5",
-            false,
-            Some(&required_capabilities),
-            None,
-            None,
-            SchedulerPriorityMode::Provider,
-        )
+        let candidates = build_minimal_candidate_selection(BuildMinimalCandidateSelectionInput {
+            rows: vec![missing_capability, matching_capability],
+            normalized_api_format: "openai:chat",
+            requested_model_name: "gpt-5",
+            resolved_global_model_name: "gpt-5",
+            require_streaming: false,
+            required_capabilities: Some(&required_capabilities),
+            auth_constraints: None,
+            affinity_key: None,
+            priority_mode: SchedulerPriorityMode::Provider,
+        })
         .expect("candidate selection should build");
 
         assert_eq!(candidates.len(), 2);

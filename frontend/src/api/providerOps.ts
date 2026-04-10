@@ -27,6 +27,7 @@ export type ProviderActionType =
 /** 操作状态 */
 export type ActionStatus =
   | 'success'
+  | 'pending'
   | 'auth_failed'
   | 'auth_expired'
   | 'rate_limited'

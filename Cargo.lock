@@ -146,6 +146,7 @@ dependencies = [
  "aether-provider-transport",
  "aether-runtime",
  "aether-scheduler-core",
+ "aether-testkit",
  "aether-usage-runtime",
  "aether-video-tasks-core",
  "aether-wallet",

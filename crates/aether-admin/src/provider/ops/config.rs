@@ -22,29 +22,6 @@ pub fn admin_provider_ops_connector_object(
         .and_then(serde_json::Value::as_object)
 }
 
-pub fn admin_provider_ops_is_supported_auth_type(auth_type: &str) -> bool {
-    matches!(
-        auth_type,
-        "api_key" | "session_login" | "oauth" | "cookie" | "none"
-    )
-}
-
-pub fn admin_provider_ops_uses_python_verify_fallback(
-    architecture_id: &str,
-    config: &serde_json::Map<String, serde_json::Value>,
-) -> bool {
-    let _ = architecture_id;
-    config
-        .get("proxy_enabled")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-        || config
-            .get("proxy_node_id")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-}
-
 pub fn admin_provider_ops_sensitive_placeholder_or_empty(
     value: Option<&serde_json::Value>,
 ) -> bool {

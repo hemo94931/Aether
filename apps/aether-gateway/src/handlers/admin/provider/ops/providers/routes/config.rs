@@ -1,3 +1,4 @@
+use super::super::balance_cache::clear_admin_provider_ops_balance_cache;
 use super::super::config::build_admin_provider_ops_saved_config_value;
 use super::super::support::AdminProviderOpsSaveConfigRequest;
 use crate::handlers::admin::request::AdminAppState;
@@ -56,6 +57,7 @@ pub(super) async fn handle_admin_provider_ops_save_config(
     else {
         return Ok(None);
     };
+    clear_admin_provider_ops_balance_cache(state, provider_id).await;
 
     Ok(Some(
         Json(json!({
@@ -99,6 +101,7 @@ pub(super) async fn handle_admin_provider_ops_delete_config(
         else {
             return Ok(None);
         };
+        clear_admin_provider_ops_balance_cache(state, provider_id).await;
     }
 
     Ok(Some(

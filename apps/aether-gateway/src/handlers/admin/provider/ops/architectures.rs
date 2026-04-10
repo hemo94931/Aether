@@ -3,35 +3,23 @@ use crate::handlers::admin::provider::shared::paths::{
 };
 use crate::handlers::admin::request::AdminRequestContext;
 use crate::GatewayError;
+use aether_admin::provider::ops::{get_architecture, list_architectures};
 use axum::{
     body::Body,
     http,
     response::{IntoResponse, Response},
     Json,
 };
-use serde_json::{json, Value};
 
-static ADMIN_PROVIDER_OPS_ARCHITECTURES_ALL: std::sync::LazyLock<Vec<Value>> =
-    std::sync::LazyLock::new(|| {
-        serde_json::from_str(include_str!("architectures.all.json"))
-            .expect("admin provider ops architectures fixture should parse")
-    });
-
-fn admin_provider_ops_architectures_list_payload() -> Vec<Value> {
-    ADMIN_PROVIDER_OPS_ARCHITECTURES_ALL
-        .iter()
-        .filter(|item| item.get("architecture_id").and_then(Value::as_str) != Some("generic_api"))
-        .cloned()
+fn admin_provider_ops_architectures_list_payload() -> Vec<serde_json::Value> {
+    list_architectures(false)
+        .into_iter()
+        .map(|architecture| architecture.api_payload())
         .collect()
 }
 
-fn admin_provider_ops_architecture_payload(architecture_id: &str) -> Option<Value> {
-    ADMIN_PROVIDER_OPS_ARCHITECTURES_ALL
-        .iter()
-        .find_map(|item| {
-            (item.get("architecture_id").and_then(Value::as_str) == Some(architecture_id))
-                .then(|| item.clone())
-        })
+fn admin_provider_ops_architecture_payload(architecture_id: &str) -> Option<serde_json::Value> {
+    get_architecture(architecture_id).map(|architecture| architecture.api_payload())
 }
 
 pub(super) async fn maybe_build_local_admin_provider_ops_architectures_response(
@@ -61,7 +49,7 @@ pub(super) async fn maybe_build_local_admin_provider_ops_architectures_response(
             return Ok(Some(
                 (
                     http::StatusCode::NOT_FOUND,
-                    Json(json!({ "detail": "架构不存在" })),
+                    Json(serde_json::json!({ "detail": "架构不存在" })),
                 )
                     .into_response(),
             ));
@@ -72,7 +60,7 @@ pub(super) async fn maybe_build_local_admin_provider_ops_architectures_response(
                 Some(payload) => Json(payload).into_response(),
                 None => (
                     http::StatusCode::NOT_FOUND,
-                    Json(json!({ "detail": format!("架构 {architecture_id} 不存在") })),
+                    Json(serde_json::json!({ "detail": format!("架构 {architecture_id} 不存在") })),
                 )
                     .into_response(),
             },

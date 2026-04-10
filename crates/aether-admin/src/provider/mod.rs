@@ -6,4 +6,3 @@ pub mod ops;
 pub mod pool;
 pub mod quota;
 pub mod state;
-pub mod verify;

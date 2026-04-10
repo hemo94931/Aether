@@ -714,11 +714,21 @@ impl SqlxUsageReadRepository {
             let request_count = row
                 .try_get::<i64, _>("request_count")
                 .map_postgres_err()?
-                .max(0) as u64;
+                .try_into()
+                .map_err(|_| {
+                    DataLayerError::UnexpectedValue(
+                        "usage.request_count aggregate is negative".to_string(),
+                    )
+                })?;
             let total_tokens = row
                 .try_get::<i64, _>("total_tokens")
                 .map_postgres_err()?
-                .max(0) as u64;
+                .try_into()
+                .map_err(|_| {
+                    DataLayerError::UnexpectedValue(
+                        "usage.total_tokens aggregate is negative".to_string(),
+                    )
+                })?;
             let total_cost_usd: f64 = row.try_get("total_cost_usd").map_postgres_err()?;
             if !total_cost_usd.is_finite() {
                 return Err(DataLayerError::UnexpectedValue(
@@ -728,7 +738,14 @@ impl SqlxUsageReadRepository {
             let last_used_at_unix_secs = row
                 .try_get::<Option<i64>, _>("last_used_at_unix_secs")
                 .map_postgres_err()?
-                .map(|value| value.max(0) as u64);
+                .map(|value| {
+                    value.try_into().map_err(|_| {
+                        DataLayerError::UnexpectedValue(
+                            "usage.last_used_at_unix_secs aggregate is negative".to_string(),
+                        )
+                    })
+                })
+                .transpose()?;
 
             summaries.insert(
                 provider_api_key_id.clone(),

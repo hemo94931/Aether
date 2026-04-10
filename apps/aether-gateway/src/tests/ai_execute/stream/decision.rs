@@ -1772,7 +1772,7 @@ async fn gateway_retries_next_local_openai_chat_stream_candidate_after_retryable
                 "provider-openai-local-stream-backup",
                 "endpoint-openai-local-stream-backup",
                 "key-openai-local-stream-backup",
-                10,
+                20,
                 2,
                 "gpt-5-upstream-backup",
             ),

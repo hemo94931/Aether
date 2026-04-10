@@ -79,6 +79,7 @@ pub(crate) async fn maybe_build_local_admin_provider_ops_providers_response(
                 &provider_id,
                 route_kind,
                 action_route.as_ref(),
+                request_context.query_string(),
                 request_body,
             )
             .await?

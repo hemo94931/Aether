@@ -192,7 +192,7 @@ async fn resolve_tunnel_owner_affinity_from_transport(
     state: PlannerAppState<'_>,
     transport: &GatewayProviderTransportSnapshot,
 ) -> TunnelOwnerAffinityBucket {
-    let Some(proxy) = resolve_transport_proxy_snapshot(&transport) else {
+    let Some(proxy) = resolve_transport_proxy_snapshot(transport) else {
         return TunnelOwnerAffinityBucket::Neutral;
     };
     if proxy.enabled == Some(false) {
