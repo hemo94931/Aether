@@ -11,6 +11,8 @@ ENV/
 .uv/
 *.egg-info/
 dist/
+!dist/aether-gateway-*
+!dist/frontend/
 !aether-hub/dist/aether-hub
 build/
 *.egg
