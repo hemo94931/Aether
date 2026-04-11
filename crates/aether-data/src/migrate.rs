@@ -168,23 +168,35 @@ mod tests {
     use super::MIGRATOR;
 
     #[test]
-    fn baseline_migration_keeps_empty_search_path_transaction_local() {
+    fn baseline_migration_restores_search_path_for_sqlx_bookkeeping() {
         let baseline = MIGRATOR
             .iter()
             .find(|migration| migration.version == 20260403000000)
             .expect("baseline migration should be embedded");
+        let first_empty_search_path = baseline
+            .sql
+            .find("SELECT pg_catalog.set_config('search_path', '', true);")
+            .expect("baseline migration should clear search_path transaction-local");
+        let restore_public_search_path = baseline
+            .sql
+            .rfind("SELECT pg_catalog.set_config('search_path', 'public', true);")
+            .expect("baseline migration should restore search_path before sqlx bookkeeping");
 
         assert!(
-            baseline
-                .sql
-                .contains("SELECT pg_catalog.set_config('search_path', '', true);"),
-            "baseline migration must keep empty search_path transaction-local so sqlx bookkeeping can still access _sqlx_migrations",
+            first_empty_search_path < restore_public_search_path,
+            "baseline migration must restore search_path after clearing it",
         );
         assert!(
             !baseline
                 .sql
                 .contains("SELECT pg_catalog.set_config('search_path', '', false);"),
             "baseline migration must not persist an empty search_path at session scope",
+        );
+        assert!(
+            !baseline
+                .sql
+                .contains("SELECT pg_catalog.set_config('search_path', 'public', false);"),
+            "baseline migration must not persist a restored search_path at session scope",
         );
     }
 }
