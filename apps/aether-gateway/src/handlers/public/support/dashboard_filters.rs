@@ -117,6 +117,11 @@ impl DashboardUsageTotals {
     }
 }
 
+fn dashboard_usage_should_count_in_summary(item: &StoredRequestUsageAudit) -> bool {
+    !matches!(item.status.as_str(), "pending" | "streaming")
+        && !matches!(item.provider_name.as_str(), "unknown" | "pending")
+}
+
 fn dashboard_cache_creation_tokens(item: &StoredRequestUsageAudit) -> u64 {
     let classified = item
         .cache_creation_ephemeral_5m_input_tokens
@@ -162,6 +167,39 @@ fn dashboard_format_integer(value: u64) -> String {
     formatted.chars().rev().collect()
 }
 
+fn dashboard_trimmed_decimal(value: f64, decimals: usize) -> String {
+    let mut formatted = format!("{value:.decimals$}");
+    while formatted.contains('.') && formatted.ends_with('0') {
+        formatted.pop();
+    }
+    if formatted.ends_with('.') {
+        formatted.pop();
+    }
+    formatted
+}
+
+fn dashboard_format_token_compact(value: u64) -> String {
+    if value < 1_000 {
+        return dashboard_format_integer(value);
+    }
+
+    if value < 1_000_000 {
+        let thousands = value as f64 / 1_000.0;
+        if thousands >= 100.0 {
+            return format!("{}K", thousands.round() as u64);
+        }
+        let decimals = if thousands >= 10.0 { 1 } else { 2 };
+        return format!("{}K", dashboard_trimmed_decimal(thousands, decimals));
+    }
+
+    let millions = value as f64 / 1_000_000.0;
+    if millions >= 100.0 {
+        return format!("{}M", millions.round() as u64);
+    }
+    let decimals = if millions >= 10.0 { 1 } else { 2 };
+    format!("{}M", dashboard_trimmed_decimal(millions, decimals))
+}
+
 fn dashboard_format_usd(value: f64) -> String {
     format!("${:.2}", dashboard_round_f64(value, 2))
 }
@@ -175,6 +213,16 @@ fn dashboard_format_token_subvalue(totals: &DashboardUsageTotals) -> String {
         "输入 {} / 输出 {}",
         dashboard_format_integer(totals.input_tokens),
         dashboard_format_integer(totals.output_tokens)
+    )
+}
+
+fn dashboard_format_today_token_subvalue(totals: &DashboardUsageTotals) -> String {
+    format!(
+        "输入 {} / 输出 {} · 写缓存 {} / 读缓存 {}",
+        dashboard_format_token_compact(totals.input_tokens),
+        dashboard_format_token_compact(totals.output_tokens),
+        dashboard_format_token_compact(totals.cache_creation_tokens),
+        dashboard_format_token_compact(totals.cache_read_tokens)
     )
 }
 
@@ -426,7 +474,10 @@ async fn dashboard_list_usage_for_range(
         })
         .await
     {
-        Ok(value) => Ok(value),
+        Ok(mut value) => {
+            value.retain(dashboard_usage_should_count_in_summary);
+            Ok(value)
+        }
         Err(err) => Err(build_auth_error_response(
             http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("{error_context}: {err:?}"),
@@ -612,8 +663,8 @@ pub(super) async fn handle_dashboard_stats_get(
             },
             {
                 "name": "今日 Token",
-                "value": dashboard_format_integer(today_totals.total_tokens),
-                "subValue": dashboard_format_token_subvalue(&today_totals),
+                "value": dashboard_format_token_compact(today_totals.total_tokens),
+                "subValue": dashboard_format_today_token_subvalue(&today_totals),
                 "icon": "Zap",
             },
             {
