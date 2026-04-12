@@ -6,6 +6,7 @@ use aether_data_contracts::repository::usage::{
 use aether_data_contracts::DataLayerError;
 use chrono::{DateTime, Utc};
 use flate2::{write::GzEncoder, Compression};
+use futures_util::TryStreamExt;
 use serde_json::{Map, Value};
 use sqlx::Row;
 use tracing::warn;
@@ -21,7 +22,8 @@ use super::{
     DISABLE_EXPIRED_API_KEY_SQL, EXPIRED_API_KEY_PRE_CLEAN_BATCH_SIZE,
     NULLIFY_REQUEST_CANDIDATE_API_KEY_BATCH_SQL, NULLIFY_USAGE_API_KEY_BATCH_SQL,
     SELECT_EXPIRED_ACTIVE_API_KEYS_SQL, SELECT_USAGE_BODY_COMPRESSION_BATCH_SQL,
-    SELECT_USAGE_HEADER_BATCH_SQL, SELECT_USAGE_LEGACY_BODY_REF_METADATA_BATCH_SQL,
+    SELECT_USAGE_BODY_COMPRESSION_ROW_SQL, SELECT_USAGE_HEADER_BATCH_SQL,
+    SELECT_USAGE_LEGACY_BODY_REF_METADATA_BATCH_SQL,
     SELECT_USAGE_STALE_BODY_BATCH_SQL, UPDATE_USAGE_BODY_COMPRESSION_SQL,
     UPDATE_USAGE_REQUEST_METADATA_SQL, UPSERT_USAGE_BODY_BLOB_SQL,
     UPSERT_USAGE_HTTP_AUDIT_BODY_REFS_SQL,
@@ -211,23 +213,20 @@ async fn cleanup_usage_header_fields(
 
     let mut total_cleaned = 0usize;
     loop {
-        let rows = sqlx::query(SELECT_USAGE_HEADER_BATCH_SQL)
+        let mut stream = sqlx::query(SELECT_USAGE_HEADER_BATCH_SQL)
             .bind(cutoff_time)
             .bind(newer_than)
             .bind(i64::try_from(batch_size).unwrap_or(i64::MAX))
-            .fetch_all(pool)
-            .await
-            .map_err(postgres_error)?
-            .into_iter()
-            .map(|row| {
-                Ok(UsageBodyCleanupRow {
-                    id: row.try_get::<String, _>("id").map_err(postgres_error)?,
-                    request_id: row
-                        .try_get::<String, _>("request_id")
-                        .map_err(postgres_error)?,
-                })
-            })
-            .collect::<Result<Vec<_>, DataLayerError>>()?;
+            .fetch(pool);
+        let mut rows = Vec::new();
+        while let Some(row) = stream.try_next().await.map_err(postgres_error)? {
+            rows.push(UsageBodyCleanupRow {
+                id: row.try_get::<String, _>("id").map_err(postgres_error)?,
+                request_id: row
+                    .try_get::<String, _>("request_id")
+                    .map_err(postgres_error)?,
+            });
+        }
         if rows.is_empty() {
             break;
         }
@@ -279,23 +278,20 @@ async fn cleanup_usage_stale_body_fields(
 
     let mut total_cleaned = 0usize;
     loop {
-        let rows = sqlx::query(SELECT_USAGE_STALE_BODY_BATCH_SQL)
+        let mut stream = sqlx::query(SELECT_USAGE_STALE_BODY_BATCH_SQL)
             .bind(cutoff_time)
             .bind(newer_than)
             .bind(i64::try_from(batch_size).unwrap_or(i64::MAX))
-            .fetch_all(pool)
-            .await
-            .map_err(postgres_error)?
-            .into_iter()
-            .map(|row| {
-                Ok(UsageBodyCleanupRow {
-                    id: row.try_get::<String, _>("id").map_err(postgres_error)?,
-                    request_id: row
-                        .try_get::<String, _>("request_id")
-                        .map_err(postgres_error)?,
-                })
-            })
-            .collect::<Result<Vec<_>, DataLayerError>>()?;
+            .fetch(pool);
+        let mut rows = Vec::new();
+        while let Some(row) = stream.try_next().await.map_err(postgres_error)? {
+            rows.push(UsageBodyCleanupRow {
+                id: row.try_get::<String, _>("id").map_err(postgres_error)?,
+                request_id: row
+                    .try_get::<String, _>("request_id")
+                    .map_err(postgres_error)?,
+            });
+        }
         if rows.is_empty() {
             break;
         }
@@ -354,53 +350,59 @@ async fn compress_usage_body_fields(
     let mut no_progress_count = 0usize;
     let batch_size = batch_size.clamp(1, 25);
     loop {
-        let rows = sqlx::query(SELECT_USAGE_BODY_COMPRESSION_BATCH_SQL)
+        let mut stream = sqlx::query(SELECT_USAGE_BODY_COMPRESSION_BATCH_SQL)
             .bind(cutoff_time)
             .bind(newer_than)
             .bind(i64::try_from(batch_size).unwrap_or(i64::MAX))
-            .fetch_all(pool)
-            .await
-            .map_err(postgres_error)?
-            .into_iter()
-            .map(|row| {
-                Ok(UsageBodyCompressionRow {
-                    id: row.try_get::<String, _>("id").map_err(postgres_error)?,
-                    request_id: row
-                        .try_get::<String, _>("request_id")
-                        .map_err(postgres_error)?,
-                    request_body: row
-                        .try_get::<Option<Value>, _>("request_body")
-                        .map_err(postgres_error)?,
-                    request_body_compressed: row
-                        .try_get::<Option<Vec<u8>>, _>("request_body_compressed")
-                        .map_err(postgres_error)?,
-                    response_body: row
-                        .try_get::<Option<Value>, _>("response_body")
-                        .map_err(postgres_error)?,
-                    response_body_compressed: row
-                        .try_get::<Option<Vec<u8>>, _>("response_body_compressed")
-                        .map_err(postgres_error)?,
-                    provider_request_body: row
-                        .try_get::<Option<Value>, _>("provider_request_body")
-                        .map_err(postgres_error)?,
-                    provider_request_body_compressed: row
-                        .try_get::<Option<Vec<u8>>, _>("provider_request_body_compressed")
-                        .map_err(postgres_error)?,
-                    client_response_body: row
-                        .try_get::<Option<Value>, _>("client_response_body")
-                        .map_err(postgres_error)?,
-                    client_response_body_compressed: row
-                        .try_get::<Option<Vec<u8>>, _>("client_response_body_compressed")
-                        .map_err(postgres_error)?,
-                })
-            })
-            .collect::<Result<Vec<_>, DataLayerError>>()?;
-        if rows.is_empty() {
+            .fetch(pool);
+        let mut ids = Vec::new();
+        while let Some(row) = stream.try_next().await.map_err(postgres_error)? {
+            ids.push(row.try_get::<String, _>("id").map_err(postgres_error)?);
+        }
+        if ids.is_empty() {
             break;
         }
 
         let mut batch_success = 0usize;
-        for row in rows {
+        for id in ids {
+            let row = sqlx::query(SELECT_USAGE_BODY_COMPRESSION_ROW_SQL)
+                .bind(&id)
+                .fetch_optional(pool)
+                .await
+                .map_err(postgres_error)?;
+            let Some(row) = row else {
+                continue;
+            };
+            let row = UsageBodyCompressionRow {
+                id: row.try_get::<String, _>("id").map_err(postgres_error)?,
+                request_id: row
+                    .try_get::<String, _>("request_id")
+                    .map_err(postgres_error)?,
+                request_body: row
+                    .try_get::<Option<Value>, _>("request_body")
+                    .map_err(postgres_error)?,
+                request_body_compressed: row
+                    .try_get::<Option<Vec<u8>>, _>("request_body_compressed")
+                    .map_err(postgres_error)?,
+                response_body: row
+                    .try_get::<Option<Value>, _>("response_body")
+                    .map_err(postgres_error)?,
+                response_body_compressed: row
+                    .try_get::<Option<Vec<u8>>, _>("response_body_compressed")
+                    .map_err(postgres_error)?,
+                provider_request_body: row
+                    .try_get::<Option<Value>, _>("provider_request_body")
+                    .map_err(postgres_error)?,
+                provider_request_body_compressed: row
+                    .try_get::<Option<Vec<u8>>, _>("provider_request_body_compressed")
+                    .map_err(postgres_error)?,
+                client_response_body: row
+                    .try_get::<Option<Value>, _>("client_response_body")
+                    .map_err(postgres_error)?,
+                client_response_body_compressed: row
+                    .try_get::<Option<Vec<u8>>, _>("client_response_body_compressed")
+                    .map_err(postgres_error)?,
+            };
             let detached = build_usage_body_externalization(&row)?;
             if detached.refs.any_present() {
                 let mut tx = pool.begin().await.map_err(postgres_error)?;
@@ -638,12 +640,9 @@ async fn cleanup_expired_api_keys(
     pool: &aether_data::postgres::PostgresPool,
     auto_delete_expired_keys: bool,
 ) -> Result<usize, DataLayerError> {
-    let expired_keys = sqlx::query(SELECT_EXPIRED_ACTIVE_API_KEYS_SQL)
-        .fetch_all(pool)
-        .await
-        .map_err(postgres_error)?;
+    let mut expired_keys = sqlx::query(SELECT_EXPIRED_ACTIVE_API_KEYS_SQL).fetch(pool);
     let mut cleaned = 0usize;
-    for row in &expired_keys {
+    while let Some(row) = expired_keys.try_next().await.map_err(postgres_error)? {
         let api_key_id = row.try_get::<String, _>("id").map_err(postgres_error)?;
         let key = ExpiredApiKeyRow {
             id: api_key_id.as_str(),

@@ -4,6 +4,7 @@ use aether_data_contracts::repository::usage::{
 use async_trait::async_trait;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use futures_util::future::BoxFuture;
+use futures_util::TryStreamExt;
 use serde_json::Map;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row};
@@ -1181,12 +1182,13 @@ impl SqlxUsageReadRepository {
         }
 
         builder.push(" ORDER BY \"usage\".created_at ASC, \"usage\".request_id ASC");
-        let rows = builder
-            .build()
-            .fetch_all(&self.pool)
-            .await
-            .map_postgres_err()?;
-        rows.iter().map(|row| map_usage_row(row, false)).collect()
+        let query = builder.build();
+        let mut rows = query.fetch(&self.pool);
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            items.push(map_usage_row(&row, false)?);
+        }
+        Ok(items)
     }
 
     pub async fn list_recent_usage_audits(
@@ -1205,12 +1207,13 @@ impl SqlxUsageReadRepository {
             .push_bind(i64::try_from(limit).map_err(|_| {
                 DataLayerError::InvalidInput(format!("invalid recent usage limit: {limit}"))
             })?);
-        let rows = builder
-            .build()
-            .fetch_all(&self.pool)
-            .await
-            .map_postgres_err()?;
-        rows.iter().map(|row| map_usage_row(row, false)).collect()
+        let query = builder.build();
+        let mut rows = query.fetch(&self.pool);
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            items.push(map_usage_row(&row, false)?);
+        }
+        Ok(items)
     }
 
     pub async fn summarize_total_tokens_by_api_key_ids(
@@ -1221,14 +1224,12 @@ impl SqlxUsageReadRepository {
             return Ok(std::collections::BTreeMap::new());
         }
 
-        let rows = sqlx::query(SUMMARIZE_TOTAL_TOKENS_BY_API_KEY_IDS_SQL)
+        let mut rows = sqlx::query(SUMMARIZE_TOTAL_TOKENS_BY_API_KEY_IDS_SQL)
             .bind(api_key_ids)
-            .fetch_all(&self.pool)
-            .await
-            .map_postgres_err()?;
+            .fetch(&self.pool);
 
         let mut totals = std::collections::BTreeMap::new();
-        for row in rows {
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
             let api_key_id: String = row.try_get("api_key_id").map_postgres_err()?;
             let total_tokens = row
                 .try_get::<i64, _>("total_tokens")
@@ -1248,14 +1249,12 @@ impl SqlxUsageReadRepository {
             return Ok(std::collections::BTreeMap::new());
         }
 
-        let rows = sqlx::query(SUMMARIZE_USAGE_BY_PROVIDER_API_KEY_IDS_SQL)
+        let mut rows = sqlx::query(SUMMARIZE_USAGE_BY_PROVIDER_API_KEY_IDS_SQL)
             .bind(provider_api_key_ids)
-            .fetch_all(&self.pool)
-            .await
-            .map_postgres_err()?;
+            .fetch(&self.pool);
 
         let mut summaries = std::collections::BTreeMap::new();
-        for row in rows {
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
             let provider_api_key_id: String =
                 row.try_get("provider_api_key_id").map_postgres_err()?;
             let request_count = row
@@ -1988,7 +1987,7 @@ fn prepare_usage_body_storage(value: Option<&Value>) -> Result<UsageBodyStorage,
     let bytes = serde_json::to_vec(value).map_err(|err| {
         DataLayerError::UnexpectedValue(format!("failed to serialize usage json: {err}"))
     })?;
-    if bytes.len() <= MAX_INLINE_USAGE_BODY_BYTES {
+    if bytes.len() == MAX_INLINE_USAGE_BODY_BYTES {
         return Ok(UsageBodyStorage {
             inline_json: Some(String::from_utf8(bytes).map_err(|err| {
                 DataLayerError::UnexpectedValue(format!(
