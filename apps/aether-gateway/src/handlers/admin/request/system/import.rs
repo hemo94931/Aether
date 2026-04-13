@@ -9,6 +9,9 @@ use crate::handlers::admin::shared::{
     normalize_json_array, normalize_json_object, normalize_string_list,
 };
 use crate::handlers::admin::system::shared::configs::apply_admin_system_config_update;
+use crate::handlers::admin::users::{
+    hash_admin_user_api_key, normalize_admin_user_api_formats, normalize_admin_user_string_list,
+};
 use crate::handlers::public::normalize_admin_base_url;
 use crate::GatewayError;
 use aether_admin::provider::endpoints as admin_provider_endpoints_pure;
@@ -18,8 +21,8 @@ use aether_admin::system::{
     parse_admin_system_config_import_request, parse_admin_system_config_nested_array,
     parse_admin_system_config_optional_object, AdminImportMergeMode,
     AdminSystemConfigEndpoint as ImportedEndpoint, AdminSystemConfigEntry as ImportedSystemConfig,
-    AdminSystemConfigGlobalModel as ImportedGlobalModel, AdminSystemConfigImportStats,
-    AdminSystemConfigLdap as ImportedLdapConfig,
+    AdminSystemConfigGlobalModel as ImportedGlobalModel, AdminSystemConfigImportCounter,
+    AdminSystemConfigImportStats, AdminSystemConfigLdap as ImportedLdapConfig,
     AdminSystemConfigOAuthProvider as ImportedOAuthProvider,
     AdminSystemConfigProvider as ImportedProvider,
     AdminSystemConfigProviderKey as ImportedProviderKey,
@@ -31,6 +34,7 @@ use aether_data::repository::auth_modules::StoredLdapModuleConfig;
 use aether_data::repository::oauth_providers::{
     EncryptedSecretUpdate, UpsertOAuthProviderConfigRecord,
 };
+use aether_data::repository::wallet::WalletLookupKey;
 use aether_data_contracts::repository::global_models::{
     AdminGlobalModelListQuery, AdminProviderModelListQuery, CreateAdminGlobalModelRecord,
     UpdateAdminGlobalModelRecord, UpsertAdminProviderModelRecord,
@@ -314,6 +318,297 @@ fn build_import_provider_model_record(
         config,
     )
     .map_err(|err| err.to_string())
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+struct AdminSystemUsersImportStats {
+    users: AdminSystemConfigImportCounter,
+    api_keys: AdminSystemConfigImportCounter,
+    standalone_keys: AdminSystemConfigImportCounter,
+    errors: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ImportedWalletTarget {
+    recharge_balance: f64,
+    gift_balance: f64,
+    limit_mode: String,
+    currency: String,
+    status: String,
+    total_recharged: f64,
+    total_consumed: f64,
+    total_refunded: f64,
+    total_adjusted: f64,
+    updated_at_unix_secs: Option<u64>,
+}
+
+fn imported_users_export_is_legacy(version: Option<&Value>) -> bool {
+    let Some(Value::String(version)) = version else {
+        return true;
+    };
+    let version = version.trim();
+    let mut parts = version.split('.');
+    let Some(major) = parts.next().and_then(|value| value.parse::<u32>().ok()) else {
+        return true;
+    };
+    let Some(minor) = parts.next().and_then(|value| value.parse::<u32>().ok()) else {
+        return true;
+    };
+    (major, minor) < (1, 3)
+}
+
+fn imported_object_field<'a>(
+    value: &'a Value,
+    field_name: &str,
+) -> Result<&'a Map<String, Value>, String> {
+    value
+        .as_object()
+        .ok_or_else(|| format!("{field_name} 必须是对象"))
+}
+
+fn imported_optional_string(value: Option<&Value>) -> Result<Option<String>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        _ => Err("字段必须是字符串".to_string()),
+    }
+}
+
+fn imported_optional_bool(value: Option<&Value>) -> Result<Option<bool>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(Value::String(raw)) => match raw.trim().to_ascii_lowercase().as_str() {
+            "true" => Ok(Some(true)),
+            "false" => Ok(Some(false)),
+            _ => Err("字段必须是布尔值".to_string()),
+        },
+        _ => Err("字段必须是布尔值".to_string()),
+    }
+}
+
+fn imported_optional_i32(value: Option<&Value>, field_name: &str) -> Result<Option<i32>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .ok_or_else(|| format!("{field_name} 必须是整数"))
+            .and_then(|value| i32::try_from(value).map_err(|_| format!("{field_name} 超出范围")))
+            .map(Some),
+        Some(Value::String(raw)) => raw
+            .trim()
+            .parse::<i32>()
+            .map(Some)
+            .map_err(|_| format!("{field_name} 必须是整数")),
+        _ => Err(format!("{field_name} 必须是整数")),
+    }
+}
+
+fn imported_optional_u64(value: Option<&Value>, field_name: &str) -> Result<Option<u64>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .ok_or_else(|| format!("{field_name} 必须是非负整数"))
+            .map(Some),
+        Some(Value::String(raw)) => raw
+            .trim()
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|_| format!("{field_name} 必须是非负整数")),
+        _ => Err(format!("{field_name} 必须是非负整数")),
+    }
+}
+
+fn imported_optional_f64(value: Option<&Value>, field_name: &str) -> Result<Option<f64>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| format!("{field_name} 必须是有限数值"))
+            .map(Some),
+        Some(Value::String(raw)) => raw
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| format!("{field_name} 必须是有限数值"))
+            .map(Some),
+        _ => Err(format!("{field_name} 必须是有限数值")),
+    }
+}
+
+fn imported_optional_json_object(
+    value: Option<&Value>,
+    field_name: &str,
+) -> Result<Option<Value>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(map)) => Ok(Some(Value::Object(map.clone()))),
+        _ => Err(format!("{field_name} 必须是对象")),
+    }
+}
+
+fn imported_optional_value(value: Option<&Value>) -> Option<Value> {
+    value.cloned().filter(|value| !value.is_null())
+}
+
+fn imported_rfc3339_to_unix_secs(
+    value: Option<&Value>,
+    field_name: &str,
+) -> Result<Option<u64>, String> {
+    let Some(value) = imported_optional_string(value)? else {
+        return Ok(None);
+    };
+    let parsed = chrono::DateTime::parse_from_rfc3339(&value)
+        .map_err(|_| format!("{field_name} 必须是 RFC3339 时间"))?;
+    Ok(Some(parsed.timestamp().max(0) as u64))
+}
+
+fn imported_string_list_from_value(
+    value: Option<&Value>,
+    field_name: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value {
+        Value::Null => Ok(None),
+        Value::Array(items) => Ok(Some(
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect(),
+        )),
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("null") {
+                return Ok(None);
+            }
+            if let Ok(decoded) = serde_json::from_str::<Value>(trimmed) {
+                return imported_string_list_from_value(Some(&decoded), field_name);
+            }
+            Ok(Some(vec![trimmed.to_string()]))
+        }
+        _ => Err(format!("{field_name} 必须是字符串列表")),
+    }
+}
+
+fn normalize_imported_user_string_list(
+    object: &Map<String, Value>,
+    field_name: &str,
+) -> Result<Option<Vec<String>>, String> {
+    normalize_admin_user_string_list(
+        imported_string_list_from_value(object.get(field_name), field_name)?,
+        field_name,
+    )
+}
+
+fn normalize_imported_user_api_formats(
+    object: &Map<String, Value>,
+    field_name: &str,
+) -> Result<Option<Vec<String>>, String> {
+    normalize_admin_user_api_formats(imported_string_list_from_value(
+        object.get(field_name),
+        field_name,
+    )?)
+}
+
+fn normalize_imported_wallet_target(
+    wallet: Option<&Map<String, Value>>,
+    unlimited: bool,
+) -> Result<ImportedWalletTarget, String> {
+    let gift_balance = imported_optional_f64(
+        wallet.and_then(|map| map.get("gift_balance")),
+        "wallet.gift_balance",
+    )?
+    .unwrap_or(0.0)
+    .max(0.0);
+    let recharge_balance = if let Some(map) = wallet {
+        if map.contains_key("recharge_balance") {
+            imported_optional_f64(map.get("recharge_balance"), "wallet.recharge_balance")?
+                .unwrap_or(0.0)
+        } else if map.contains_key("refundable_balance") {
+            imported_optional_f64(map.get("refundable_balance"), "wallet.refundable_balance")?
+                .unwrap_or(0.0)
+        } else {
+            let total_balance =
+                imported_optional_f64(map.get("balance"), "wallet.balance")?.unwrap_or(0.0);
+            (total_balance - gift_balance).max(0.0)
+        }
+    } else {
+        0.0
+    }
+    .max(0.0);
+    let limit_mode = if let Some(map) = wallet {
+        if let Some(mode) = imported_optional_string(map.get("limit_mode"))? {
+            match mode.to_ascii_lowercase().as_str() {
+                "finite" => "finite".to_string(),
+                "unlimited" => "unlimited".to_string(),
+                _ => return Err("wallet.limit_mode 仅支持 finite / unlimited".to_string()),
+            }
+        } else if imported_optional_bool(map.get("unlimited"))?.unwrap_or(unlimited) {
+            "unlimited".to_string()
+        } else {
+            "finite".to_string()
+        }
+    } else if unlimited {
+        "unlimited".to_string()
+    } else {
+        "finite".to_string()
+    };
+    let currency = imported_optional_string(wallet.and_then(|map| map.get("currency")))?
+        .unwrap_or_else(|| "USD".to_string());
+    let status = imported_optional_string(wallet.and_then(|map| map.get("status")))?
+        .unwrap_or_else(|| "active".to_string());
+    let total_recharged = imported_optional_f64(
+        wallet.and_then(|map| map.get("total_recharged")),
+        "wallet.total_recharged",
+    )?
+    .unwrap_or(recharge_balance);
+    let total_consumed = imported_optional_f64(
+        wallet.and_then(|map| map.get("total_consumed")),
+        "wallet.total_consumed",
+    )?
+    .unwrap_or(0.0);
+    let total_refunded = imported_optional_f64(
+        wallet.and_then(|map| map.get("total_refunded")),
+        "wallet.total_refunded",
+    )?
+    .unwrap_or(0.0);
+    let total_adjusted = imported_optional_f64(
+        wallet.and_then(|map| map.get("total_adjusted")),
+        "wallet.total_adjusted",
+    )?
+    .unwrap_or(gift_balance);
+    let updated_at_unix_secs = imported_rfc3339_to_unix_secs(
+        wallet.and_then(|map| map.get("updated_at")),
+        "wallet.updated_at",
+    )?;
+
+    Ok(ImportedWalletTarget {
+        recharge_balance,
+        gift_balance,
+        limit_mode,
+        currency,
+        status,
+        total_recharged,
+        total_consumed,
+        total_refunded,
+        total_adjusted,
+        updated_at_unix_secs,
+    })
 }
 
 impl<'a> AdminAppState<'a> {
@@ -1256,4 +1551,768 @@ impl<'a> AdminAppState<'a> {
             "stats": stats,
         })))
     }
+
+    pub(crate) async fn import_admin_system_users(
+        &self,
+        request_body: &Bytes,
+        operator_id: Option<&str>,
+    ) -> Result<Result<Value, (http::StatusCode, Value)>, GatewayError> {
+        if !self.has_auth_user_write_capability()
+            || !self.has_auth_wallet_write_capability()
+            || !self.has_auth_api_key_writer()
+        {
+            return Ok(Err((
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                json!({ "detail": "Admin system data unavailable" }),
+            )));
+        }
+        if request_body.len() > ADMIN_SYSTEM_IMPORT_MAX_SIZE_BYTES {
+            return Ok(Err(invalid_request("请求体大小不能超过 10MB")));
+        }
+
+        let root = match serde_json::from_slice::<Value>(request_body) {
+            Ok(Value::Object(map)) => map,
+            _ => return Ok(Err(invalid_request("请求数据验证失败"))),
+        };
+        let merge_mode = match serde_json::from_value::<AdminImportMergeMode>(
+            root.get("merge_mode").cloned().unwrap_or(Value::Null),
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                return Ok(Err(invalid_request(
+                    "merge_mode 仅支持 skip / overwrite / error",
+                )))
+            }
+        };
+        let legacy_export = imported_users_export_is_legacy(root.get("version"));
+        let empty = Vec::new();
+        let users = match root.get("users") {
+            Some(Value::Array(items)) => items,
+            Some(_) => return Ok(Err(invalid_request("users 必须是数组"))),
+            None => &empty,
+        };
+        let standalone_keys = match root.get("standalone_keys") {
+            Some(Value::Array(items)) => items,
+            Some(_) => return Ok(Err(invalid_request("standalone_keys 必须是数组"))),
+            None => &empty,
+        };
+
+        let standalone_owner_id = match operator_id {
+            Some(candidate) => match self.find_user_auth_by_id(candidate).await? {
+                Some(user) if user.role.eq_ignore_ascii_case("admin") => Some(user.id),
+                _ => None,
+            },
+            None => None,
+        };
+
+        macro_rules! invalid_value {
+            ($expr:expr) => {
+                match $expr {
+                    Ok(value) => value,
+                    Err(detail) => return Ok(Err(invalid_request(detail))),
+                }
+            };
+        }
+
+        let mut stats = AdminSystemUsersImportStats::default();
+
+        for (index, raw_user) in users.iter().enumerate() {
+            let user = match imported_object_field(raw_user, &format!("users[{index}]")) {
+                Ok(value) => value,
+                Err(detail) => return Ok(Err(invalid_request(detail))),
+            };
+            let role = invalid_value!(imported_optional_string(user.get("role")))
+                .unwrap_or_else(|| "user".to_string())
+                .to_ascii_lowercase();
+            if role == "admin" {
+                let skipped_email = invalid_value!(imported_optional_string(user.get("email")));
+                let skipped_username =
+                    invalid_value!(imported_optional_string(user.get("username")));
+                stats.users.skipped += 1;
+                stats.errors.push(format!(
+                    "跳过管理员用户: {}",
+                    skipped_email
+                        .or(skipped_username)
+                        .unwrap_or_else(|| format!("users[{index}]"))
+                ));
+                continue;
+            }
+
+            let email = invalid_value!(imported_optional_string(user.get("email")))
+                .map(|value| value.to_ascii_lowercase());
+            let email_verified =
+                invalid_value!(imported_optional_bool(user.get("email_verified"))).unwrap_or(true);
+            let username = invalid_value!(imported_optional_string(user.get("username")))
+                .or_else(|| {
+                    email.as_ref().map(|value| {
+                        value
+                            .split('@')
+                            .next()
+                            .unwrap_or(value.as_str())
+                            .to_string()
+                    })
+                })
+                .unwrap_or_else(|| format!("imported-user-{index}"));
+            let password_hash = invalid_value!(imported_optional_string(user.get("password_hash")));
+            let allowed_providers = invalid_value!(normalize_imported_user_string_list(
+                user,
+                "allowed_providers"
+            ));
+            let allowed_api_formats = invalid_value!(normalize_imported_user_api_formats(
+                user,
+                "allowed_api_formats"
+            ));
+            let allowed_models =
+                invalid_value!(normalize_imported_user_string_list(user, "allowed_models"));
+            let rate_limit =
+                invalid_value!(imported_optional_i32(user.get("rate_limit"), "rate_limit"));
+            let is_active =
+                invalid_value!(imported_optional_bool(user.get("is_active"))).unwrap_or(true);
+            let model_capability_settings = invalid_value!(imported_optional_json_object(
+                user.get("model_capability_settings"),
+                "model_capability_settings"
+            ));
+            let wallet_payload = match user.get("wallet") {
+                Some(Value::Object(map)) => Some(map),
+                Some(Value::Null) | None => None,
+                Some(_) => return Ok(Err(invalid_request("wallet 必须是对象"))),
+            };
+            let wallet_target =
+                invalid_value!(normalize_imported_wallet_target(wallet_payload, false));
+
+            let mut existing_user = if let Some(email) = email.as_deref() {
+                self.find_user_auth_by_identifier(email).await?
+            } else {
+                None
+            };
+            if existing_user.is_none() {
+                existing_user = self.find_user_auth_by_identifier(&username).await?;
+            }
+
+            let user_id = if let Some(existing) = existing_user {
+                if existing.role.eq_ignore_ascii_case("admin") {
+                    stats.users.skipped += 1;
+                    stats.errors.push(format!(
+                        "跳过管理员用户记录: {}",
+                        email.clone().unwrap_or(username.clone())
+                    ));
+                    continue;
+                }
+                match merge_mode {
+                    AdminImportMergeMode::Skip => {
+                        stats.users.skipped += 1;
+                        continue;
+                    }
+                    AdminImportMergeMode::Error => {
+                        return Ok(Err(invalid_request(format!(
+                            "用户 '{}' 已存在",
+                            email.clone().unwrap_or(username.clone())
+                        ))));
+                    }
+                    AdminImportMergeMode::Overwrite => {
+                        if let Some(email) = email.as_deref() {
+                            if self
+                                .is_other_user_auth_email_taken(email, &existing.id)
+                                .await?
+                            {
+                                return Ok(Err(invalid_request(format!("邮箱已存在: {email}"))));
+                            }
+                        }
+                        if self
+                            .is_other_user_auth_username_taken(&username, &existing.id)
+                            .await?
+                        {
+                            return Ok(Err(invalid_request(format!("用户名已存在: {username}"))));
+                        }
+                        let updated_profile = self
+                            .update_local_auth_user_profile(
+                                &existing.id,
+                                email.clone(),
+                                Some(username.clone()),
+                            )
+                            .await?;
+                        if updated_profile.is_none() {
+                            return Ok(Err((
+                                http::StatusCode::SERVICE_UNAVAILABLE,
+                                json!({ "detail": "Admin system data unavailable" }),
+                            )));
+                        }
+                        if let Some(password_hash) =
+                            password_hash.as_deref().filter(|value| !value.is_empty())
+                        {
+                            let updated_password = self
+                                .update_local_auth_user_password_hash(
+                                    &existing.id,
+                                    password_hash.to_string(),
+                                    chrono::Utc::now(),
+                                )
+                                .await?;
+                            if updated_password.is_none() {
+                                return Ok(Err((
+                                    http::StatusCode::SERVICE_UNAVAILABLE,
+                                    json!({ "detail": "Admin system data unavailable" }),
+                                )));
+                            }
+                        }
+                        let updated_admin_fields = self
+                            .update_local_auth_user_admin_fields(
+                                &existing.id,
+                                Some(role.clone()),
+                                user.contains_key("allowed_providers"),
+                                allowed_providers.clone(),
+                                user.contains_key("allowed_api_formats"),
+                                allowed_api_formats.clone(),
+                                user.contains_key("allowed_models"),
+                                allowed_models.clone(),
+                                rate_limit,
+                                Some(is_active),
+                            )
+                            .await?;
+                        if updated_admin_fields.is_none() {
+                            return Ok(Err((
+                                http::StatusCode::SERVICE_UNAVAILABLE,
+                                json!({ "detail": "Admin system data unavailable" }),
+                            )));
+                        }
+                        if user.contains_key("email_verified") {
+                            stats.errors.push(format!(
+                                "用户 '{}' 的 email_verified 当前不会覆盖已有值",
+                                email.clone().unwrap_or(username.clone())
+                            ));
+                        }
+                        if user.contains_key("model_capability_settings") {
+                            let _ = self
+                                .update_user_model_capability_settings(
+                                    &existing.id,
+                                    model_capability_settings.clone(),
+                                )
+                                .await?;
+                        }
+                        self.sync_imported_user_wallet(
+                            &existing.id,
+                            &wallet_target,
+                            &email.clone().unwrap_or(username.clone()),
+                        )
+                        .await?;
+                        stats.users.updated += 1;
+                        existing.id
+                    }
+                }
+            } else {
+                let created = self
+                    .create_local_auth_user_with_settings(
+                        email.clone(),
+                        email_verified,
+                        username.clone(),
+                        password_hash.unwrap_or_default(),
+                        role.clone(),
+                        allowed_providers.clone(),
+                        allowed_api_formats.clone(),
+                        allowed_models.clone(),
+                        rate_limit,
+                    )
+                    .await?;
+                let Some(created) = created else {
+                    return Ok(Err((
+                        http::StatusCode::SERVICE_UNAVAILABLE,
+                        json!({ "detail": "Admin system data unavailable" }),
+                    )));
+                };
+                if user.contains_key("model_capability_settings") {
+                    let _ = self
+                        .update_user_model_capability_settings(
+                            &created.id,
+                            model_capability_settings.clone(),
+                        )
+                        .await?;
+                }
+                self.sync_imported_user_wallet(
+                    &created.id,
+                    &wallet_target,
+                    &email.clone().unwrap_or(username.clone()),
+                )
+                .await?;
+                stats.users.created += 1;
+                created.id
+            };
+
+            let existing_api_keys = self
+                .list_auth_api_key_export_records_by_user_ids(std::slice::from_ref(&user_id))
+                .await?
+                .into_iter()
+                .filter(|record| !record.is_standalone)
+                .collect::<Vec<_>>();
+            let imported_api_keys = match user.get("api_keys") {
+                Some(Value::Array(items)) => items,
+                Some(_) => return Ok(Err(invalid_request("api_keys 必须是数组"))),
+                None => &empty,
+            };
+            let mut existing_api_keys_by_hash = existing_api_keys
+                .into_iter()
+                .map(|record| (record.key_hash.clone(), record))
+                .collect::<BTreeMap<_, _>>();
+
+            for (key_index, raw_key) in imported_api_keys.iter().enumerate() {
+                let key = match imported_object_field(
+                    raw_key,
+                    &format!("users[{index}].api_keys[{key_index}]"),
+                ) {
+                    Ok(value) => value,
+                    Err(detail) => return Ok(Err(invalid_request(detail))),
+                };
+                let Some((key_hash, key_encrypted)) =
+                    invalid_value!(self.resolve_imported_system_user_api_key_material(key))
+                else {
+                    stats.api_keys.skipped += 1;
+                    stats.errors.push(format!(
+                        "跳过无效 API Key: 用户 '{}'",
+                        email.clone().unwrap_or(username.clone())
+                    ));
+                    continue;
+                };
+                let name = invalid_value!(imported_optional_string(key.get("name")));
+                let allowed_providers = invalid_value!(normalize_imported_user_string_list(
+                    key,
+                    "allowed_providers"
+                ));
+                let allowed_api_formats = invalid_value!(normalize_imported_user_api_formats(
+                    key,
+                    "allowed_api_formats"
+                ));
+                let allowed_models =
+                    invalid_value!(normalize_imported_user_string_list(key, "allowed_models"));
+                let rate_limit =
+                    invalid_value!(imported_optional_i32(key.get("rate_limit"), "rate_limit"))
+                        .unwrap_or(if legacy_export { 0 } else { 0 });
+                let concurrent_limit = invalid_value!(imported_optional_i32(
+                    key.get("concurrent_limit"),
+                    "concurrent_limit"
+                ))
+                .unwrap_or(5);
+                let force_capabilities = imported_optional_value(key.get("force_capabilities"));
+                let is_active =
+                    invalid_value!(imported_optional_bool(key.get("is_active"))).unwrap_or(true);
+                let expires_at_unix_secs = invalid_value!(imported_rfc3339_to_unix_secs(
+                    key.get("expires_at"),
+                    "expires_at"
+                ));
+                let auto_delete_on_expiry =
+                    invalid_value!(imported_optional_bool(key.get("auto_delete_on_expiry")))
+                        .unwrap_or(false);
+                let total_requests = invalid_value!(imported_optional_u64(
+                    key.get("total_requests"),
+                    "total_requests"
+                ))
+                .unwrap_or(0);
+                let total_cost_usd = invalid_value!(imported_optional_f64(
+                    key.get("total_cost_usd"),
+                    "total_cost_usd"
+                ))
+                .unwrap_or(0.0);
+
+                if let Some(existing_key) = existing_api_keys_by_hash.get(&key_hash).cloned() {
+                    match merge_mode {
+                        AdminImportMergeMode::Skip => {
+                            stats.api_keys.skipped += 1;
+                        }
+                        AdminImportMergeMode::Error => {
+                            return Ok(Err(invalid_request(format!(
+                                "用户 '{}' 的 API Key 已存在",
+                                email.clone().unwrap_or(username.clone())
+                            ))));
+                        }
+                        AdminImportMergeMode::Overwrite => {
+                            let updated = self
+                                .update_user_api_key_basic(
+                                    aether_data::repository::auth::UpdateUserApiKeyBasicRecord {
+                                        user_id: user_id.clone(),
+                                        api_key_id: existing_key.api_key_id.clone(),
+                                        name: name.clone(),
+                                        rate_limit: Some(rate_limit),
+                                    },
+                                )
+                                .await?;
+                            if updated.is_none() {
+                                return Ok(Err((
+                                    http::StatusCode::SERVICE_UNAVAILABLE,
+                                    json!({ "detail": "Admin system data unavailable" }),
+                                )));
+                            }
+                            let _ = self
+                                .set_user_api_key_allowed_providers(
+                                    &user_id,
+                                    &existing_key.api_key_id,
+                                    allowed_providers.clone(),
+                                )
+                                .await?;
+                            let _ = self
+                                .set_user_api_key_force_capabilities(
+                                    &user_id,
+                                    &existing_key.api_key_id,
+                                    force_capabilities.clone(),
+                                )
+                                .await?;
+                            let _ = self
+                                .set_user_api_key_active(
+                                    &user_id,
+                                    &existing_key.api_key_id,
+                                    is_active,
+                                )
+                                .await?;
+                            if key.contains_key("allowed_api_formats")
+                                || key.contains_key("allowed_models")
+                                || key.contains_key("expires_at")
+                                || key.contains_key("auto_delete_on_expiry")
+                                || key.contains_key("total_requests")
+                                || key.contains_key("total_cost_usd")
+                            {
+                                stats.errors.push(format!(
+                                    "用户 '{}' 的现有 API Key 仅覆盖基础字段；高级导入字段保持原值",
+                                    email.clone().unwrap_or(username.clone())
+                                ));
+                            }
+                            stats.api_keys.updated += 1;
+                        }
+                    }
+                    continue;
+                }
+
+                let created = self
+                    .create_user_api_key(aether_data::repository::auth::CreateUserApiKeyRecord {
+                        user_id: user_id.clone(),
+                        api_key_id: Uuid::new_v4().to_string(),
+                        key_hash: key_hash.clone(),
+                        key_encrypted,
+                        name,
+                        allowed_providers,
+                        allowed_api_formats,
+                        allowed_models,
+                        rate_limit,
+                        concurrent_limit,
+                        force_capabilities,
+                        is_active,
+                        expires_at_unix_secs,
+                        auto_delete_on_expiry,
+                        total_requests,
+                        total_cost_usd,
+                    })
+                    .await?;
+                let Some(created) = created else {
+                    return Ok(Err((
+                        http::StatusCode::SERVICE_UNAVAILABLE,
+                        json!({ "detail": "Admin system data unavailable" }),
+                    )));
+                };
+                existing_api_keys_by_hash.insert(key_hash, created);
+                stats.api_keys.created += 1;
+            }
+        }
+
+        if standalone_keys.is_empty() {
+            return Ok(Ok(json!({
+                "message": "用户数据导入成功",
+                "stats": stats,
+            })));
+        }
+
+        let Some(standalone_owner_id) = standalone_owner_id else {
+            stats.standalone_keys.skipped += standalone_keys.len() as u64;
+            stats
+                .errors
+                .push("无法导入独立余额 Key: 当前管理员用户记录不存在".to_string());
+            return Ok(Ok(json!({
+                "message": "用户数据导入成功",
+                "stats": stats,
+            })));
+        };
+
+        let existing_standalone_keys = self
+            .list_auth_api_key_export_standalone_records()
+            .await?
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut existing_standalone_by_hash = existing_standalone_keys
+            .into_iter()
+            .map(|record| (record.key_hash.clone(), record))
+            .collect::<BTreeMap<_, _>>();
+
+        for (index, raw_key) in standalone_keys.iter().enumerate() {
+            let key = match imported_object_field(raw_key, &format!("standalone_keys[{index}]")) {
+                Ok(value) => value,
+                Err(detail) => return Ok(Err(invalid_request(detail))),
+            };
+            let Some((key_hash, key_encrypted)) =
+                invalid_value!(self.resolve_imported_system_user_api_key_material(key))
+            else {
+                stats.standalone_keys.skipped += 1;
+                stats
+                    .errors
+                    .push(format!("跳过无效独立余额 Key: standalone_keys[{index}]"));
+                continue;
+            };
+            let name = invalid_value!(imported_optional_string(key.get("name")));
+            let allowed_providers = invalid_value!(normalize_imported_user_string_list(
+                key,
+                "allowed_providers"
+            ));
+            let allowed_api_formats = invalid_value!(normalize_imported_user_api_formats(
+                key,
+                "allowed_api_formats"
+            ));
+            let allowed_models =
+                invalid_value!(normalize_imported_user_string_list(key, "allowed_models"));
+            let rate_limit =
+                invalid_value!(imported_optional_i32(key.get("rate_limit"), "rate_limit"))
+                    .unwrap_or(if legacy_export { 0 } else { 0 });
+            let concurrent_limit = invalid_value!(imported_optional_i32(
+                key.get("concurrent_limit"),
+                "concurrent_limit"
+            ))
+            .unwrap_or(5);
+            let force_capabilities = imported_optional_value(key.get("force_capabilities"));
+            let is_active =
+                invalid_value!(imported_optional_bool(key.get("is_active"))).unwrap_or(true);
+            let expires_at_unix_secs = invalid_value!(imported_rfc3339_to_unix_secs(
+                key.get("expires_at"),
+                "expires_at"
+            ));
+            let auto_delete_on_expiry =
+                invalid_value!(imported_optional_bool(key.get("auto_delete_on_expiry")))
+                    .unwrap_or(false);
+            let total_requests = invalid_value!(imported_optional_u64(
+                key.get("total_requests"),
+                "total_requests"
+            ))
+            .unwrap_or(0);
+            let total_cost_usd = invalid_value!(imported_optional_f64(
+                key.get("total_cost_usd"),
+                "total_cost_usd"
+            ))
+            .unwrap_or(0.0);
+            let wallet_payload = match key.get("wallet") {
+                Some(Value::Object(map)) => Some(map),
+                Some(Value::Null) | None => None,
+                Some(_) => return Ok(Err(invalid_request("wallet 必须是对象"))),
+            };
+            let unlimited =
+                invalid_value!(imported_optional_bool(key.get("unlimited"))).unwrap_or(false);
+            let wallet_target =
+                invalid_value!(normalize_imported_wallet_target(wallet_payload, unlimited));
+
+            if let Some(existing_key) = existing_standalone_by_hash.get(&key_hash).cloned() {
+                match merge_mode {
+                    AdminImportMergeMode::Skip => {
+                        stats.standalone_keys.skipped += 1;
+                    }
+                    AdminImportMergeMode::Error => {
+                        return Ok(Err(invalid_request("独立余额 Key 已存在")));
+                    }
+                    AdminImportMergeMode::Overwrite => {
+                        let updated = self
+                            .update_standalone_api_key_basic(
+                                aether_data::repository::auth::UpdateStandaloneApiKeyBasicRecord {
+                                    api_key_id: existing_key.api_key_id.clone(),
+                                    name: name.clone(),
+                                    rate_limit: Some(rate_limit),
+                                    allowed_providers: Some(allowed_providers.clone()),
+                                    allowed_api_formats: Some(allowed_api_formats.clone()),
+                                    allowed_models: Some(allowed_models.clone()),
+                                },
+                            )
+                            .await?;
+                        if updated.is_none() {
+                            return Ok(Err((
+                                http::StatusCode::SERVICE_UNAVAILABLE,
+                                json!({ "detail": "Admin system data unavailable" }),
+                            )));
+                        }
+                        let _ = self
+                            .set_standalone_api_key_active(&existing_key.api_key_id, is_active)
+                            .await?;
+                        if key.contains_key("expires_at")
+                            || key.contains_key("auto_delete_on_expiry")
+                            || key.contains_key("force_capabilities")
+                            || key.contains_key("total_requests")
+                            || key.contains_key("total_cost_usd")
+                            || key.contains_key("concurrent_limit")
+                        {
+                            stats.errors.push(
+                                "现有独立余额 Key 仅覆盖基础字段；高级导入字段保持原值".to_string(),
+                            );
+                        }
+                        self.sync_imported_api_key_wallet(
+                            &existing_key.api_key_id,
+                            &wallet_target,
+                            key.get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("独立余额 Key"),
+                        )
+                        .await?;
+                        stats.standalone_keys.updated += 1;
+                    }
+                }
+                continue;
+            }
+
+            let created = self
+                .create_standalone_api_key(
+                    aether_data::repository::auth::CreateStandaloneApiKeyRecord {
+                        user_id: standalone_owner_id.clone(),
+                        api_key_id: Uuid::new_v4().to_string(),
+                        key_hash: key_hash.clone(),
+                        key_encrypted,
+                        name,
+                        allowed_providers,
+                        allowed_api_formats,
+                        allowed_models,
+                        rate_limit,
+                        concurrent_limit,
+                        force_capabilities,
+                        is_active,
+                        expires_at_unix_secs,
+                        auto_delete_on_expiry,
+                        total_requests,
+                        total_cost_usd,
+                    },
+                )
+                .await?;
+            let Some(created) = created else {
+                return Ok(Err((
+                    http::StatusCode::SERVICE_UNAVAILABLE,
+                    json!({ "detail": "Admin system data unavailable" }),
+                )));
+            };
+            self.sync_imported_api_key_wallet(
+                &created.api_key_id,
+                &wallet_target,
+                created.name.as_deref().unwrap_or("独立余额 Key"),
+            )
+            .await?;
+            existing_standalone_by_hash.insert(key_hash, created);
+            stats.standalone_keys.created += 1;
+        }
+
+        Ok(Ok(json!({
+            "message": "用户数据导入成功",
+            "stats": stats,
+        })))
+    }
+
+    async fn sync_imported_user_wallet(
+        &self,
+        user_id: &str,
+        wallet_target: &ImportedWalletTarget,
+        label: &str,
+    ) -> Result<(), GatewayError> {
+        if self
+            .find_wallet(WalletLookupKey::UserId(user_id))
+            .await?
+            .is_none()
+        {
+            let created = self
+                .initialize_auth_user_wallet(user_id, 0.0, false)
+                .await?;
+            if created.is_none() {
+                return Err(GatewayError::Internal(format!(
+                    "failed to initialize imported wallet for {label}"
+                )));
+            }
+        }
+        self.sync_wallet_snapshot(WalletOwner::User(user_id), wallet_target, label)
+            .await
+    }
+
+    async fn sync_imported_api_key_wallet(
+        &self,
+        api_key_id: &str,
+        wallet_target: &ImportedWalletTarget,
+        label: &str,
+    ) -> Result<(), GatewayError> {
+        if self
+            .find_wallet(WalletLookupKey::ApiKeyId(api_key_id))
+            .await?
+            .is_none()
+        {
+            let created = self
+                .initialize_auth_api_key_wallet(api_key_id, 0.0, false)
+                .await?;
+            if created.is_none() {
+                return Err(GatewayError::Internal(format!(
+                    "failed to initialize imported wallet for {label}"
+                )));
+            }
+        }
+        self.sync_wallet_snapshot(WalletOwner::ApiKey(api_key_id), wallet_target, label)
+            .await
+    }
+
+    async fn sync_wallet_snapshot(
+        &self,
+        owner: WalletOwner<'_>,
+        wallet_target: &ImportedWalletTarget,
+        label: &str,
+    ) -> Result<(), GatewayError> {
+        let updated = match owner {
+            WalletOwner::User(user_id) => {
+                self.update_auth_user_wallet_snapshot(
+                    user_id,
+                    wallet_target.recharge_balance,
+                    wallet_target.gift_balance,
+                    &wallet_target.limit_mode,
+                    &wallet_target.currency,
+                    &wallet_target.status,
+                    wallet_target.total_recharged,
+                    wallet_target.total_consumed,
+                    wallet_target.total_refunded,
+                    wallet_target.total_adjusted,
+                    wallet_target.updated_at_unix_secs,
+                )
+                .await?
+            }
+            WalletOwner::ApiKey(api_key_id) => {
+                self.update_auth_api_key_wallet_snapshot(
+                    api_key_id,
+                    wallet_target.recharge_balance,
+                    wallet_target.gift_balance,
+                    &wallet_target.limit_mode,
+                    &wallet_target.currency,
+                    &wallet_target.status,
+                    wallet_target.total_recharged,
+                    wallet_target.total_consumed,
+                    wallet_target.total_refunded,
+                    wallet_target.total_adjusted,
+                    wallet_target.updated_at_unix_secs,
+                )
+                .await?
+            }
+        };
+        if updated.is_none() {
+            return Err(GatewayError::Internal(format!(
+                "failed to persist imported wallet snapshot for {label}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn resolve_imported_system_user_api_key_material(
+        &self,
+        key: &Map<String, Value>,
+    ) -> Result<Option<(String, Option<String>)>, String> {
+        let plaintext_key = imported_optional_string(key.get("key"))?;
+        if let Some(plaintext_key) = plaintext_key.filter(|value| !value.is_empty()) {
+            return Ok(Some((
+                hash_admin_user_api_key(&plaintext_key),
+                self.encrypt_catalog_secret_with_fallbacks(&plaintext_key),
+            )));
+        }
+        let key_hash = imported_optional_string(key.get("key_hash"))?;
+        let key_encrypted = imported_optional_string(key.get("key_encrypted"))?;
+        Ok(key_hash.map(|key_hash| (key_hash, key_encrypted)))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WalletOwner<'a> {
+    User(&'a str),
+    ApiKey(&'a str),
 }

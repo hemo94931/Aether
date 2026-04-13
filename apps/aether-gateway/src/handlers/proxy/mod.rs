@@ -31,8 +31,9 @@ use crate::control::{
     GatewayPublicRequestContext,
 };
 use crate::executor::{
-    maybe_execute_stream_request, maybe_execute_sync_request,
-    record_failed_usage_for_exhausted_request, LocalExecutionRequestOutcome,
+    build_local_execution_runtime_miss_context, maybe_execute_stream_request,
+    maybe_execute_sync_request, record_failed_usage_for_exhausted_request,
+    record_failed_usage_for_runtime_miss_request, LocalExecutionRequestOutcome,
 };
 use crate::frontdoor_loop_guard::{
     frontdoor_self_loop_public_ai_path, request_has_execution_runtime_loop_guard,
@@ -46,7 +47,7 @@ use crate::headers::{extract_or_generate_trace_id, should_skip_request_header};
 use crate::router::RequestAdmissionError;
 use crate::{
     AppState, FrontdoorUserRpmOutcome, GatewayError, GatewayFallbackMetricKind,
-    GatewayFallbackReason,
+    GatewayFallbackReason, LocalExecutionRuntimeMissDiagnostic,
 };
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{ConnectInfo, Request, State};
@@ -1013,9 +1014,16 @@ pub(crate) async fn proxy_request(
                 LocalExecutionRequestOutcome::NoPath => {}
             }
         }
-        let local_execution_runtime_miss_detail =
-            local_execution_runtime_miss_detail(control_decision)
-                .unwrap_or("AI public execution runtime miss did not match a Rust execution path");
+        let local_execution_runtime_miss_diagnostic =
+            state.take_local_execution_runtime_miss_diagnostic(&trace_id);
+        let local_execution_runtime_miss_detail = local_execution_runtime_miss_detail(
+            control_decision,
+            local_execution_runtime_miss_diagnostic.as_ref(),
+            stream_request,
+        )
+        .unwrap_or_else(|| {
+            "AI public execution runtime miss did not match a Rust execution path".to_string()
+        });
         state.record_fallback_metric(
             GatewayFallbackMetricKind::LocalExecutionRuntimeMiss,
             control_decision,
@@ -1023,30 +1031,87 @@ pub(crate) async fn proxy_request(
             Some(EXECUTION_PATH_LOCAL_EXECUTION_RUNTIME_MISS),
             GatewayFallbackReason::LocalExecutionPathRequired,
         );
-        let local_execution_runtime_miss_diagnostic =
-            state.take_local_execution_runtime_miss_diagnostic(&trace_id);
-        if let Some(diagnostic) = local_execution_runtime_miss_diagnostic.as_ref() {
-            warn!(
-                trace_id = %trace_id,
-                local_execution_runtime_miss_reason = %diagnostic.reason,
-                route_family = diagnostic.route_family.as_deref().unwrap_or_default(),
-                route_kind = diagnostic.route_kind.as_deref().unwrap_or_default(),
-                public_path = diagnostic.public_path.as_deref().unwrap_or_default(),
-                plan_kind = diagnostic.plan_kind.as_deref().unwrap_or_default(),
-                requested_model = diagnostic.requested_model.as_deref().unwrap_or_default(),
-                candidate_count = diagnostic.candidate_count.unwrap_or(0),
-                skipped_candidate_count = diagnostic.skipped_candidate_count.unwrap_or(0),
-                skip_reasons = diagnostic.skip_reasons_summary().unwrap_or_default(),
-                "gateway local execution runtime miss"
-            );
-        }
+        let local_execution_runtime_miss_context =
+            build_local_execution_runtime_miss_context(&state, &trace_id, control_decision).await;
+        warn!(
+            trace_id = %trace_id,
+            local_execution_runtime_miss_reason = local_execution_runtime_miss_diagnostic
+                .as_ref()
+                .map(|value| value.reason.as_str())
+                .unwrap_or("unknown"),
+            route_family = local_execution_runtime_miss_diagnostic
+                .as_ref()
+                .and_then(|value| value.route_family.as_deref())
+                .or_else(|| control_decision.and_then(|value| value.route_family.as_deref()))
+                .unwrap_or_default(),
+            route_kind = local_execution_runtime_miss_diagnostic
+                .as_ref()
+                .and_then(|value| value.route_kind.as_deref())
+                .or_else(|| control_decision.and_then(|value| value.route_kind.as_deref()))
+                .unwrap_or_default(),
+            public_path = local_execution_runtime_miss_diagnostic
+                .as_ref()
+                .and_then(|value| value.public_path.as_deref())
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .or_else(|| control_decision.map(GatewayControlDecision::proxy_path_and_query))
+                .unwrap_or_default(),
+            plan_kind = local_execution_runtime_miss_diagnostic
+                .as_ref()
+                .and_then(|value| value.plan_kind.as_deref())
+                .unwrap_or_default(),
+            requested_model = local_execution_runtime_miss_diagnostic
+                .as_ref()
+                .and_then(|value| value.requested_model.as_deref())
+                .unwrap_or_default(),
+            candidate_count = local_execution_runtime_miss_diagnostic
+                .as_ref()
+                .and_then(|value| value.candidate_count)
+                .unwrap_or(0),
+            persisted_candidate_count = local_execution_runtime_miss_context.persisted_candidate_count(),
+            skipped_candidate_count = local_execution_runtime_miss_diagnostic
+                .as_ref()
+                .and_then(|value| value.skipped_candidate_count)
+                .unwrap_or(0),
+            skip_reasons = local_execution_runtime_miss_diagnostic
+                .as_ref()
+                .and_then(|value| value.skip_reasons_summary())
+                .unwrap_or_default(),
+            auth_user_id = local_execution_runtime_miss_context
+                .auth_user_id
+                .as_deref()
+                .unwrap_or_default(),
+            auth_api_key_id = local_execution_runtime_miss_context
+                .auth_api_key_id
+                .as_deref()
+                .unwrap_or_default(),
+            auth_api_key_name = local_execution_runtime_miss_context
+                .auth_api_key_name
+                .as_deref()
+                .unwrap_or_default(),
+            request_candidates = local_execution_runtime_miss_context
+                .candidate_summary()
+                .unwrap_or_default(),
+            "gateway local execution runtime miss"
+        );
         if let Some(exhaustion) = local_execution_exhaustion {
             record_failed_usage_for_exhausted_request(
                 &state,
                 exhaustion,
                 &started_at,
-                local_execution_runtime_miss_detail,
+                local_execution_runtime_miss_detail.as_str(),
                 local_execution_runtime_miss_diagnostic.as_ref(),
+            )
+            .await;
+        } else {
+            record_failed_usage_for_runtime_miss_request(
+                &state,
+                &trace_id,
+                &started_at,
+                local_execution_runtime_miss_detail.as_str(),
+                control_decision,
+                local_execution_runtime_miss_diagnostic.as_ref(),
+                &local_execution_runtime_miss_context,
             )
             .await;
         }
@@ -1054,7 +1119,7 @@ pub(crate) async fn proxy_request(
             &trace_id,
             control_decision,
             http::StatusCode::SERVICE_UNAVAILABLE,
-            local_execution_runtime_miss_detail,
+            local_execution_runtime_miss_detail.as_str(),
         )?;
         if let Some(diagnostic) = local_execution_runtime_miss_diagnostic {
             if !diagnostic.reason.trim().is_empty() {
@@ -1095,6 +1160,41 @@ pub(crate) async fn proxy_request(
 
 fn local_execution_runtime_miss_detail(
     decision: Option<&GatewayControlDecision>,
+    diagnostic: Option<&LocalExecutionRuntimeMissDiagnostic>,
+    stream_request: bool,
+) -> Option<String> {
+    if let Some(detail) = local_execution_runtime_miss_model_detail(diagnostic, stream_request) {
+        return Some(detail);
+    }
+
+    local_execution_runtime_miss_route_detail(decision).map(ToOwned::to_owned)
+}
+
+fn local_execution_runtime_miss_model_detail(
+    diagnostic: Option<&LocalExecutionRuntimeMissDiagnostic>,
+    stream_request: bool,
+) -> Option<String> {
+    let diagnostic = diagnostic?;
+    if !matches!(
+        diagnostic.reason.as_str(),
+        "candidate_list_empty" | "all_candidates_skipped"
+    ) {
+        return None;
+    }
+
+    let requested_model = diagnostic
+        .requested_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let request_mode = if stream_request { "流式" } else { "同步" };
+    Some(format!(
+        "没有可用的提供商支持模型 {requested_model} 的{request_mode}请求"
+    ))
+}
+
+fn local_execution_runtime_miss_route_detail(
+    decision: Option<&GatewayControlDecision>,
 ) -> Option<&'static str> {
     let decision = decision?;
     if decision.route_class.as_deref() != Some("ai_public") {
@@ -1118,6 +1218,60 @@ fn local_execution_runtime_miss_detail(
             Some(GEMINI_PUBLIC_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        local_execution_runtime_miss_detail, GatewayControlDecision,
+        LocalExecutionRuntimeMissDiagnostic,
+    };
+
+    #[test]
+    fn runtime_miss_detail_returns_model_specific_stream_message_when_candidates_are_unavailable() {
+        let decision = GatewayControlDecision::synthetic(
+            "/v1/chat/completions",
+            Some("ai_public".to_string()),
+            Some("openai".to_string()),
+            Some("chat".to_string()),
+            Some("openai:chat".to_string()),
+        );
+        let diagnostic = LocalExecutionRuntimeMissDiagnostic {
+            reason: "candidate_list_empty".to_string(),
+            requested_model: Some("gpt-5.4".to_string()),
+            ..LocalExecutionRuntimeMissDiagnostic::default()
+        };
+
+        let detail = local_execution_runtime_miss_detail(Some(&decision), Some(&diagnostic), true);
+
+        assert_eq!(
+            detail.as_deref(),
+            Some("没有可用的提供商支持模型 gpt-5.4 的流式请求")
+        );
+    }
+
+    #[test]
+    fn runtime_miss_detail_falls_back_to_route_default_when_reason_is_not_model_unavailable() {
+        let decision = GatewayControlDecision::synthetic(
+            "/v1/messages",
+            Some("ai_public".to_string()),
+            Some("claude".to_string()),
+            Some("chat".to_string()),
+            Some("claude:chat".to_string()),
+        );
+        let diagnostic = LocalExecutionRuntimeMissDiagnostic {
+            reason: "missing_auth_context".to_string(),
+            requested_model: Some("claude-sonnet-4-5".to_string()),
+            ..LocalExecutionRuntimeMissDiagnostic::default()
+        };
+
+        let detail = local_execution_runtime_miss_detail(Some(&decision), Some(&diagnostic), false);
+
+        assert_eq!(
+            detail.as_deref(),
+            Some("Claude messages execution runtime miss did not match a Rust execution path")
+        );
     }
 }
 

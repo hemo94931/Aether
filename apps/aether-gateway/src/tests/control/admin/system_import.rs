@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use aether_crypto::{decrypt_python_fernet_ciphertext, DEVELOPMENT_ENCRYPTION_KEY};
+use aether_data::repository::auth::InMemoryAuthApiKeySnapshotRepository;
 use aether_data::repository::auth_modules::{
     AuthModuleReadRepository, InMemoryAuthModuleReadRepository, StoredOAuthProviderModuleConfig,
 };
@@ -9,6 +10,8 @@ use aether_data::repository::oauth_providers::{
     InMemoryOAuthProviderRepository, OAuthProviderReadRepository, StoredOAuthProviderConfig,
 };
 use aether_data::repository::provider_catalog::InMemoryProviderCatalogReadRepository;
+use aether_data::repository::users::StoredUserAuthRecord;
+use aether_data::repository::wallet::{StoredWalletSnapshot, WalletLookupKey};
 use aether_data_contracts::repository::global_models::{
     AdminGlobalModelListQuery, AdminProviderModelListQuery, GlobalModelReadRepository,
     StoredPublicGlobalModel,
@@ -213,6 +216,26 @@ fn fixture_system_import_payload(name: &str) -> Value {
     serde_json::from_str(raw).expect("fixture json should parse")
 }
 
+fn sample_import_admin_user(user_id: &str) -> StoredUserAuthRecord {
+    StoredUserAuthRecord::new(
+        user_id.to_string(),
+        Some("admin@example.com".to_string()),
+        true,
+        "admin".to_string(),
+        Some("admin-hash".to_string()),
+        "admin".to_string(),
+        "local".to_string(),
+        None,
+        None,
+        None,
+        true,
+        false,
+        Some(chrono::Utc::now()),
+        Some(chrono::Utc::now()),
+    )
+    .expect("admin user should build")
+}
+
 #[tokio::test]
 async fn gateway_imports_admin_system_config_locally_and_persists_data() {
     let upstream_hits = Arc::new(Mutex::new(0usize));
@@ -270,8 +293,9 @@ async fn gateway_imports_admin_system_config_locally_and_persists_data() {
         .await
         .expect("request should succeed");
 
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let payload: Value = response.json().await.expect("json body should parse");
+    assert_eq!(status, StatusCode::OK, "payload={payload}");
     assert_eq!(payload["message"], "配置导入成功");
     assert_eq!(payload["stats"]["global_models"]["created"], json!(1));
     assert_eq!(payload["stats"]["providers"]["created"], json!(1));
@@ -502,6 +526,238 @@ async fn gateway_accepts_legacy_admin_system_config_import_versions() {
     }
 
     gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_imports_admin_system_users_locally_and_persists_data() {
+    let user_wallet_updated_at = "2024-05-06T07:08:09Z";
+    let standalone_wallet_updated_at = "2024-06-07T08:09:10Z";
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().fallback(any(move |_request: Request| {
+        let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+        async move {
+            *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+            (StatusCode::OK, Body::from("unexpected upstream hit"))
+        }
+    }));
+
+    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::default());
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let state = AppState::new()
+        .expect("gateway should build")
+        .with_data_state_for_tests(
+            GatewayDataState::with_auth_api_key_repository_for_tests(Arc::clone(&auth_repository))
+                .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
+        )
+        .with_auth_users_for_tests([sample_import_admin_user("admin-user-123")])
+        .with_auth_wallets_for_tests(Vec::<StoredWalletSnapshot>::new());
+    let gateway = build_router_with_state(state.clone());
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/api/admin/system/users/import"))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "version": "1.3",
+            "merge_mode": "overwrite",
+            "users": [{
+                "email": "alice@example.com",
+                "email_verified": true,
+                "username": "alice",
+                "password_hash": "argon2:imported-user-hash",
+                "role": "user",
+                "allowed_providers": ["openai"],
+                "allowed_api_formats": ["openai:chat"],
+                "allowed_models": ["gpt-5"],
+                "rate_limit": 77,
+                "is_active": true,
+                "wallet": {
+                    "balance": 20.0,
+                    "recharge_balance": 15.0,
+                    "gift_balance": 5.0,
+                    "limit_mode": "finite",
+                    "currency": "CNY",
+                    "status": "locked",
+                    "total_recharged": 48.5,
+                    "total_consumed": 31.25,
+                    "total_refunded": 2.5,
+                    "total_adjusted": 7.75,
+                    "updated_at": user_wallet_updated_at
+                },
+                "api_keys": [{
+                    "key": "sk-user-import-1",
+                    "name": "Alice CLI",
+                    "allowed_providers": ["openai"],
+                    "allowed_api_formats": ["openai:chat"],
+                    "allowed_models": ["gpt-5"],
+                    "rate_limit": 60,
+                    "concurrent_limit": 3,
+                    "is_active": true,
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "auto_delete_on_expiry": false,
+                    "total_requests": 12,
+                    "total_cost_usd": 1.25
+                }]
+            }],
+            "standalone_keys": [{
+                "key": "sk-standalone-import-1",
+                "name": "Imported Standalone",
+                "allowed_providers": ["openai"],
+                "allowed_api_formats": ["openai:chat"],
+                "allowed_models": ["gpt-5"],
+                "rate_limit": 90,
+                "concurrent_limit": 4,
+                "is_active": true,
+                "expires_at": "2099-02-01T00:00:00Z",
+                "auto_delete_on_expiry": false,
+                "total_requests": 3,
+                "total_cost_usd": 0.75,
+                "wallet": {
+                    "balance": 30.0,
+                    "recharge_balance": 20.0,
+                    "gift_balance": 10.0,
+                    "limit_mode": "finite",
+                    "currency": "EUR",
+                    "status": "disabled",
+                    "total_recharged": 91.0,
+                    "total_consumed": 63.25,
+                    "total_refunded": 4.5,
+                    "total_adjusted": 13.0,
+                    "updated_at": standalone_wallet_updated_at
+                }
+            }]
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    let status = response.status();
+    let payload: Value = response.json().await.expect("json body should parse");
+    assert_eq!(status, StatusCode::OK, "payload={payload}");
+    assert_eq!(payload["message"], "用户数据导入成功");
+    assert_eq!(payload["stats"]["users"]["created"], json!(1));
+    assert_eq!(payload["stats"]["api_keys"]["created"], json!(1));
+    assert_eq!(payload["stats"]["standalone_keys"]["created"], json!(1));
+    assert_eq!(payload["stats"]["errors"], json!([]));
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    let imported_user = state
+        .find_user_auth_by_identifier("alice@example.com")
+        .await
+        .expect("user lookup should succeed")
+        .expect("imported user should exist");
+    assert_eq!(imported_user.username, "alice");
+    assert_eq!(
+        imported_user.password_hash.as_deref(),
+        Some("argon2:imported-user-hash")
+    );
+    assert_eq!(imported_user.role, "user");
+    assert_eq!(
+        imported_user.allowed_providers,
+        Some(vec!["openai".to_string()])
+    );
+    assert_eq!(
+        imported_user.allowed_api_formats,
+        Some(vec!["openai:chat".to_string()])
+    );
+    assert_eq!(
+        imported_user.allowed_models,
+        Some(vec!["gpt-5".to_string()])
+    );
+    assert!(imported_user.is_active);
+
+    let user_wallet = state
+        .find_wallet(WalletLookupKey::UserId(&imported_user.id))
+        .await
+        .expect("user wallet lookup should succeed")
+        .expect("user wallet should exist");
+    assert_eq!(user_wallet.balance, 15.0);
+    assert_eq!(user_wallet.gift_balance, 5.0);
+    assert_eq!(user_wallet.limit_mode, "finite");
+    assert_eq!(user_wallet.currency, "CNY");
+    assert_eq!(user_wallet.status, "locked");
+    assert_eq!(user_wallet.total_recharged, 48.5);
+    assert_eq!(user_wallet.total_consumed, 31.25);
+    assert_eq!(user_wallet.total_refunded, 2.5);
+    assert_eq!(user_wallet.total_adjusted, 7.75);
+    assert_eq!(
+        user_wallet.updated_at_unix_secs,
+        chrono::DateTime::parse_from_rfc3339(user_wallet_updated_at)
+            .expect("user wallet updated_at should parse")
+            .timestamp() as u64
+    );
+
+    let user_api_keys = state
+        .list_auth_api_key_export_records_by_user_ids(std::slice::from_ref(&imported_user.id))
+        .await
+        .expect("user api keys should load");
+    assert_eq!(user_api_keys.len(), 1);
+    assert_eq!(user_api_keys[0].name.as_deref(), Some("Alice CLI"));
+    assert_eq!(
+        user_api_keys[0].allowed_api_formats,
+        Some(vec!["openai:chat".to_string()])
+    );
+    assert_eq!(
+        decrypt_python_fernet_ciphertext(
+            DEVELOPMENT_ENCRYPTION_KEY,
+            user_api_keys[0]
+                .key_encrypted
+                .as_deref()
+                .expect("encrypted user api key should exist"),
+        )
+        .expect("user api key should decrypt"),
+        "sk-user-import-1"
+    );
+
+    let standalone_keys = state
+        .list_auth_api_key_export_standalone_records()
+        .await
+        .expect("standalone api keys should load");
+    assert_eq!(standalone_keys.len(), 1);
+    assert_eq!(
+        standalone_keys[0].name.as_deref(),
+        Some("Imported Standalone")
+    );
+    assert_eq!(
+        decrypt_python_fernet_ciphertext(
+            DEVELOPMENT_ENCRYPTION_KEY,
+            standalone_keys[0]
+                .key_encrypted
+                .as_deref()
+                .expect("encrypted standalone api key should exist"),
+        )
+        .expect("standalone api key should decrypt"),
+        "sk-standalone-import-1"
+    );
+
+    let standalone_wallet = state
+        .find_wallet(WalletLookupKey::ApiKeyId(&standalone_keys[0].api_key_id))
+        .await
+        .expect("standalone wallet lookup should succeed")
+        .expect("standalone wallet should exist");
+    assert_eq!(standalone_wallet.balance, 20.0);
+    assert_eq!(standalone_wallet.gift_balance, 10.0);
+    assert_eq!(standalone_wallet.limit_mode, "finite");
+    assert_eq!(standalone_wallet.currency, "EUR");
+    assert_eq!(standalone_wallet.status, "disabled");
+    assert_eq!(standalone_wallet.total_recharged, 91.0);
+    assert_eq!(standalone_wallet.total_consumed, 63.25);
+    assert_eq!(standalone_wallet.total_refunded, 4.5);
+    assert_eq!(standalone_wallet.total_adjusted, 13.0);
+    assert_eq!(
+        standalone_wallet.updated_at_unix_secs,
+        chrono::DateTime::parse_from_rfc3339(standalone_wallet_updated_at)
+            .expect("standalone wallet updated_at should parse")
+            .timestamp() as u64
+    );
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+    let _ = upstream_url;
 }
 
 #[tokio::test]

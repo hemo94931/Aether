@@ -106,6 +106,12 @@ pub(super) async fn build_admin_create_api_key_response(
                 allowed_models,
                 rate_limit,
                 concurrent_limit: 5,
+                force_capabilities: None,
+                is_active: true,
+                expires_at_unix_secs: None,
+                auto_delete_on_expiry: false,
+                total_requests: 0,
+                total_cost_usd: 0.0,
             },
         )
         .await?

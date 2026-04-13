@@ -111,22 +111,24 @@ const MAINTENANCE_DEFAULT_TIMEZONE: &str = "Asia/Shanghai";
 const DB_MAINTENANCE_TABLES: &[&str] = &["usage", "request_candidates", "audit_logs"];
 const SELECT_WALLET_DAILY_USAGE_AGGREGATION_ROWS_SQL: &str = r#"
 SELECT
-    wallet_id,
-    COUNT(id) AS total_requests,
-    CAST(COALESCE(SUM(total_cost_usd), 0) AS DOUBLE PRECISION) AS total_cost_usd,
-    COALESCE(SUM(input_tokens), 0) AS input_tokens,
-    COALESCE(SUM(output_tokens), 0) AS output_tokens,
-    COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_tokens,
-    COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read_tokens,
-    MIN(finalized_at) AS first_finalized_at,
-    MAX(finalized_at) AS last_finalized_at
+    usage_settlement_snapshots.wallet_id,
+    COUNT(usage.id) AS total_requests,
+    CAST(COALESCE(SUM(usage.total_cost_usd), 0) AS DOUBLE PRECISION) AS total_cost_usd,
+    COALESCE(SUM(usage.input_tokens), 0) AS input_tokens,
+    COALESCE(SUM(usage.output_tokens), 0) AS output_tokens,
+    COALESCE(SUM(usage.cache_creation_input_tokens), 0) AS cache_creation_tokens,
+    COALESCE(SUM(usage.cache_read_input_tokens), 0) AS cache_read_tokens,
+    MIN(COALESCE(usage_settlement_snapshots.finalized_at, usage.finalized_at)) AS first_finalized_at,
+    MAX(COALESCE(usage_settlement_snapshots.finalized_at, usage.finalized_at)) AS last_finalized_at
 FROM usage
-WHERE wallet_id IS NOT NULL
-  AND billing_status = 'settled'
-  AND total_cost_usd > 0
-  AND finalized_at >= $1
-  AND finalized_at < $2
-GROUP BY wallet_id
+JOIN usage_settlement_snapshots
+  ON usage_settlement_snapshots.request_id = usage.request_id
+WHERE usage_settlement_snapshots.wallet_id IS NOT NULL
+  AND COALESCE(usage_settlement_snapshots.billing_status, usage.billing_status) = 'settled'
+  AND usage.total_cost_usd > 0
+  AND COALESCE(usage_settlement_snapshots.finalized_at, usage.finalized_at) >= $1
+  AND COALESCE(usage_settlement_snapshots.finalized_at, usage.finalized_at) < $2
+GROUP BY usage_settlement_snapshots.wallet_id
 "#;
 const UPSERT_WALLET_DAILY_USAGE_LEDGER_SQL: &str = r#"
 INSERT INTO wallet_daily_usage_ledgers (
@@ -171,11 +173,13 @@ WHERE ledgers.billing_date = $1
   AND NOT EXISTS (
       SELECT 1
       FROM usage
-      WHERE usage.wallet_id = ledgers.wallet_id
-        AND usage.billing_status = 'settled'
+      JOIN usage_settlement_snapshots
+        ON usage_settlement_snapshots.request_id = usage.request_id
+      WHERE usage_settlement_snapshots.wallet_id = ledgers.wallet_id
+        AND COALESCE(usage_settlement_snapshots.billing_status, usage.billing_status) = 'settled'
         AND usage.total_cost_usd > 0
-        AND usage.finalized_at >= $3
-        AND usage.finalized_at < $4
+        AND COALESCE(usage_settlement_snapshots.finalized_at, usage.finalized_at) >= $3
+        AND COALESCE(usage_settlement_snapshots.finalized_at, usage.finalized_at) < $4
   )
 "#;
 const SELECT_STALE_PENDING_USAGE_BATCH_SQL: &str = r#"
@@ -258,7 +262,7 @@ USING doomed
 WHERE usage_rows.id = doomed.id
 "#;
 const SELECT_USAGE_HEADER_BATCH_SQL: &str = r#"
-SELECT id
+SELECT id, request_id
 FROM usage
 WHERE created_at < $1
   AND ($2::timestamptz IS NULL OR created_at >= $2)
@@ -267,6 +271,17 @@ WHERE created_at < $1
     OR response_headers IS NOT NULL
     OR provider_request_headers IS NOT NULL
     OR client_response_headers IS NOT NULL
+    OR EXISTS (
+      SELECT 1
+      FROM usage_http_audits
+      WHERE usage_http_audits.request_id = usage.request_id
+        AND (
+          usage_http_audits.request_headers IS NOT NULL
+          OR usage_http_audits.response_headers IS NOT NULL
+          OR usage_http_audits.provider_request_headers IS NOT NULL
+          OR usage_http_audits.client_response_headers IS NOT NULL
+        )
+    )
   )
 ORDER BY created_at ASC, id ASC
 LIMIT $3
@@ -279,8 +294,17 @@ SET request_headers = NULL,
     client_response_headers = NULL
 WHERE id = ANY($1)
 "#;
+const CLEAR_USAGE_HTTP_AUDIT_HEADERS_SQL: &str = r#"
+UPDATE usage_http_audits
+SET request_headers = NULL,
+    response_headers = NULL,
+    provider_request_headers = NULL,
+    client_response_headers = NULL,
+    updated_at = NOW()
+WHERE request_id = ANY($1)
+"#;
 const SELECT_USAGE_STALE_BODY_BATCH_SQL: &str = r#"
-SELECT id
+SELECT id, request_id
 FROM usage
 WHERE created_at < $1
   AND ($2::timestamptz IS NULL OR created_at >= $2)
@@ -293,6 +317,22 @@ WHERE created_at < $1
     OR response_body_compressed IS NOT NULL
     OR provider_request_body_compressed IS NOT NULL
     OR client_response_body_compressed IS NOT NULL
+    OR EXISTS (
+      SELECT 1
+      FROM usage_body_blobs
+      WHERE usage_body_blobs.request_id = usage.request_id
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM usage_http_audits
+      WHERE usage_http_audits.request_id = usage.request_id
+        AND (
+          usage_http_audits.request_body_ref IS NOT NULL
+          OR usage_http_audits.provider_request_body_ref IS NOT NULL
+          OR usage_http_audits.response_body_ref IS NOT NULL
+          OR usage_http_audits.client_response_body_ref IS NOT NULL
+        )
+    )
   )
 ORDER BY created_at ASC, id ASC
 LIMIT $3
@@ -309,24 +349,139 @@ SET request_body = NULL,
     client_response_body_compressed = NULL
 WHERE id = ANY($1)
 "#;
+const DELETE_USAGE_BODY_BLOBS_SQL: &str = r#"
+DELETE FROM usage_body_blobs
+WHERE request_id = ANY($1)
+"#;
+const CLEAR_USAGE_HTTP_AUDIT_BODY_REFS_SQL: &str = r#"
+UPDATE usage_http_audits
+SET request_body_ref = NULL,
+    provider_request_body_ref = NULL,
+    response_body_ref = NULL,
+    client_response_body_ref = NULL,
+    body_capture_mode = 'none',
+    updated_at = NOW()
+WHERE request_id = ANY($1)
+"#;
+const DELETE_EMPTY_USAGE_HTTP_AUDITS_SQL: &str = r#"
+DELETE FROM usage_http_audits
+WHERE request_id = ANY($1)
+  AND request_headers IS NULL
+  AND response_headers IS NULL
+  AND provider_request_headers IS NULL
+  AND client_response_headers IS NULL
+  AND request_body_ref IS NULL
+  AND provider_request_body_ref IS NULL
+  AND response_body_ref IS NULL
+  AND client_response_body_ref IS NULL
+"#;
 const SELECT_USAGE_BODY_COMPRESSION_BATCH_SQL: &str = r#"
 SELECT
     id,
+    request_id,
     request_body,
+    request_body_compressed,
     response_body,
+    response_body_compressed,
     provider_request_body,
+    provider_request_body_compressed,
     client_response_body
+    ,
+    client_response_body_compressed
 FROM usage
 WHERE created_at < $1
   AND ($2::timestamptz IS NULL OR created_at >= $2)
   AND (
     request_body IS NOT NULL
+    OR request_body_compressed IS NOT NULL
     OR response_body IS NOT NULL
+    OR response_body_compressed IS NOT NULL
     OR provider_request_body IS NOT NULL
+    OR provider_request_body_compressed IS NOT NULL
     OR client_response_body IS NOT NULL
+    OR client_response_body_compressed IS NOT NULL
   )
 ORDER BY created_at ASC, id ASC
 LIMIT $3
+"#;
+const SELECT_USAGE_LEGACY_BODY_REF_METADATA_BATCH_SQL: &str = r#"
+SELECT
+    id,
+    request_id,
+    request_metadata
+FROM usage
+WHERE created_at < $1
+  AND ($2::timestamptz IS NULL OR created_at >= $2)
+  AND request_metadata IS NOT NULL
+  AND (
+    request_metadata::jsonb ? 'request_body_ref'
+    OR request_metadata::jsonb ? 'provider_request_body_ref'
+    OR request_metadata::jsonb ? 'response_body_ref'
+    OR request_metadata::jsonb ? 'client_response_body_ref'
+  )
+ORDER BY created_at ASC, id ASC
+LIMIT $3
+"#;
+const UPSERT_USAGE_BODY_BLOB_SQL: &str = r#"
+INSERT INTO usage_body_blobs (
+  body_ref,
+  request_id,
+  body_field,
+  payload_gzip
+) VALUES (
+  $1,
+  $2,
+  $3,
+  $4
+)
+ON CONFLICT (body_ref)
+DO UPDATE SET
+  payload_gzip = EXCLUDED.payload_gzip,
+  updated_at = NOW()
+"#;
+const UPDATE_USAGE_REQUEST_METADATA_SQL: &str = r#"
+UPDATE usage
+SET request_metadata = $2::json,
+    updated_at = NOW()
+WHERE id = $1
+"#;
+const UPSERT_USAGE_HTTP_AUDIT_BODY_REFS_SQL: &str = r#"
+INSERT INTO usage_http_audits (
+  request_id,
+  request_body_ref,
+  provider_request_body_ref,
+  response_body_ref,
+  client_response_body_ref,
+  body_capture_mode
+) VALUES (
+  $1,
+  $2,
+  $3,
+  $4,
+  $5,
+  $6
+)
+ON CONFLICT (request_id)
+DO UPDATE SET
+  request_body_ref = COALESCE(EXCLUDED.request_body_ref, usage_http_audits.request_body_ref),
+  provider_request_body_ref = COALESCE(
+    EXCLUDED.provider_request_body_ref,
+    usage_http_audits.provider_request_body_ref
+  ),
+  response_body_ref = COALESCE(EXCLUDED.response_body_ref, usage_http_audits.response_body_ref),
+  client_response_body_ref = COALESCE(
+    EXCLUDED.client_response_body_ref,
+    usage_http_audits.client_response_body_ref
+  ),
+  body_capture_mode = CASE
+    WHEN EXCLUDED.request_body_ref IS NOT NULL
+      OR EXCLUDED.provider_request_body_ref IS NOT NULL
+      OR EXCLUDED.response_body_ref IS NOT NULL
+      OR EXCLUDED.client_response_body_ref IS NOT NULL
+    THEN EXCLUDED.body_capture_mode
+    ELSE usage_http_audits.body_capture_mode
+  END,
+  updated_at = NOW()
 "#;
 const UPDATE_USAGE_BODY_COMPRESSION_SQL: &str = r#"
 UPDATE usage
@@ -334,10 +489,10 @@ SET request_body = NULL,
     response_body = NULL,
     provider_request_body = NULL,
     client_response_body = NULL,
-    request_body_compressed = $2,
-    response_body_compressed = $3,
-    provider_request_body_compressed = $4,
-    client_response_body_compressed = $5
+    request_body_compressed = NULL,
+    response_body_compressed = NULL,
+    provider_request_body_compressed = NULL,
+    client_response_body_compressed = NULL
 WHERE id = $1
 "#;
 const SELECT_EXPIRED_ACTIVE_API_KEYS_SQL: &str = r#"
@@ -988,7 +1143,8 @@ struct PercentileSummary {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct UsageCleanupSummary {
-    body_compressed: usize,
+    body_externalized: usize,
+    legacy_body_refs_migrated: usize,
     body_cleaned: usize,
     header_cleaned: usize,
     keys_cleaned: usize,
@@ -1016,10 +1172,21 @@ struct UsageCleanupWindow {
 #[derive(Debug, Clone, PartialEq)]
 struct UsageBodyCompressionRow {
     id: String,
+    request_id: String,
     request_body: Option<Value>,
+    request_body_compressed: Option<Vec<u8>>,
     response_body: Option<Value>,
+    response_body_compressed: Option<Vec<u8>>,
     provider_request_body: Option<Value>,
+    provider_request_body_compressed: Option<Vec<u8>>,
     client_response_body: Option<Value>,
+    client_response_body_compressed: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UsageBodyCleanupRow {
+    id: String,
+    request_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

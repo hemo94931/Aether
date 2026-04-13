@@ -642,6 +642,94 @@ async fn gateway_handles_dashboard_recent_requests_locally_without_proxying_upst
 }
 
 #[tokio::test]
+async fn gateway_handles_dashboard_recent_requests_with_auth_user_fallback() {
+    let now = stable_dashboard_now();
+    let user = sample_auth_user(now);
+    let access_token = build_test_auth_token(
+        "access",
+        serde_json::Map::from_iter([
+            ("user_id".to_string(), json!(user.id)),
+            ("role".to_string(), json!(user.role)),
+            (
+                "created_at".to_string(),
+                json!(user.created_at.map(|value| value.to_rfc3339())),
+            ),
+            (
+                "session_id".to_string(),
+                json!("session-dashboard-recent-auth-fallback"),
+            ),
+        ]),
+        chrono::Utc::now() + chrono::Duration::hours(1),
+    );
+    let session = sample_auth_session(
+        "user-auth-1",
+        "session-dashboard-recent-auth-fallback",
+        "device-dashboard-recent-auth-fallback",
+        "refresh-dashboard-recent-auth-fallback",
+        now,
+    );
+    let mut usage = sample_user_usage_audit(
+        "usage-dashboard-auth-fallback-1",
+        "req-dashboard-auth-fallback-1",
+        "user-auth-1",
+        "gpt-5",
+        "OpenAI",
+        "completed",
+        now - chrono::Duration::minutes(5),
+    );
+    usage.username = Some("stale-alice".to_string());
+    let usage_repository = Arc::new(InMemoryUsageReadRepository::seed(vec![usage]));
+
+    let (gateway_url, upstream_hits, gateway_handle, upstream_handle) =
+        start_auth_gateway_with_builder(|| {
+            let wallet_repository =
+                Arc::new(InMemoryWalletRepository::seed(vec![sample_auth_wallet(
+                    "user-auth-1",
+                    now,
+                )]));
+            let data_state = GatewayDataState::with_user_wallet_and_usage_for_tests(
+                Arc::new(InMemoryUserReadRepository::seed_auth_users(Vec::<
+                    StoredUserAuthRecord,
+                >::new(
+                ))),
+                wallet_repository,
+                usage_repository,
+            );
+            AppState::new()
+                .expect("gateway should build")
+                .with_data_state_for_tests(data_state)
+                .with_auth_users_for_tests([user.clone()])
+                .with_auth_sessions_for_tests([session])
+        })
+        .await;
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{gateway_url}/api/dashboard/recent-requests?limit=5"
+        ))
+        .header("authorization", format!("Bearer {access_token}"))
+        .header(
+            "x-client-device-id",
+            "device-dashboard-recent-auth-fallback",
+        )
+        .header("user-agent", "AetherTest/1.0")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    let requests = payload["requests"].as_array().expect("array");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["id"], "usage-dashboard-auth-fallback-1");
+    assert_eq!(requests[0]["user"], "alice");
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
 async fn gateway_handles_dashboard_provider_status_locally_without_proxying_upstream() {
     let now = Utc::now();
     let user = sample_auth_user(now);

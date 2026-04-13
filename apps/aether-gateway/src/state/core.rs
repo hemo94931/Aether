@@ -252,6 +252,28 @@ impl AppState {
         Ok(true)
     }
 
+    pub async fn pending_postgres_migrations(
+        &self,
+    ) -> Result<Option<Vec<aether_data::migrate::PendingMigrationInfo>>, sqlx::migrate::MigrateError>
+    {
+        let Some(pool) = self.postgres_pool() else {
+            return Ok(None);
+        };
+        Ok(Some(aether_data::migrate::pending_migrations(&pool).await?))
+    }
+
+    pub async fn prepare_postgres_for_startup(
+        &self,
+    ) -> Result<Option<Vec<aether_data::migrate::PendingMigrationInfo>>, sqlx::migrate::MigrateError>
+    {
+        let Some(pool) = self.postgres_pool() else {
+            return Ok(None);
+        };
+        Ok(Some(
+            aether_data::migrate::prepare_database_for_startup(&pool).await?,
+        ))
+    }
+
     pub fn with_video_task_poller_config(mut self, interval: Duration, batch_size: usize) -> Self {
         self.video_task_poller = Some(VideoTaskPollerConfig {
             interval,
@@ -559,10 +581,17 @@ impl AppState {
         trace_id: &str,
         diagnostic: LocalExecutionRuntimeMissDiagnostic,
     ) {
-        self.local_execution_runtime_miss_diagnostics
+        let mut diagnostics = self
+            .local_execution_runtime_miss_diagnostics
             .lock()
-            .expect("local execution runtime miss diagnostics should lock")
-            .insert(trace_id.to_string(), diagnostic);
+            .expect("local execution runtime miss diagnostics should lock");
+        if diagnostics
+            .get(trace_id)
+            .is_some_and(|existing| should_preserve_runtime_miss_diagnostic(existing, &diagnostic))
+        {
+            return;
+        }
+        diagnostics.insert(trace_id.to_string(), diagnostic);
     }
 
     pub(crate) fn mutate_local_execution_runtime_miss_diagnostic<F>(
@@ -579,6 +608,17 @@ impl AppState {
         if let Some(diagnostic) = diagnostics.get_mut(trace_id) {
             mutate(diagnostic);
         }
+    }
+
+    pub(crate) fn local_execution_runtime_miss_diagnostic_has_candidate_signal(
+        &self,
+        trace_id: &str,
+    ) -> bool {
+        self.local_execution_runtime_miss_diagnostics
+            .lock()
+            .expect("local execution runtime miss diagnostics should lock")
+            .get(trace_id)
+            .is_some_and(runtime_miss_diagnostic_has_candidate_signal)
     }
 
     pub(crate) fn take_local_execution_runtime_miss_diagnostic(
@@ -734,4 +774,20 @@ impl AppState {
         }
         tasks
     }
+}
+
+fn should_preserve_runtime_miss_diagnostic(
+    existing: &LocalExecutionRuntimeMissDiagnostic,
+    next: &LocalExecutionRuntimeMissDiagnostic,
+) -> bool {
+    runtime_miss_diagnostic_has_candidate_signal(existing)
+        && !runtime_miss_diagnostic_has_candidate_signal(next)
+}
+
+fn runtime_miss_diagnostic_has_candidate_signal(
+    diagnostic: &LocalExecutionRuntimeMissDiagnostic,
+) -> bool {
+    diagnostic.candidate_count.unwrap_or(0) > 0
+        || diagnostic.skipped_candidate_count.unwrap_or(0) > 0
+        || !diagnostic.skip_reasons.is_empty()
 }

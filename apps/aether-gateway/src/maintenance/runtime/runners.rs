@@ -188,7 +188,8 @@ pub(super) async fn run_stats_aggregation_once(
 
 pub(super) async fn run_usage_cleanup_once(data: &GatewayDataState) -> Result<(), DataLayerError> {
     let summary = perform_usage_cleanup_once(data).await?;
-    if summary.body_compressed > 0
+    if summary.body_externalized > 0
+        || summary.legacy_body_refs_migrated > 0
         || summary.body_cleaned > 0
         || summary.header_cleaned > 0
         || summary.keys_cleaned > 0
@@ -198,7 +199,8 @@ pub(super) async fn run_usage_cleanup_once(data: &GatewayDataState) -> Result<()
             event_name = "usage_cleanup_completed",
             log_type = "ops",
             worker = "usage_cleanup",
-            body_compressed = summary.body_compressed,
+            body_externalized = summary.body_externalized,
+            legacy_body_refs_migrated = summary.legacy_body_refs_migrated,
             body_cleaned = summary.body_cleaned,
             header_cleaned = summary.header_cleaned,
             keys_cleaned = summary.keys_cleaned,

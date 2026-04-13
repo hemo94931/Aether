@@ -107,6 +107,7 @@ dependencies = [
  "aether-wallet",
  "async-trait",
  "chrono",
+ "flate2",
  "futures-util",
  "redis",
  "serde",

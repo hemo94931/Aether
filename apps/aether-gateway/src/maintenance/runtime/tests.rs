@@ -28,7 +28,8 @@ use super::{
     stats_hourly_aggregation_target_hour, summarize_postgres_pool, usage_cleanup_settings,
     usage_cleanup_window, wallet_daily_usage_aggregation_target, AppState, DbMaintenanceRunSummary,
     FailedPendingUsageRow, GatewayDataState, ProxyUpgradeRolloutProbeConfig, StalePendingUsageRow,
-    UsageCleanupSettings, USAGE_CLEANUP_HOUR, USAGE_CLEANUP_MINUTE,
+    UsageCleanupSettings, DELETE_STALE_WALLET_DAILY_USAGE_LEDGERS_SQL,
+    SELECT_WALLET_DAILY_USAGE_AGGREGATION_ROWS_SQL, USAGE_CLEANUP_HOUR, USAGE_CLEANUP_MINUTE,
     WALLET_DAILY_USAGE_AGGREGATION_HOUR, WALLET_DAILY_USAGE_AGGREGATION_MINUTE,
 };
 
@@ -75,6 +76,18 @@ async fn spawn_proxy_upgrade_rollout_worker_skips_when_system_config_unavailable
 #[tokio::test]
 async fn spawn_pool_monitor_worker_skips_when_postgres_unavailable() {
     assert!(spawn_pool_monitor_worker(Arc::new(GatewayDataState::disabled())).is_none());
+}
+
+#[test]
+fn wallet_daily_usage_queries_use_settlement_snapshots_for_wallet_identity() {
+    assert!(
+        SELECT_WALLET_DAILY_USAGE_AGGREGATION_ROWS_SQL.contains("JOIN usage_settlement_snapshots")
+    );
+    assert!(SELECT_WALLET_DAILY_USAGE_AGGREGATION_ROWS_SQL
+        .contains("usage_settlement_snapshots.wallet_id"));
+    assert!(DELETE_STALE_WALLET_DAILY_USAGE_LEDGERS_SQL.contains("JOIN usage_settlement_snapshots"));
+    assert!(DELETE_STALE_WALLET_DAILY_USAGE_LEDGERS_SQL
+        .contains("usage_settlement_snapshots.wallet_id = ledgers.wallet_id"));
 }
 
 fn sample_connected_proxy_node(

@@ -2,7 +2,9 @@ use crate::handlers::admin::provider::shared::payloads::AdminProviderUpdatePatch
 use crate::handlers::admin::provider::shared::support::{
     normalize_provider_billing_type, parse_optional_rfc3339_unix_secs,
 };
-use crate::handlers::admin::provider::write::normalize::normalize_provider_type_input;
+use crate::handlers::admin::provider::write::normalize::{
+    normalize_pool_advanced_config, normalize_provider_type_input,
+};
 use crate::handlers::admin::request::AdminAppState;
 use crate::handlers::admin::shared::normalize_json_object;
 use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogProvider;
@@ -252,7 +254,7 @@ pub(crate) async fn build_admin_update_provider_record(
         if fields.is_null("pool_advanced") {
             config_map.remove("pool_advanced");
         } else {
-            let value = normalize_json_object(payload.pool_advanced, "pool_advanced")?
+            let value = normalize_pool_advanced_config(payload.pool_advanced)?
                 .ok_or_else(|| "pool_advanced 必须是 JSON 对象".to_string())?;
             config_map.insert("pool_advanced".to_string(), value);
         }

@@ -1060,23 +1060,21 @@ pub(super) async fn handle_dashboard_recent_requests_get(
         .into_iter()
         .collect::<Vec<_>>();
     let users_by_id: BTreeMap<String, aether_data::repository::users::StoredUserSummary> =
-        if state.has_user_data_reader() && !user_ids.is_empty() {
-            match state.list_users_by_ids(&user_ids).await {
-                Ok(value) => value
-                    .into_iter()
-                    .map(|user| (user.id.clone(), user))
-                    .collect(),
-                Err(err) => {
-                    return build_auth_error_response(
-                        http::StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("dashboard user lookup failed: {err:?}"),
-                        false,
-                    )
-                }
+        match state.resolve_auth_user_summaries_by_ids(&user_ids).await {
+            Ok(value) => value,
+            Err(err) => {
+                return build_auth_error_response(
+                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("dashboard user lookup failed: {err:?}"),
+                    false,
+                )
             }
-        } else {
-            BTreeMap::new()
         };
+    let mut usernames_by_id: BTreeMap<String, String> = users_by_id
+        .iter()
+        .filter(|(_, user)| !user.username.trim().is_empty())
+        .map(|(user_id, user)| (user_id.clone(), user.username.clone()))
+        .collect();
 
     let requests = usage
         .into_iter()
@@ -1084,9 +1082,13 @@ pub(super) async fn handle_dashboard_recent_requests_get(
             let username = item
                 .user_id
                 .as_ref()
-                .and_then(|user_id| users_by_id.get(user_id))
-                .map(|user| user.username.clone())
-                .or(item.username.clone())
+                .and_then(|user_id| usernames_by_id.get(user_id))
+                .cloned()
+                .or_else(|| {
+                    (!state.has_auth_user_data_reader())
+                        .then(|| item.username.clone())
+                        .flatten()
+                })
                 .unwrap_or_else(|| "Unknown".to_string());
             json!({
                 "id": item.id,

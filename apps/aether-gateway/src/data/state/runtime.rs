@@ -639,6 +639,16 @@ impl GatewayDataState {
         }
     }
 
+    pub(crate) async fn resolve_request_usage_body_ref(
+        &self,
+        body_ref: &str,
+    ) -> Result<Option<serde_json::Value>, DataLayerError> {
+        match &self.usage_reader {
+            Some(repository) => repository.resolve_body_ref(body_ref).await,
+            None => Ok(None),
+        }
+    }
+
     pub(crate) async fn list_usage_audits(
         &self,
         query: &UsageAuditListQuery,
