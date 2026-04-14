@@ -565,6 +565,27 @@ pub(super) async fn handle_dashboard_stats_get(
         Err(response) => return response,
     };
     let is_admin = dashboard_role_is_admin(&auth.user.role);
+
+    let cache_identity = if is_admin {
+        "admin"
+    } else {
+        auth.user.id.as_str()
+    };
+    let query_string = request_context
+        .request_query_string
+        .as_deref()
+        .unwrap_or("");
+    let cache_key = format!("stats:{cache_identity}:{query_string}");
+    let cache_ttl = std::time::Duration::from_secs(15);
+
+    if let Some(cached) = state.dashboard_response_cache.get(&cache_key, cache_ttl) {
+        return Response::builder()
+            .status(http::StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(cached))
+            .unwrap_or_else(|_| http::StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    }
+
     let query = request_context.request_query_string.as_deref();
     let summary_range = match dashboard_parse_stats_range(query) {
         Ok(value) => value,
@@ -723,7 +744,7 @@ pub(super) async fn handle_dashboard_stats_get(
             },
             "token_breakdown": token_breakdown,
         });
-        return Json(payload).into_response();
+        return dashboard_cached_json_response(state, cache_key, cache_ttl, &payload);
     }
 
     let wallet = if state.has_wallet_data_reader() {
@@ -801,7 +822,7 @@ pub(super) async fn handle_dashboard_stats_get(
         "token_breakdown": token_breakdown,
         "monthly_cost": dashboard_round_f64(period_totals.total_cost_usd, 4),
     });
-    Json(payload).into_response()
+    dashboard_cached_json_response(state, cache_key, cache_ttl, &payload)
 }
 
 fn dashboard_daily_aggregate_record(
@@ -841,6 +862,27 @@ pub(super) async fn handle_dashboard_daily_stats_get(
         Err(response) => return response,
     };
     let is_admin = dashboard_role_is_admin(&auth.user.role);
+
+    let cache_identity = if is_admin {
+        "admin"
+    } else {
+        auth.user.id.as_str()
+    };
+    let query_string = request_context
+        .request_query_string
+        .as_deref()
+        .unwrap_or("");
+    let cache_key = format!("daily:{cache_identity}:{query_string}");
+    let cache_ttl = std::time::Duration::from_secs(30);
+
+    if let Some(cached) = state.dashboard_response_cache.get(&cache_key, cache_ttl) {
+        return Response::builder()
+            .status(http::StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(cached))
+            .unwrap_or_else(|_| http::StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    }
+
     let query = request_context.request_query_string.as_deref();
     let range = match dashboard_parse_daily_range(query) {
         Ok(value) => value,
@@ -1030,7 +1072,7 @@ pub(super) async fn handle_dashboard_daily_stats_get(
     if let Some(provider_summary_payload) = provider_summary_payload {
         payload["provider_summary"] = json!(provider_summary_payload);
     }
-    Json(payload).into_response()
+    dashboard_cached_json_response(state, cache_key, cache_ttl, &payload)
 }
 
 pub(super) async fn handle_dashboard_recent_requests_get(
@@ -1134,6 +1176,23 @@ pub(super) async fn handle_dashboard_provider_status_get(
         Ok(value) => value,
         Err(response) => return response,
     };
+
+    let cache_identity = if dashboard_role_is_admin(&auth.user.role) {
+        "admin"
+    } else {
+        auth.user.id.as_str()
+    };
+    let cache_key = format!("provider:{cache_identity}");
+    let cache_ttl = std::time::Duration::from_secs(20);
+
+    if let Some(cached) = state.dashboard_response_cache.get(&cache_key, cache_ttl) {
+        return Response::builder()
+            .status(http::StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(cached))
+            .unwrap_or_else(|_| http::StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    }
+
     let providers = match state.list_provider_catalog_providers(true).await {
         Ok(value) => value,
         Err(err) => {
@@ -1209,7 +1268,8 @@ pub(super) async fn handle_dashboard_provider_status_get(
         entries.truncate(limit);
     }
 
-    Json(json!({ "providers": entries })).into_response()
+    let payload = json!({ "providers": entries });
+    dashboard_cached_json_response(state, cache_key, cache_ttl, &payload)
 }
 
 fn dashboard_parse_limit(
@@ -1246,6 +1306,23 @@ fn dashboard_bad_request_response(detail: String) -> Response<Body> {
         Json(json!({ "detail": detail })),
     )
         .into_response()
+}
+
+fn dashboard_cached_json_response(
+    state: &AppState,
+    cache_key: String,
+    cache_ttl: std::time::Duration,
+    payload: &serde_json::Value,
+) -> Response<Body> {
+    let bytes = serde_json::to_vec(payload).unwrap_or_default();
+    state
+        .dashboard_response_cache
+        .insert(cache_key, bytes.clone(), cache_ttl);
+    Response::builder()
+        .status(http::StatusCode::OK)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(Body::from(bytes))
+        .unwrap_or_else(|_| http::StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 fn dashboard_backend_unavailable_response(detail: &'static str) -> Response<Body> {
