@@ -51,6 +51,7 @@ impl TunnelHarness {
             TunnelControlPlaneClient::disabled(),
             TunnelConnConfig {
                 ping_interval: config.ping_interval,
+                idle_timeout: Duration::from_secs(0),
                 outbound_queue_capacity: config.outbound_queue_capacity,
             },
             config.max_streams,
