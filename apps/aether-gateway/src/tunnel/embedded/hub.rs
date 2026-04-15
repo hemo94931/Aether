@@ -27,7 +27,6 @@ pub enum SendStatus {
 #[derive(Debug, Clone, Copy)]
 pub struct ConnConfig {
     pub ping_interval: Duration,
-    pub idle_timeout: Duration,
     pub outbound_queue_capacity: usize,
 }
 

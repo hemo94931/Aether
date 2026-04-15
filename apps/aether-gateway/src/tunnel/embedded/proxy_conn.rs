@@ -3,7 +3,6 @@
 /// Handles the lifecycle of a single aether-proxy connection:
 /// accept -> authenticate (headers) -> read loop -> cleanup
 use std::sync::Arc;
-use std::time::Duration;
 
 use aether_runtime::bounded_queue;
 use axum::extract::ws::{Message, WebSocket};
@@ -81,7 +80,7 @@ pub async fn handle_proxy_connection(
     let reader_hub = hub.clone();
     let reader_conn = conn.clone();
     let reader = tokio::spawn(async move {
-        run_proxy_reader(ws_rx, reader_hub, reader_conn, cfg.idle_timeout).await;
+        run_proxy_reader(ws_rx, reader_hub, reader_conn).await;
     });
 
     let _ = reader.await;
@@ -89,7 +88,7 @@ pub async fn handle_proxy_connection(
     conn.request_close();
     hub.unregister_proxy(conn_id, &node_id);
     drop(conn);
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     writer.abort();
     let _ = writer.await;
 }
@@ -98,24 +97,10 @@ async fn run_proxy_reader(
     mut ws_rx: futures_util::stream::SplitStream<WebSocket>,
     hub: Arc<HubRouter>,
     conn: Arc<ProxyConn>,
-    idle_timeout: Duration,
 ) {
-    let idle_enabled = !idle_timeout.is_zero();
     let mut oversized_count = 0u32;
     loop {
-        let msg = if idle_enabled {
-            tokio::select! {
-                msg = ws_rx.next() => msg,
-                _ = tokio::time::sleep(idle_timeout) => {
-                    warn!(conn_id = conn.id, node_id = %conn.node_id, "proxy idle timeout");
-                    let _ = conn.send(Message::Binary(protocol::encode_goaway().into()));
-                    conn.request_close();
-                    break;
-                }
-            }
-        } else {
-            ws_rx.next().await
-        };
+        let msg = ws_rx.next().await;
 
         match msg {
             Some(Ok(Message::Binary(data))) => {
