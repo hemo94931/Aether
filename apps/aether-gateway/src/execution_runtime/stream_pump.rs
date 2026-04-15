@@ -240,8 +240,7 @@ mod tests {
 
     use super::build_direct_execution_frame_stream;
     use crate::execution_runtime::transport::{
-        execute_stream_plan_via_local_tunnel, DirectSyncExecutionRuntime,
-        DirectUpstreamResponse,
+        execute_stream_plan_via_local_tunnel, DirectSyncExecutionRuntime, DirectUpstreamResponse,
     };
     use crate::tunnel::{tunnel_protocol, TunnelProxyConn};
     use crate::AppState;
@@ -630,17 +629,18 @@ mod tests {
         // --- First request ---
         let state1 = state.clone();
         let plan1 = plan.clone();
-        let exec1 = tokio::spawn(async move {
-            execute_stream_plan_via_local_tunnel(&state1, &plan1).await
-        });
+        let exec1 =
+            tokio::spawn(
+                async move { execute_stream_plan_via_local_tunnel(&state1, &plan1).await },
+            );
 
         // Read request frames from proxy side
         let req1_headers = match proxy_rx.recv().await.expect("req1 headers") {
             Message::Binary(data) => data,
             other => panic!("unexpected: {other:?}"),
         };
-        let req1_header = tunnel_protocol::FrameHeader::parse(&req1_headers)
-            .expect("req1 header parse");
+        let req1_header =
+            tunnel_protocol::FrameHeader::parse(&req1_headers).expect("req1 header parse");
         let _req1_body = proxy_rx.recv().await.expect("req1 body");
 
         // Simulate proxy response
@@ -689,10 +689,7 @@ mod tests {
             0,
             &[],
         );
-        tunnel_app
-            .hub
-            .handle_proxy_frame(900, &mut end_frame)
-            .await;
+        tunnel_app.hub.handle_proxy_frame(900, &mut end_frame).await;
 
         // Drain the body
         while let Ok(Some(_)) = resp1.next_chunk().await {}
@@ -705,9 +702,10 @@ mod tests {
             candidate_id: Some("cand-reuse-2".into()),
             ..plan.clone()
         };
-        let exec2 = tokio::spawn(async move {
-            execute_stream_plan_via_local_tunnel(&state2, &plan2).await
-        });
+        let exec2 =
+            tokio::spawn(
+                async move { execute_stream_plan_via_local_tunnel(&state2, &plan2).await },
+            );
 
         // Read second request's frames
         let req2_headers = tokio::time::timeout(Duration::from_secs(2), proxy_rx.recv())
@@ -718,8 +716,8 @@ mod tests {
             Message::Binary(data) => data,
             other => panic!("unexpected: {other:?}"),
         };
-        let req2_header = tunnel_protocol::FrameHeader::parse(&req2_data)
-            .expect("req2 header parse");
+        let req2_header =
+            tunnel_protocol::FrameHeader::parse(&req2_data).expect("req2 header parse");
         assert_eq!(req2_header.msg_type, tunnel_protocol::REQUEST_HEADERS);
 
         // Simulate proxy response for second request
@@ -748,9 +746,6 @@ mod tests {
             0,
             &[],
         );
-        tunnel_app
-            .hub
-            .handle_proxy_frame(900, &mut end2)
-            .await;
+        tunnel_app.hub.handle_proxy_frame(900, &mut end2).await;
     }
 }

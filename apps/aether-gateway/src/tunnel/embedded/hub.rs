@@ -1149,7 +1149,9 @@ mod tests {
 
         // Verify stream_count went back to 0
         assert_eq!(
-            proxy.stream_count.load(std::sync::atomic::Ordering::Relaxed),
+            proxy
+                .stream_count
+                .load(std::sync::atomic::Ordering::Relaxed),
             0,
             "stream_count should be 0 after STREAM_END"
         );
@@ -1172,12 +1174,8 @@ mod tests {
         );
 
         // Simulate proxy response for second stream
-        let mut resp2_headers = protocol::encode_frame(
-            header.stream_id,
-            protocol::RESPONSE_HEADERS,
-            0,
-            &resp_meta,
-        );
+        let mut resp2_headers =
+            protocol::encode_frame(header.stream_id, protocol::RESPONSE_HEADERS, 0, &resp_meta);
         hub.handle_proxy_frame(400, &mut resp2_headers).await;
 
         let response = stream2
