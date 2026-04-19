@@ -65,9 +65,6 @@ pub(super) async fn build_admin_usage_cache_affinity_interval_timeline_response(
     let mut usernames_by_user_id = BTreeMap::new();
 
     for row in intervals {
-        if row.interval_minutes > 120.0 {
-            continue;
-        }
         let mut point = json!({
             "x": unix_secs_to_rfc3339(row.created_at_unix_secs),
             "y": ((row.interval_minutes * 100.0).round()) / 100.0,

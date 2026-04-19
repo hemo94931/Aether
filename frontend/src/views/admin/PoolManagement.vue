@@ -1258,12 +1258,15 @@ let keysRequestId = 0
 let keysSearchDebounceTimer: number | null = null
 let suppressFiltersWatch = false
 let hasHydratedInitialProviderSelection = false
+const POOL_OVERVIEW_CACHE_TTL_MS = 10 * 1000
+const POOL_KEYS_CACHE_TTL_MS = 10 * 1000
+const POOL_SCHEDULING_PRESETS_CACHE_TTL_MS = 5 * 60 * 1000
 
-async function loadOverview() {
+async function loadOverview(options: { cacheTtlMs?: number } = {}) {
   const requestId = ++overviewRequestId
   overviewLoading.value = true
   try {
-    const res = await getPoolOverview()
+    const res = await getPoolOverview({ cacheTtlMs: options.cacheTtlMs ?? 0 })
     if (requestId !== overviewRequestId) return
     const allProviders = Array.isArray(res.items) ? res.items : []
     const enabledProviders = allProviders.filter(item => item.pool_enabled)
@@ -1283,6 +1286,7 @@ async function loadOverview() {
           preserveSearch: true,
           preserveStatus: true,
           preservePagination: true,
+          cacheTtlMs: options.cacheTtlMs ? POOL_KEYS_CACHE_TTL_MS : 0,
         })
       }
       return
@@ -1296,6 +1300,7 @@ async function loadOverview() {
         preserveSearch: shouldPreserveViewState,
         preserveStatus: shouldPreserveViewState,
         preservePagination: shouldPreserveViewState,
+        cacheTtlMs: options.cacheTtlMs ? POOL_KEYS_CACHE_TTL_MS : 0,
       })
     } else {
       selectedProviderId.value = null
@@ -1333,7 +1338,7 @@ const selectedProviderIdProxy = computed({
   get: () => selectedProviderId.value ?? '',
   set: (val: string) => {
     if (val && val !== selectedProviderId.value) {
-      selectProvider(val)
+      void selectProvider(val, { cacheTtlMs: POOL_KEYS_CACHE_TTL_MS })
     }
   },
 })
@@ -1363,9 +1368,9 @@ function normalizePresetName(value: unknown): string {
   return String(value ?? '').trim().toLowerCase()
 }
 
-async function loadSchedulingPresetMetas(): Promise<void> {
+async function loadSchedulingPresetMetas(options: { cacheTtlMs?: number } = {}): Promise<void> {
   try {
-    const metas = await getPoolSchedulingPresets()
+    const metas = await getPoolSchedulingPresets({ cacheTtlMs: options.cacheTtlMs ?? 0 })
     const next: Record<string, string> = {}
     for (const meta of metas as PoolPresetMeta[]) {
       const name = normalizePresetName(meta.name)
@@ -1492,6 +1497,7 @@ async function selectProvider(
     preserveSearch?: boolean
     preserveStatus?: boolean
     preservePagination?: boolean
+    cacheTtlMs?: number
   } = {},
 ) {
   const requestId = ++selectProviderRequestId
@@ -1522,7 +1528,7 @@ async function selectProvider(
     keysSearchDebounceTimer = null
   }
   resetKeyPage(currentPage.value, pageSize.value)
-  const keysTask = loadKeys()
+  const keysTask = loadKeys({ cacheTtlMs: options.cacheTtlMs ?? 0 })
   // Provider summary is non-blocking for key list rendering.
   void loadProviderData(id)
   await keysTask
@@ -1620,6 +1626,7 @@ watch(
       preserveSearch: true,
       preserveStatus: true,
       preservePagination: true,
+      cacheTtlMs: POOL_KEYS_CACHE_TTL_MS,
     })
   },
   { immediate: true },
@@ -1790,7 +1797,7 @@ async function refreshCurrentPage() {
   }
 }
 
-async function loadKeys() {
+async function loadKeys(options: { cacheTtlMs?: number } = {}) {
   if (!selectedProviderId.value) return
   const requestId = ++keysRequestId
   const providerId = selectedProviderId.value
@@ -1805,6 +1812,8 @@ async function loadKeys() {
       page_size: pageSizeValue,
       search,
       status,
+    }, {
+      cacheTtlMs: options.cacheTtlMs ?? 0,
     })
     if (requestId !== keysRequestId || selectedProviderId.value !== providerId) return
     const resolvedPage = resolvePoolManagementPageAfterLoad({
@@ -1829,13 +1838,13 @@ async function loadKeys() {
 }
 
 watch([currentPage, pageSize], () => {
-  void loadKeys()
+  void loadKeys({ cacheTtlMs: POOL_KEYS_CACHE_TTL_MS })
 })
 
 watch(statusFilter, () => {
   if (suppressFiltersWatch) return
   currentPage.value = 1
-  void loadKeys()
+  void loadKeys({ cacheTtlMs: POOL_KEYS_CACHE_TTL_MS })
 })
 
 watch(searchQuery, () => {
@@ -1846,7 +1855,7 @@ watch(searchQuery, () => {
   }
   keysSearchDebounceTimer = window.setTimeout(() => {
     keysSearchDebounceTimer = null
-    void loadKeys()
+    void loadKeys({ cacheTtlMs: POOL_KEYS_CACHE_TTL_MS })
   }, 300)
 })
 
@@ -3035,8 +3044,8 @@ function formatRelativeTime(isoStr: string): string {
 // --- Init ---
 onMounted(() => {
   startCountdownTimer()
-  void loadSchedulingPresetMetas()
-  void loadOverview()
+  void loadSchedulingPresetMetas({ cacheTtlMs: POOL_SCHEDULING_PRESETS_CACHE_TTL_MS })
+  void loadOverview({ cacheTtlMs: POOL_OVERVIEW_CACHE_TTL_MS })
 })
 
 onBeforeUnmount(() => {

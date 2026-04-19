@@ -909,15 +909,13 @@ pub(super) async fn handle_users_me_usage_interval_timeline_get(
 
     let mut points = Vec::new();
     for row in intervals {
-        if row.interval_minutes <= 120.0 {
-            points.push(json!({
-                "x": unix_secs_to_rfc3339(row.created_at_unix_secs),
-                "y": round_to(row.interval_minutes, 2),
-                "model": row.model,
-            }));
-            if points.len() >= limit {
-                break;
-            }
+        points.push(json!({
+            "x": unix_secs_to_rfc3339(row.created_at_unix_secs),
+            "y": round_to(row.interval_minutes, 2),
+            "model": row.model,
+        }));
+        if points.len() >= limit {
+            break;
         }
     }
 

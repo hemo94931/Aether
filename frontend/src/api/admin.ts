@@ -583,11 +583,22 @@ export const adminApi = {
   },
 
   // 获取特定系统配置
-  async getSystemConfig(key: string): Promise<{ key: string; value: unknown }> {
-    const response = await apiClient.get<{ key: string; value: unknown }>(
-      `/api/admin/system/configs/${key}`
+  async getSystemConfig(
+    key: string,
+    options: { cacheTtlMs?: number } = {},
+  ): Promise<{ key: string; value: unknown }> {
+    const cacheTtlMs = options.cacheTtlMs ?? 0
+    const cacheKey = buildCacheKey('admin:system:config', { key })
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<{ key: string; value: unknown }>(
+          `/api/admin/system/configs/${key}`
+        )
+        return response.data
+      },
+      cacheTtlMs,
     )
-    return response.data
   },
 
   // 更新系统配置

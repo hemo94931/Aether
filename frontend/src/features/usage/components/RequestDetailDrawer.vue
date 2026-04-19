@@ -1664,7 +1664,10 @@ async function loadDetail(id: string, silent = false) {
   }
   error.value = null
   try {
-    const response = await dashboardApi.getRequestDetail(id, { includeBodies: false })
+    const response = await dashboardApi.getRequestDetail(id, {
+      includeBodies: false,
+      cacheTtlMs: silent ? 0 : 5_000
+    })
     if (requestId !== loadDetailRequestId) return
 
     const previousDetail = detail.value

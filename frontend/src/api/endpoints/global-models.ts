@@ -1,5 +1,5 @@
 import client from '../client'
-import { dedupedRequest, buildCacheKey } from '@/utils/cache'
+import { buildCacheKey, cachedRequest, dedupedRequest } from '@/utils/cache'
 import type {
   GlobalModelCreate,
   GlobalModelUpdate,
@@ -22,17 +22,26 @@ export type {
 /**
  * 获取 GlobalModel 列表
  */
+interface GlobalModelListOptions {
+  cacheTtlMs?: number
+}
+
 export async function getGlobalModels(params?: {
   skip?: number
   limit?: number
   is_active?: boolean
   search?: string
-}): Promise<GlobalModelListResponse> {
+}, options: GlobalModelListOptions = {}): Promise<GlobalModelListResponse> {
+  const cacheTtlMs = options.cacheTtlMs ?? 0
   const key = buildCacheKey('global-models:list', params as Record<string, unknown> | undefined)
-  return dedupedRequest(key, async () => {
-    const response = await client.get('/api/admin/models/global', { params })
-    return response.data
-  })
+  return cachedRequest(
+    key,
+    async () => {
+      const response = await client.get('/api/admin/models/global', { params })
+      return response.data
+    },
+    cacheTtlMs,
+  )
 }
 
 /**

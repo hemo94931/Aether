@@ -1,6 +1,8 @@
 import apiClient from './client'
 import { cachedRequest, buildCacheKey } from '@/utils/cache'
 
+const REQUEST_DETAIL_PREFETCH_TTL_MS = 5_000
+
 export interface DashboardStat {
   name: string
   value: string
@@ -360,11 +362,30 @@ export const dashboardApi = {
 
   // 获取请求详情
   // NOTE: This method now calls the new RESTful API at /api/admin/usage/{id}
-  async getRequestDetail(requestId: string, options: { includeBodies?: boolean } = {}): Promise<RequestDetail> {
-    const response = await apiClient.get<RequestDetail>(`/api/admin/usage/${requestId}`, {
-      params: { include_bodies: options.includeBodies ?? true },
+  async getRequestDetail(
+    requestId: string,
+    options: { includeBodies?: boolean, cacheTtlMs?: number } = {}
+  ): Promise<RequestDetail> {
+    const includeBodies = options.includeBodies ?? true
+    const cacheTtlMs = options.cacheTtlMs ?? 0
+    const cacheKey = buildCacheKey('dashboard:request-detail', { requestId, includeBodies })
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<RequestDetail>(`/api/admin/usage/${requestId}`, {
+          params: { include_bodies: includeBodies },
+        })
+        return response.data
+      },
+      cacheTtlMs
+    )
+  },
+
+  async prefetchRequestDetail(requestId: string): Promise<void> {
+    await dashboardApi.getRequestDetail(requestId, {
+      includeBodies: false,
+      cacheTtlMs: REQUEST_DETAIL_PREFETCH_TTL_MS
     })
-    return response.data
   },
 
   // 获取每日统计数据

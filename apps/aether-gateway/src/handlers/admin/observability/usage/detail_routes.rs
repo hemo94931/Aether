@@ -23,6 +23,7 @@ use axum::{
 };
 use serde_json::json;
 use std::collections::BTreeMap;
+use tokio::try_join;
 
 pub(super) async fn maybe_build_local_admin_usage_detail_response(
     state: &AdminAppState<'_>,
@@ -160,43 +161,50 @@ pub(super) async fn maybe_build_local_admin_usage_detail_response(
                 ));
             };
 
-            let users_by_id: BTreeMap<String, aether_data::repository::users::StoredUserSummary> =
-                state
-                    .resolve_auth_user_summaries_by_ids(
-                        &item.user_id.clone().into_iter().collect::<Vec<_>>(),
-                    )
-                    .await?;
-            let provider_key_names =
-                admin_usage_provider_key_names(state, std::slice::from_ref(&item)).await?;
-            let api_key_names =
-                admin_usage_api_key_names(state, std::slice::from_ref(&item)).await?;
+            let user_ids = item.user_id.clone().into_iter().collect::<Vec<_>>();
+            let (users_by_id, provider_key_names, api_key_names): (
+                BTreeMap<String, aether_data::repository::users::StoredUserSummary>,
+                BTreeMap<String, String>,
+                BTreeMap<String, String>,
+            ) = try_join!(
+                state.resolve_auth_user_summaries_by_ids(&user_ids),
+                admin_usage_provider_key_names(state, std::slice::from_ref(&item)),
+                admin_usage_api_key_names(state, std::slice::from_ref(&item)),
+            )?;
             let provider_key_name = admin_usage_provider_key_name(&item, &provider_key_names);
 
-            let request_body =
-                admin_usage_resolve_request_capture_body_for_item(state, &item, None).await?;
             let mut detail_item = item.clone();
+            let request_body = if include_bodies {
+                let (request_body, provider_request_body, response_body, client_response_body) = try_join!(
+                    admin_usage_resolve_request_capture_body_for_item(state, &item, None),
+                    admin_usage_resolve_body_value(
+                        state,
+                        &item,
+                        item.provider_request_body.as_ref(),
+                        UsageBodyField::ProviderRequestBody,
+                    ),
+                    admin_usage_resolve_body_value(
+                        state,
+                        &item,
+                        item.response_body.as_ref(),
+                        UsageBodyField::ResponseBody,
+                    ),
+                    admin_usage_resolve_body_value(
+                        state,
+                        &item,
+                        item.client_response_body.as_ref(),
+                        UsageBodyField::ClientResponseBody,
+                    ),
+                )?;
+                detail_item.provider_request_body = provider_request_body;
+                detail_item.response_body = response_body;
+                detail_item.client_response_body = client_response_body;
+                request_body
+            } else {
+                None
+            };
             if include_bodies {
-                detail_item.provider_request_body = admin_usage_resolve_body_value(
-                    state,
-                    &item,
-                    item.provider_request_body.as_ref(),
-                    UsageBodyField::ProviderRequestBody,
-                )
-                .await?;
-                detail_item.response_body = admin_usage_resolve_body_value(
-                    state,
-                    &item,
-                    item.response_body.as_ref(),
-                    UsageBodyField::ResponseBody,
-                )
-                .await?;
-                detail_item.client_response_body = admin_usage_resolve_body_value(
-                    state,
-                    &item,
-                    item.client_response_body.as_ref(),
-                    UsageBodyField::ClientResponseBody,
-                )
-                .await?;
+                // request_body 已通过 request capture 解析；其余 detached body 在上方并行加载。
             }
             let default_headers = admin_usage_curl_headers();
             let payload = build_admin_usage_detail_payload(

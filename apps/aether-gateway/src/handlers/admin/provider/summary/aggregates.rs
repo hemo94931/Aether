@@ -3,6 +3,8 @@ use crate::handlers::admin::request::AdminAppState;
 use aether_data_contracts::repository::provider_catalog::{
     StoredProviderCatalogEndpoint, StoredProviderCatalogKey,
 };
+use aether_data_contracts::repository::quota::StoredProviderQuotaSnapshot;
+use futures_util::future::join_all;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -90,6 +92,9 @@ pub(crate) async fn build_admin_providers_summary_payload(
     let normalized_status = status.trim().to_ascii_lowercase();
     let normalized_api_format = api_format.trim();
     let normalized_model_id = model_id.trim();
+    let requires_api_format_filter =
+        normalized_api_format != "all" && !normalized_api_format.is_empty();
+    let requires_model_filter = normalized_model_id != "all" && !normalized_model_id.is_empty();
 
     let mut providers = state
         .list_provider_catalog_providers(false)
@@ -100,7 +105,7 @@ pub(crate) async fn build_admin_providers_summary_payload(
         .iter()
         .map(|provider| provider.id.clone())
         .collect::<Vec<_>>();
-    let all_endpoints = if all_provider_ids.is_empty() {
+    let all_endpoints = if !requires_api_format_filter || all_provider_ids.is_empty() {
         Vec::new()
     } else {
         state
@@ -109,7 +114,7 @@ pub(crate) async fn build_admin_providers_summary_payload(
             .ok()
             .unwrap_or_default()
     };
-    let active_global_model_refs = if all_provider_ids.is_empty() {
+    let active_global_model_refs = if !requires_model_filter || all_provider_ids.is_empty() {
         Vec::new()
     } else {
         state
@@ -151,8 +156,7 @@ pub(crate) async fn build_admin_providers_summary_payload(
             _ => {}
         }
 
-        if normalized_api_format != "all"
-            && !normalized_api_format.is_empty()
+        if requires_api_format_filter
             && !api_formats_by_provider
                 .get(&provider.id)
                 .is_some_and(|items| items.contains(normalized_api_format))
@@ -160,8 +164,7 @@ pub(crate) async fn build_admin_providers_summary_payload(
             return false;
         }
 
-        if normalized_model_id != "all"
-            && !normalized_model_id.is_empty()
+        if requires_model_filter
             && !active_global_model_ids_by_provider
                 .get(&provider.id)
                 .is_some_and(|items| items.contains(normalized_model_id))
@@ -191,32 +194,21 @@ pub(crate) async fn build_admin_providers_summary_payload(
         .iter()
         .map(|provider| provider.id.clone())
         .collect::<Vec<_>>();
-    let endpoints = if provider_ids.is_empty() {
-        Vec::new()
+    let (endpoints, keys, model_stats, page_active_global_model_refs) = if provider_ids.is_empty() {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
     } else {
-        state
-            .list_provider_catalog_endpoints_by_provider_ids(&provider_ids)
-            .await
-            .ok()
-            .unwrap_or_default()
-    };
-    let keys = if provider_ids.is_empty() {
-        Vec::new()
-    } else {
-        state
-            .list_provider_catalog_key_summaries_by_provider_ids(&provider_ids)
-            .await
-            .ok()
-            .unwrap_or_default()
-    };
-    let model_stats = if provider_ids.is_empty() {
-        Vec::new()
-    } else {
-        state
-            .list_provider_model_stats(&provider_ids)
-            .await
-            .ok()
-            .unwrap_or_default()
+        let (endpoints_result, keys_result, model_stats_result, active_global_model_refs_result) = tokio::join!(
+            state.list_provider_catalog_endpoints_by_provider_ids(&provider_ids),
+            state.list_provider_catalog_key_summaries_by_provider_ids(&provider_ids),
+            state.list_provider_model_stats(&provider_ids),
+            state.list_active_global_model_ids_by_provider_ids(&provider_ids),
+        );
+        (
+            endpoints_result.ok().unwrap_or_default(),
+            keys_result.ok().unwrap_or_default(),
+            model_stats_result.ok().unwrap_or_default(),
+            active_global_model_refs_result.ok().unwrap_or_default(),
+        )
     };
     let mut endpoints_by_provider = BTreeMap::<String, Vec<StoredProviderCatalogEndpoint>>::new();
     for endpoint in endpoints {
@@ -236,17 +228,30 @@ pub(crate) async fn build_admin_providers_summary_payload(
         .into_iter()
         .map(|stats| (stats.provider_id.clone(), stats))
         .collect::<BTreeMap<_, _>>();
+    let mut active_global_model_ids_by_provider = BTreeMap::<String, BTreeSet<String>>::new();
+    for row in page_active_global_model_refs {
+        active_global_model_ids_by_provider
+            .entry(row.provider_id)
+            .or_default()
+            .insert(row.global_model_id);
+    }
+    let quota_snapshots_by_provider = join_all(provider_ids.iter().map(|provider_id| async {
+        let quota_snapshot = state
+            .read_provider_quota_snapshot(provider_id)
+            .await
+            .ok()
+            .flatten();
+        (provider_id.clone(), quota_snapshot)
+    }))
+    .await
+    .into_iter()
+    .collect::<BTreeMap<String, Option<StoredProviderQuotaSnapshot>>>();
     let now_unix_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     let mut items = Vec::with_capacity(providers.len());
     for provider in providers {
-        let quota_snapshot = state
-            .read_provider_quota_snapshot(&provider.id)
-            .await
-            .ok()
-            .flatten();
         let active_global_model_ids = active_global_model_ids_by_provider
             .get(&provider.id)
             .cloned()
@@ -263,7 +268,9 @@ pub(crate) async fn build_admin_providers_summary_payload(
                 .get(&provider.id)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]),
-            quota_snapshot.as_ref(),
+            quota_snapshots_by_provider
+                .get(&provider.id)
+                .and_then(Option::as_ref),
             model_stats_by_provider.get(&provider.id),
             active_global_model_ids,
             now_unix_secs,

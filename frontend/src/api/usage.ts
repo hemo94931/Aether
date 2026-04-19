@@ -2,6 +2,8 @@ import apiClient from './client'
 import { cachedRequest, dedupedRequest, buildCacheKey } from '@/utils/cache'
 import type { ActivityHeatmap } from '@/types/activity'
 
+const ACTIVITY_HEATMAP_CACHE_TTL_MS = 30 * 60 * 1000
+
 export interface UsageRecord {
   id: string // UUID
   user_id: string // UUID
@@ -340,7 +342,7 @@ export const usageApi = {
 
   /**
    * 获取活跃度热力图数据（管理员）
-   * 后端已缓存5分钟
+   * 历史热力图变化很慢，前端做长缓存，避免自动刷新链路重复请求。
    */
   async getActivityHeatmap(): Promise<ActivityHeatmap> {
     return cachedRequest(
@@ -349,7 +351,7 @@ export const usageApi = {
         const response = await apiClient.get<ActivityHeatmap | unknown[]>('/api/admin/usage/heatmap')
         return normalizeActivityHeatmapResponse(response.data)
       },
-      60000
+      ACTIVITY_HEATMAP_CACHE_TTL_MS
     )
   }
 }

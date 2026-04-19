@@ -35,24 +35,31 @@ pub(super) async fn build_admin_pool_overview_response(
         .iter()
         .map(|(provider, _)| provider.id.clone())
         .collect::<Vec<_>>();
-    let key_stats = if provider_ids.is_empty() {
-        Vec::new()
-    } else {
-        state
-            .list_provider_catalog_key_stats_by_provider_ids(&provider_ids)
-            .await?
-    };
+    let redis_runner = state.redis_kv_runner();
+    let (key_stats_result, cooldown_counts_by_provider) = tokio::join!(
+        async {
+            if provider_ids.is_empty() {
+                Ok(Vec::new())
+            } else {
+                state
+                    .list_provider_catalog_key_stats_by_provider_ids(&provider_ids)
+                    .await
+            }
+        },
+        async {
+            match redis_runner.as_ref() {
+                Some(runner) if !provider_ids.is_empty() => {
+                    read_admin_provider_pool_cooldown_counts(runner, &provider_ids).await
+                }
+                _ => BTreeMap::new(),
+            }
+        },
+    );
+    let key_stats = key_stats_result?;
     let key_stats_by_provider = key_stats
         .into_iter()
         .map(|item| (item.provider_id.clone(), item))
         .collect::<BTreeMap<_, _>>();
-    let redis_runner = state.redis_kv_runner();
-    let cooldown_counts_by_provider = match redis_runner.as_ref() {
-        Some(runner) if !provider_ids.is_empty() => {
-            read_admin_provider_pool_cooldown_counts(runner, &provider_ids).await
-        }
-        _ => BTreeMap::new(),
-    };
 
     let providers = pool_enabled_providers
         .into_iter()

@@ -16,12 +16,12 @@ export const useUsersStore = defineStore('users', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  async function fetchUsers() {
+  async function fetchUsers(options: { cacheTtlMs?: number } = {}) {
     loading.value = true
     error.value = null
 
     try {
-      users.value = await usersApi.getAllUsers()
+      users.value = await usersApi.getAllUsers(options)
     } catch (err: unknown) {
       error.value = parseApiError(err, '获取用户列表失败')
     } finally {

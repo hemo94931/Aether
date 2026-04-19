@@ -341,7 +341,7 @@
           v-else
           :key="record.id"
           :class="isAdmin ? 'cursor-pointer border-b border-border/40 hover:bg-muted/30 transition-colors h-[72px]' : 'border-b border-border/40 hover:bg-muted/30 transition-colors h-[72px]'"
-          @mousedown="handleMouseDown"
+          @mousedown="handleRowMouseDown($event, record.id)"
           @click="handleRowClick($event, record.id)"
         >
           <TableCell class="text-xs py-4 w-[70px]">
@@ -730,6 +730,7 @@ const emit = defineEmits<{
   'update:autoRefresh': [value: boolean]
   'refresh': []
   'showDetail': [id: string]
+  'prefetchDetail': [id: string]
 }>()
 
 // 静态常量（放在 defineProps/defineEmits 之后）
@@ -775,6 +776,13 @@ watch(localSearch, (value) => {
 
 // 使用复用的行点击逻辑
 const { handleMouseDown, shouldTriggerRowClick } = useRowClick()
+
+function handleRowMouseDown(event: MouseEvent, id: string) {
+  handleMouseDown(event)
+  if (!props.isAdmin) return
+  if (event.button !== 0) return
+  emit('prefetchDetail', id)
+}
 
 // 处理行点击，排除文本选择操作
 function handleRowClick(event: MouseEvent, id: string) {

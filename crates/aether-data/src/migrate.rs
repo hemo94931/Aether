@@ -419,9 +419,9 @@ mod tests {
 
             match Self::start(initdb_bin, postgres_bin).await {
                 Ok(server) => Ok(Some(server)),
-                Err(err) if postgres_shared_memory_unavailable(err.to_string().as_str()) => {
+                Err(err) if postgres_local_startup_unavailable(err.to_string().as_str()) => {
                     eprintln!(
-                        "skipping postgres integration test because local postgres could not allocate shared memory: {err}"
+                        "skipping postgres integration test because local postgres could not start in this environment: {err}"
                     );
                     Ok(None)
                 }
@@ -463,7 +463,7 @@ mod tests {
             let log_path = workdir.join("postgres.log");
             let stdout = std::fs::File::create(&log_path)?;
             let stderr = stdout.try_clone()?;
-            let child = Command::new(&postgres_bin)
+            let mut child = Command::new(&postgres_bin)
                 .arg("-D")
                 .arg(&data_dir)
                 .arg("-h")
@@ -489,7 +489,11 @@ mod tests {
                 .stderr(Stdio::from(stderr))
                 .spawn()?;
 
-            wait_for_postgres(&database_url).await?;
+            if let Err(err) = wait_for_postgres(&database_url).await {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(err);
+            }
 
             Ok(Self {
                 child: Some(child),
@@ -542,6 +546,15 @@ mod tests {
             && (message.contains("could not create shared memory segment")
                 || message.contains("shmget")
                 || message.contains("no space left on device"))
+    }
+
+    fn postgres_local_startup_unavailable(message: &str) -> bool {
+        let message = message.to_ascii_lowercase();
+        postgres_shared_memory_unavailable(&message)
+            || (message.contains("timed out waiting for local postgres")
+                && (message.contains("connection refused")
+                    || message.contains("os error 61")
+                    || message.contains("os error 111")))
     }
 
     async fn wait_for_postgres(database_url: &str) -> Result<(), Box<dyn std::error::Error>> {

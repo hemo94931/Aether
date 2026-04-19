@@ -1,5 +1,5 @@
 import client from '../client'
-import { dedupedRequest } from '@/utils/cache'
+import { buildCacheKey, cachedRequest, dedupedRequest } from '@/utils/cache'
 import type {
   ClaudeCodeAdvancedConfig,
   FailoverRulesConfig,
@@ -11,6 +11,11 @@ import { normalizePoolAdvancedConfig as normalizePoolAdvanced } from './types'
 
 interface ProviderRequestOptions {
   timeout?: number
+}
+
+interface ProviderReadOptions {
+  timeout?: number
+  cacheTtlMs?: number
 }
 
 /**
@@ -43,15 +48,27 @@ function normalizeProviderSummary(
 
 export async function getProvidersSummary(
   params: ProviderSummaryQuery = {},
+  options: ProviderReadOptions = {},
 ): Promise<ProviderSummaryPageResponse> {
-  const response = await client.get<ProviderSummaryPageResponse>(
-    '/api/admin/providers/summary',
-    { params },
+  const cacheTtlMs = options.cacheTtlMs ?? 0
+  const cacheKey = buildCacheKey('providers:summary', params as Record<string, unknown>)
+  return cachedRequest(
+    cacheKey,
+    async () => {
+      const response = await client.get<ProviderSummaryPageResponse>(
+        '/api/admin/providers/summary',
+        {
+          params,
+          timeout: options.timeout,
+        },
+      )
+      return {
+        ...response.data,
+        items: response.data.items.map(normalizeProviderSummary),
+      }
+    },
+    cacheTtlMs,
   )
-  return {
-    ...response.data,
-    items: response.data.items.map(normalizeProviderSummary),
-  }
 }
 
 /**

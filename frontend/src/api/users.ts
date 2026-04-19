@@ -1,4 +1,5 @@
 import apiClient from './client'
+import { cachedRequest } from '@/utils/cache'
 import type { UserSession as SessionRecord } from '@/types/session'
 
 export interface User {
@@ -70,9 +71,16 @@ export interface UpsertUserApiKeyRequest {
 export type UserSession = SessionRecord
 
 export const usersApi = {
-  async getAllUsers(): Promise<User[]> {
-    const response = await apiClient.get<User[]>('/api/admin/users')
-    return response.data
+  async getAllUsers(options: { cacheTtlMs?: number } = {}): Promise<User[]> {
+    const cacheTtlMs = options.cacheTtlMs ?? 0
+    return cachedRequest(
+      'admin:users:list',
+      async () => {
+        const response = await apiClient.get<User[]>('/api/admin/users')
+        return response.data
+      },
+      cacheTtlMs,
+    )
   },
 
   async getUser(userId: string): Promise<User> {

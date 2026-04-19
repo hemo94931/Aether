@@ -53,6 +53,7 @@
         <SidebarNav
           :items="navigation"
           :is-active="isNavActive"
+          @prefetch="prefetchNavigationItem"
         />
       </div>
 
@@ -195,6 +196,9 @@
                       :class="isNavActive(item.href)
                         ? 'bg-[#cc785c]/10 dark:bg-[#cc785c]/20 text-[#cc785c] dark:text-[#d4a27f]'
                         : 'text-[#666663] dark:text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5 hover:text-[#191919] dark:hover:text-white'"
+                      @mouseenter="prefetchNavigationItem(item.href)"
+                      @focus="prefetchNavigationItem(item.href)"
+                      @pointerdown="prefetchNavigationItem(item.href)"
                       @click="mobileMenuOpen = false"
                     >
                       <component
@@ -382,6 +386,7 @@ import {
 
 import GithubIcon from '@/components/icons/GithubIcon.vue'
 import { BUILTIN_TOOL_BREADCRUMBS } from '@/config/builtin-tools'
+import { prefetchAdminNavigationTarget } from '@/utils/adminNavigationPrefetch'
 
 const router = useRouter()
 const route = useRoute()
@@ -506,6 +511,10 @@ function isNavActive(href: string) {
     return route.path === href
   }
   return route.path === href || route.path.startsWith(`${href}/`)
+}
+
+function prefetchNavigationItem(href: string) {
+  prefetchAdminNavigationTarget(href)
 }
 
 // Navigation Data

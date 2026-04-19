@@ -42,21 +42,20 @@ pub(in super::super) async fn build_admin_list_users_response(
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    let auth_by_user_id = state
-        .list_user_auth_by_ids(&user_ids)
-        .await?
+    let (auth_rows_result, wallet_rows_result, usage_totals_result) = tokio::join!(
+        state.list_user_auth_by_ids(&user_ids),
+        state.list_wallet_snapshots_by_user_ids(&user_ids),
+        state.summarize_usage_totals_by_user_ids(&user_ids),
+    );
+    let auth_by_user_id = auth_rows_result?
         .into_iter()
         .map(|user| (user.id.clone(), user))
         .collect::<BTreeMap<_, _>>();
-    let wallet_by_user_id = state
-        .list_wallet_snapshots_by_user_ids(&user_ids)
-        .await?
+    let wallet_by_user_id = wallet_rows_result?
         .into_iter()
         .filter_map(|wallet| wallet.user_id.clone().map(|user_id| (user_id, wallet)))
         .collect::<BTreeMap<_, _>>();
-    let usage_totals_by_user_id = state
-        .summarize_usage_totals_by_user_ids(&user_ids)
-        .await?
+    let usage_totals_by_user_id = usage_totals_result?
         .into_iter()
         .map(|item| (item.user_id.clone(), item))
         .collect::<BTreeMap<_, _>>();

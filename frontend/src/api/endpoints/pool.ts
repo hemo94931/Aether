@@ -1,5 +1,5 @@
 import client from '../client'
-import { dedupedRequest } from '@/utils/cache'
+import { buildCacheKey, cachedRequest } from '@/utils/cache'
 import type {
   AllowedModels,
   OAuthOrganizationInfo,
@@ -230,33 +230,59 @@ export interface PoolBatchAction {
   payload?: Record<string, unknown> | null
 }
 
-export async function getPoolOverview(): Promise<PoolOverviewResponse> {
-  return dedupedRequest('pool:overview', async () => {
-    const response = await client.get<PoolOverviewResponse>('/api/admin/pool/overview')
-    return response.data
-  })
+interface PoolReadOptions {
+  cacheTtlMs?: number
 }
 
-export async function getPoolSchedulingPresets(): Promise<PoolPresetMeta[]> {
-  return dedupedRequest('pool:scheduling-presets', async () => {
-    const response = await client.get<PoolPresetMeta[]>('/api/admin/pool/scheduling-presets')
-    return response.data
-  })
+export async function getPoolOverview(
+  options: PoolReadOptions = {},
+): Promise<PoolOverviewResponse> {
+  const cacheTtlMs = options.cacheTtlMs ?? 0
+  return cachedRequest(
+    'pool:overview',
+    async () => {
+      const response = await client.get<PoolOverviewResponse>('/api/admin/pool/overview')
+      return response.data
+    },
+    cacheTtlMs,
+  )
+}
+
+export async function getPoolSchedulingPresets(
+  options: PoolReadOptions = {},
+): Promise<PoolPresetMeta[]> {
+  const cacheTtlMs = options.cacheTtlMs ?? 0
+  return cachedRequest(
+    'pool:scheduling-presets',
+    async () => {
+      const response = await client.get<PoolPresetMeta[]>('/api/admin/pool/scheduling-presets')
+      return response.data
+    },
+    cacheTtlMs,
+  )
 }
 
 export async function listPoolKeys(
   providerId: string,
   params: PoolKeysQuery = {},
+  options: PoolReadOptions = {},
 ): Promise<PoolKeysPageResponse> {
   const normalizedParams = {
     ...params,
     quick_selectors: params.quick_selectors?.length ? params.quick_selectors.join(',') : undefined,
   }
-  const key = `pool:keys:${providerId}|${normalizedParams.page ?? ''}|${normalizedParams.page_size ?? ''}|${normalizedParams.search ?? ''}|${normalizedParams.status ?? ''}|${normalizedParams.quick_selectors ?? ''}|${normalizedParams.search_scope ?? ''}`
-  return dedupedRequest(key, async () => {
-    const response = await client.get<PoolKeysPageResponse>(`/api/admin/pool/${providerId}/keys`, { params: normalizedParams })
-    return response.data
-  })
+  const cacheKey = buildCacheKey(
+    `pool:keys:${providerId}`,
+    normalizedParams as Record<string, unknown>,
+  )
+  return cachedRequest(
+    cacheKey,
+    async () => {
+      const response = await client.get<PoolKeysPageResponse>(`/api/admin/pool/${providerId}/keys`, { params: normalizedParams })
+      return response.data
+    },
+    options.cacheTtlMs ?? 0,
+  )
 }
 
 export async function resolvePoolKeySelection(

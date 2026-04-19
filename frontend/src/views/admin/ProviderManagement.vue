@@ -324,6 +324,9 @@ let deletePollAbort: AbortController | null = null
 const DELETE_POLL_INTERVAL_MS = 2000
 const DELETE_POLL_MAX_MS = 30 * 60 * 1000
 const DELETE_POLL_MAX_FAILURES = 3
+const PROVIDER_SUMMARY_CACHE_TTL_MS = 10 * 1000
+const PROVIDER_PRIORITY_MODE_CACHE_TTL_MS = 30 * 1000
+const PROVIDER_MODEL_FILTER_CACHE_TTL_MS = 10 * 1000
 
 async function pollProviderDeleteTask(providerId: string, taskId: string) {
   deletePollAbort?.abort()
@@ -533,9 +536,11 @@ const maxProviderPriority = computed(() => {
 })
 
 // 加载优先级模式
-async function loadPriorityMode() {
+async function loadPriorityMode(options: { cacheTtlMs?: number } = {}) {
   try {
-    const response = await adminApi.getSystemConfig('provider_priority_mode')
+    const response = await adminApi.getSystemConfig('provider_priority_mode', {
+      cacheTtlMs: options.cacheTtlMs ?? 0,
+    })
     if (response.value) {
       priorityMode.value = response.value as 'provider' | 'global_key'
     }
@@ -545,9 +550,12 @@ async function loadPriorityMode() {
 }
 
 // 加载全局模型列表（用于模型筛选下拉）
-async function loadGlobalModelList() {
+async function loadGlobalModelList(options: { cacheTtlMs?: number } = {}) {
   try {
-    const response = await getGlobalModels({ is_active: true, limit: 1000 })
+    const response = await getGlobalModels(
+      { is_active: true, limit: 1000 },
+      { cacheTtlMs: options.cacheTtlMs ?? 0 },
+    )
     globalModels.value = response.models.map(m => ({ id: m.id, name: m.name }))
   } catch {
     globalModels.value = []
@@ -555,11 +563,13 @@ async function loadGlobalModelList() {
 }
 
 // 加载提供商列表（服务端分页）
-async function loadProviders() {
+async function loadProviders(options: { cacheTtlMs?: number } = {}) {
   const requestId = ++providersRequestId
   loading.value = true
   try {
-    const response = await getProvidersSummary(queryParams.value)
+    const response = await getProvidersSummary(queryParams.value, {
+      cacheTtlMs: options.cacheTtlMs ?? 0,
+    })
     if (requestId !== providersRequestId) return
     providers.value = response.items
     total.value = response.total
@@ -587,9 +597,11 @@ watch(queryParams, (newParams, oldParams) => {
     newParams.api_format === oldParams?.api_format &&
     newParams.model_id === oldParams?.model_id
   if (isSearchOnly) {
-    debounceTimer = setTimeout(loadProviders, 300)
+    debounceTimer = setTimeout(() => {
+      void loadProviders({ cacheTtlMs: PROVIDER_SUMMARY_CACHE_TTL_MS })
+    }, 300)
   } else {
-    loadProviders()
+    void loadProviders({ cacheTtlMs: PROVIDER_SUMMARY_CACHE_TTL_MS })
   }
 }, { deep: true })
 
@@ -658,7 +670,7 @@ function openOpsConfigDialog(provider: ProviderWithEndpointsSummary) {
 // 扩展操作配置保存回调
 function handleOpsConfigSaved() {
   opsConfigDialogOpen.value = false
-  loadProviders()
+  void loadProviders()
 }
 
 // 处理提供商编辑完成
@@ -680,7 +692,7 @@ async function handlePrioritySaved() {
 
 // 处理提供商添加
 function handleProviderAdded() {
-  loadProviders()
+  void loadProviders()
 }
 
 // 删除提供商
@@ -716,7 +728,7 @@ async function handleDeleteProvider(provider: ProviderWithEndpointsSummary) {
 
     showSuccess('提供商已删除')
     providerDeleteProgress.value = null
-    loadProviders()
+    void loadProviders()
   } catch (err: unknown) {
     providerDeleteProgress.value = null
     showError(parseApiError(err, '删除提供商失败'), '错误')
@@ -753,10 +765,10 @@ function handleGlobalClick(event: MouseEvent) {
 }
 
 onMounted(() => {
-  loadProviders()
-  loadPriorityMode()
-  loadGlobalModelList()
-  loadArchitectureSchemas()
+  void loadProviders({ cacheTtlMs: PROVIDER_SUMMARY_CACHE_TTL_MS })
+  void loadPriorityMode({ cacheTtlMs: PROVIDER_PRIORITY_MODE_CACHE_TTL_MS })
+  void loadGlobalModelList({ cacheTtlMs: PROVIDER_MODEL_FILTER_CACHE_TTL_MS })
+  void loadArchitectureSchemas()
   document.addEventListener('click', handleGlobalClick, true)
   // 每秒更新一次倒计时
   startTick()

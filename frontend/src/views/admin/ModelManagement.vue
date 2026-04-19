@@ -717,6 +717,7 @@ let modelSelectionRequestId = 0
 let modelProvidersRequestId = 0
 let batchManageModelsRequestId = 0
 let providerOptionsRequest: Promise<void> | null = null
+const GLOBAL_MODELS_LIST_CACHE_TTL_MS = 10 * 1000
 
 // 模型目录分页
 const catalogCurrentPage = ref(1)
@@ -1036,11 +1037,13 @@ const globalModelsQueryParams = computed(() => ({
 
 let modelSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
-async function loadGlobalModels() {
+async function loadGlobalModels(options: { cacheTtlMs?: number } = {}) {
   const requestId = ++globalModelsRequestId
   loading.value = true
   try {
-    const response = await listGlobalModels(globalModelsQueryParams.value)
+    const response = await listGlobalModels(globalModelsQueryParams.value, {
+      cacheTtlMs: options.cacheTtlMs ?? 0,
+    })
     if (requestId !== globalModelsRequestId) return
 
     const pageModels = response.models || []
@@ -1533,9 +1536,11 @@ watch(globalModelsQueryParams, (newParams, oldParams) => {
     && newParams.skip === oldParams?.skip
     && newParams.limit === oldParams?.limit
   if (isSearchOnly) {
-    modelSearchDebounceTimer = setTimeout(loadGlobalModels, 300)
+    modelSearchDebounceTimer = setTimeout(() => {
+      void loadGlobalModels({ cacheTtlMs: GLOBAL_MODELS_LIST_CACHE_TTL_MS })
+    }, 300)
   } else {
-    loadGlobalModels()
+    void loadGlobalModels({ cacheTtlMs: GLOBAL_MODELS_LIST_CACHE_TTL_MS })
   }
 }, { immediate: true })
 

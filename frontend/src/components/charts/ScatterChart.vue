@@ -290,10 +290,10 @@ function transformData(data: ChartData<'scatter'>): ChartData<'scatter'> {
     ...data,
     datasets: data.datasets.map(dataset => ({
       ...dataset,
-      data: (dataset.data as Array<{ x: string; y: number; _originalX?: string }>).map(point => ({
+      data: (dataset.data as Array<{ x: string; y: number; _originalX?: string; _originalY?: number }>).map(point => ({
         ...point,
-        y: toDisplayValue(point.y),
-        _originalY: point.y  // 保存原始值用于 tooltip
+        y: toDisplayValue(Math.min(point.y, 120)),
+        _originalY: point._originalY ?? point.y  // 保存原始值用于 tooltip
       }))
     }))
   }

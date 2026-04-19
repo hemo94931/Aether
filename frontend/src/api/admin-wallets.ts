@@ -1,4 +1,5 @@
 import apiClient from './client'
+import { buildCacheKey, cachedRequest } from '@/utils/cache'
 import type { RefundRequest, WalletSummary, WalletTransaction } from './wallet'
 
 export interface AdminWallet extends WalletSummary {
@@ -100,41 +101,51 @@ export const adminWalletApi = {
   async listAllWallets(params?: {
     status?: string
     owner_type?: 'user' | 'api_key'
-  }): Promise<AdminWallet[]> {
-    const items: AdminWallet[] = []
-    const limit = 200
-    const maxPages = 200
-    let offset = 0
-    let page = 0
+  }, options: { cacheTtlMs?: number } = {}): Promise<AdminWallet[]> {
+    const cacheKey = buildCacheKey(
+      'admin:wallets:list-all',
+      params as Record<string, unknown> | undefined,
+    )
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const items: AdminWallet[] = []
+        const limit = 200
+        const maxPages = 200
+        let offset = 0
+        let page = 0
 
-    while (page < maxPages) {
-      const response = await apiClient.get<AdminWalletListResponse>('/api/admin/wallets', {
-        params: {
-          ...params,
-          limit,
-          offset,
-        },
-      })
-      const data = response.data
-      items.push(...data.items)
+        while (page < maxPages) {
+          const response = await apiClient.get<AdminWalletListResponse>('/api/admin/wallets', {
+            params: {
+              ...params,
+              limit,
+              offset,
+            },
+          })
+          const data = response.data
+          items.push(...data.items)
 
-      if (items.length >= data.total || data.items.length < limit) {
-        break
-      }
+          if (items.length >= data.total || data.items.length < limit) {
+            break
+          }
 
-      const nextOffset = offset + data.items.length
-      if (nextOffset <= offset) {
-        throw new Error('分页游标未前进，终止全量钱包拉取以避免死循环')
-      }
-      offset = nextOffset
-      page += 1
-    }
+          const nextOffset = offset + data.items.length
+          if (nextOffset <= offset) {
+            throw new Error('分页游标未前进，终止全量钱包拉取以避免死循环')
+          }
+          offset = nextOffset
+          page += 1
+        }
 
-    if (page >= maxPages) {
-      throw new Error(`钱包列表分页超过最大页数 ${maxPages}，已中止请求`)
-    }
+        if (page >= maxPages) {
+          throw new Error(`钱包列表分页超过最大页数 ${maxPages}，已中止请求`)
+        }
 
-    return items
+        return items
+      },
+      options.cacheTtlMs ?? 0,
+    )
   },
 
   async getWalletDetail(walletId: string): Promise<AdminWalletDetailResponse> {

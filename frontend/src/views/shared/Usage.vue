@@ -35,9 +35,10 @@
           :has-error="heatmapError"
         />
         <IntervalTimelineCard
-          :title="isAdminPage ? '请求间隔时间线' : '我的请求间隔'"
+          :title="intervalTimelineTitle"
           :is-admin="isAdminPage"
-          :hours="24"
+          :hours="intervalTimelineHours"
+          :refresh-interval-ms="30000"
         />
       </div>
 
@@ -108,6 +109,7 @@
       @update:page-size="handlePageSizeChange"
       @update:auto-refresh="handleAutoRefreshChange"
       @refresh="refreshData"
+      @prefetch-detail="prefetchRequestDetail"
       @show-detail="showRequestDetail"
     />
 
@@ -129,6 +131,7 @@ import { useAuthStore } from '@/stores/auth'
 import { usageApi } from '@/api/usage'
 import { usersApi } from '@/api/users'
 import { meApi } from '@/api/me'
+import { dashboardApi } from '@/api/dashboard'
 import { PanelTopClose, PanelTopOpen } from 'lucide-vue-next'
 import {
   UsageModelTable,
@@ -171,6 +174,44 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 const pageSizeOptions = [10, 20, 50, 100]
 
+function clampIntervalTimelineHours(hours: number): number {
+  return Math.min(720, Math.max(1, Math.ceil(hours)))
+}
+
+function getIntervalTimelineHours(dateRange: DateRangeParams): number {
+  switch (dateRange.preset) {
+    case 'yesterday':
+      return 48
+    case 'last7days':
+      return 24 * 7
+    case 'last30days':
+      return 24 * 30
+    case 'last90days':
+      return 24 * 30
+    case 'today':
+      return 24
+    default:
+      break
+  }
+
+  if (dateRange.start_date && dateRange.end_date) {
+    const start = new Date(`${dateRange.start_date}T00:00:00`)
+    const end = new Date(`${dateRange.end_date}T23:59:59`)
+    const diffMs = end.getTime() - start.getTime()
+    if (!Number.isNaN(diffMs) && diffMs >= 0) {
+      return clampIntervalTimelineHours(diffMs / (1000 * 60 * 60))
+    }
+  }
+
+  return 24
+}
+
+function formatIntervalTimelineWindow(hours: number): string {
+  if (hours === 24) return '最近24小时'
+  if (hours % 24 === 0) return `最近${hours / 24}天`
+  return `最近${hours}小时`
+}
+
 // 筛选状态
 const filterSearch = ref('')
 const filterUser = ref('__all__')
@@ -200,6 +241,11 @@ const {
 const activityHeatmapData = ref<ActivityHeatmap | null>(null)
 const isLoadingHeatmap = ref(false)
 const heatmapError = ref(false)
+const intervalTimelineHours = computed(() => getIntervalTimelineHours(timeRange.value))
+const intervalTimelineTitle = computed(() => {
+  const baseTitle = isAdminPage.value ? '请求间隔时间线' : '我的请求间隔'
+  return `${baseTitle}（${formatIntervalTimelineWindow(intervalTimelineHours.value)}）`
+})
 const ADMIN_ANALYTICS_REFRESH_INTERVAL = 60000
 let adminAnalyticsRefreshInFlight: Promise<void> | null = null
 let lastAdminAnalyticsRefreshAt = 0
@@ -252,13 +298,6 @@ async function refreshAdminAnalytics(options: { force?: boolean } = {}) {
     } catch (error) {
       log.error('加载统计数据失败:', error)
       warning('统计数据加载失败，请刷新重试')
-    }
-
-    try {
-      await loadHeatmapData()
-      hasSuccessfulRefresh = true
-    } catch (error) {
-      log.error('加载热力图数据失败:', error)
     }
 
     if (hasSuccessfulRefresh) {
@@ -632,6 +671,7 @@ onMounted(async () => {
     )
     void (async () => {
       await refreshAdminAnalytics({ force: true })
+      await loadHeatmapData()
       await loadAdminUsers()
     })()
   } else {
@@ -769,6 +809,7 @@ async function refreshData() {
         getCurrentFilters(),
         timeRange.value
       )
+      // 热力图反映长期活跃分布，不跟随自动刷新链路一起重载。
       void refreshAdminAnalytics()
       return
     }
@@ -789,6 +830,13 @@ function showRequestDetail(id: string) {
   if (!isAdminPage.value) return
   selectedRequestId.value = id
   detailModalOpen.value = true
+}
+
+function prefetchRequestDetail(id: string) {
+  if (!isAdminPage.value) return
+  void dashboardApi.prefetchRequestDetail(id).catch(error => {
+    log.debug('预取请求详情失败', error)
+  })
 }
 
 </script>

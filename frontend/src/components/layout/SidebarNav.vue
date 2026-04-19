@@ -29,6 +29,9 @@
                 ? 'bg-primary/10 text-primary font-medium'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
             ]"
+            @mouseenter="emit('prefetch', item.href)"
+            @focus="emit('prefetch', item.href)"
+            @pointerdown="emit('prefetch', item.href)"
             @click="handleNavigate(item.href)"
           >
             <div class="flex items-center gap-2.5">
@@ -76,6 +79,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'navigate', href: string): void
+  (e: 'prefetch', href: string): void
 }>()
 
 function isItemActive(href: string) {

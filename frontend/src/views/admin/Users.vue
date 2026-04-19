@@ -1128,6 +1128,9 @@ const filterStatus = ref('all')
 
 const currentPage = ref(1)
 const pageSize = ref(20)
+const USERS_PAGE_CACHE_TTL_MS = 10 * 1000
+const USER_WALLETS_CACHE_TTL_MS = 10 * 1000
+let userWalletsRequestId = 0
 
 const filteredUsers = computed(() => {
   let filtered = [...usersStore.users]
@@ -1173,31 +1176,38 @@ watch([searchQuery, filterRole, filterStatus], () => {
   currentPage.value = 1
 })
 
-onMounted(async () => {
-  await refreshUsers()
+onMounted(() => {
+  void refreshUsers({ preferCache: true })
 })
 
-async function refreshUsers() {
-  await Promise.all([
-    usersStore.fetchUsers(),
-    loadUserWallets()
-  ])
+async function refreshUsers(options: { preferCache?: boolean } = {}) {
+  const cacheTtlMs = options.preferCache ? USERS_PAGE_CACHE_TTL_MS : 0
+  await usersStore.fetchUsers({ cacheTtlMs })
+  void loadUserWallets({
+    cacheTtlMs: options.preferCache ? USER_WALLETS_CACHE_TTL_MS : 0,
+  })
 }
 
 function formatDate(dateString: string) {
   return new Date(dateString).toLocaleDateString('zh-CN')
 }
 
-async function loadUserWallets() {
+async function loadUserWallets(options: { cacheTtlMs?: number } = {}) {
+  const requestId = ++userWalletsRequestId
   try {
-    const wallets = await adminWalletApi.listAllWallets()
+    const wallets = await adminWalletApi.listAllWallets(
+      { owner_type: 'user' },
+      { cacheTtlMs: options.cacheTtlMs ?? 0 },
+    )
+    if (requestId !== userWalletsRequestId) return
     userWalletMap.value = wallets
-      .filter((wallet) => wallet.owner_type === 'user' && !!wallet.user_id)
+      .filter((wallet) => !!wallet.user_id)
       .reduce<Record<string, AdminWallet>>((acc, wallet) => {
         acc[wallet.user_id as string] = wallet
         return acc
       }, {})
   } catch (err) {
+    if (requestId !== userWalletsRequestId) return
     log.error('加载用户钱包失败:', err)
   }
 }

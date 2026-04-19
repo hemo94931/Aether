@@ -5245,7 +5245,7 @@ async fn gateway_handles_users_me_usage_interval_timeline_and_heatmap_locally_wi
             "gpt-4.1",
             "OpenAI",
             "completed",
-            now - chrono::Duration::days(1),
+            now - chrono::Duration::days(1) - chrono::Duration::minutes(1),
         ),
     ]));
     let (gateway_url, upstream_hits, gateway_handle, upstream_handle) =
