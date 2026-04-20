@@ -127,11 +127,44 @@ function getLegacyOAuthState(
   )
 }
 
+function getOAuthStatusSeverity(status: OAuthStatusInfo | null): number {
+  if (!status) return 0
+  if (status.isInvalid) return 3
+  if (status.isExpired) return 2
+  return 1
+}
+
+function mergeOAuthStatusDisplay(
+  snapshotStatus: OAuthStatusInfo | null,
+  legacyStatus: OAuthStatusInfo | null,
+): OAuthStatusInfo | null {
+  if (getOAuthStatusSeverity(legacyStatus) > getOAuthStatusSeverity(snapshotStatus)) {
+    return legacyStatus
+  }
+
+  if (
+    snapshotStatus?.isInvalid
+    && !snapshotStatus.invalidReason
+    && legacyStatus?.isInvalid
+    && legacyStatus.invalidReason
+  ) {
+    return {
+      ...snapshotStatus,
+      invalidReason: legacyStatus.invalidReason,
+    }
+  }
+
+  return snapshotStatus ?? legacyStatus
+}
+
 export function getOAuthStatusDisplay(
   input: ProviderKeyStatusCarrier,
   tick: number,
 ): OAuthStatusInfo | null {
-  return getSnapshotOAuthState(input, tick) ?? getLegacyOAuthState(input, tick)
+  return mergeOAuthStatusDisplay(
+    getSnapshotOAuthState(input, tick),
+    getLegacyOAuthState(input, tick),
+  )
 }
 
 export function getOAuthStatusTitle(

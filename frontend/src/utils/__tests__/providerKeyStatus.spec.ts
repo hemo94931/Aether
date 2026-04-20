@@ -62,6 +62,37 @@ describe('providerKeyStatus', () => {
     })
   })
 
+  it('prefers legacy oauth invalidation over a stale valid snapshot', () => {
+    const future = Math.floor(Date.now() / 1000) + 2 * 24 * 3600
+    const status = getOAuthStatusDisplay(
+      {
+        auth_type: 'oauth',
+        oauth_expires_at: future,
+        oauth_invalid_reason: '[REFRESH_FAILED] Token 续期失败 (401): refresh_token_reused',
+        status_snapshot: {
+          oauth: {
+            code: 'valid',
+            expires_at: future,
+          },
+          account: {
+            code: 'ok',
+            blocked: false,
+          },
+          quota: { code: 'ok', exhausted: false },
+        },
+      },
+      0,
+    )
+
+    expect(status).toEqual({
+      text: '已失效',
+      isExpired: false,
+      isExpiringSoon: false,
+      isInvalid: true,
+      invalidReason: '[REFRESH_FAILED] Token 续期失败 (401): refresh_token_reused',
+    })
+  })
+
   it('falls back to countdown for account block without oauth invalidation', () => {
     const status = getOAuthStatusDisplay(
       {

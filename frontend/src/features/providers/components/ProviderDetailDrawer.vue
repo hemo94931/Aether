@@ -568,18 +568,6 @@
                           </span>
                         </div>
                       </div>
-                      <div
-                        v-if="getCodexCreditsSummary(getCodexQuotaDisplay(key))"
-                        class="flex items-center justify-between text-[10px] mb-2"
-                      >
-                        <span class="text-muted-foreground">积分</span>
-                        <span
-                          class="font-medium"
-                          :class="getCodexQuotaDisplay(key)?.has_credits === false ? 'text-red-600 dark:text-red-400' : 'text-foreground/80'"
-                        >
-                          {{ getCodexCreditsSummary(getCodexQuotaDisplay(key)) }}
-                        </span>
-                      </div>
                       <!-- 限额并排显示：Team/Plus/Enterprise 账号 2列, Free 账号 1列 -->
                       <div
                         class="grid gap-3"
@@ -1938,13 +1926,6 @@ function getCodexQuotaDisplay(key: EndpointAPIKey): CodexUpstreamMetadata | null
     display.secondary_window_minutes = secondaryWindow.window_minutes
   }
 
-  if (typeof quota.credits?.has_credits === 'boolean') {
-    display.has_credits = quota.credits.has_credits
-  }
-  if (typeof quota.credits?.balance === 'number') {
-    display.credits_balance = quota.credits.balance
-  }
-
   return Object.keys(display).length > 0 ? display : null
 }
 
@@ -1953,26 +1934,7 @@ function hasCodexQuotaDisplayData(key: EndpointAPIKey): boolean {
   return !!codex && (
     codex.primary_used_percent !== undefined
     || codex.secondary_used_percent !== undefined
-    || codex.has_credits !== undefined
-    || codex.credits_balance !== undefined
   )
-}
-
-function getCodexCreditsSummary(codex: CodexUpstreamMetadata | null | undefined): string | null {
-  if (!codex) return null
-  if (codex.has_credits === true && typeof codex.credits_balance === 'number') {
-    return `积分 ${codex.credits_balance.toFixed(2)}`
-  }
-  if (codex.has_credits === true) {
-    return '有积分'
-  }
-  if (codex.has_credits === false) {
-    return '无可用积分'
-  }
-  if (typeof codex.credits_balance === 'number') {
-    return `积分 ${codex.credits_balance.toFixed(2)}`
-  }
-  return null
 }
 
 function getKiroQuotaDisplay(key: EndpointAPIKey): KiroUpstreamMetadata | null {
