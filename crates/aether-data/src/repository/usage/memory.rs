@@ -1983,11 +1983,12 @@ impl UsageReadRepository for InMemoryUsageReadRepository {
                     continue;
                 }
             }
-            if query.admin_mode {
-                if item.status == "pending" || item.status == "streaming" {
-                    continue;
-                }
-            } else if item.billing_status != "settled" || item.total_cost_usd <= 0.0 {
+            if item.status == "pending" || item.status == "streaming" {
+                continue;
+            }
+            if item.provider_name.eq_ignore_ascii_case("unknown")
+                || item.provider_name.eq_ignore_ascii_case("pending")
+            {
                 continue;
             }
             let ts = i64::try_from(item.created_at_unix_ms).unwrap_or_default();

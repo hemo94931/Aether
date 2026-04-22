@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 static BASELINE_V2_SQL: &str = include_str!("../bootstrap/20260413020000_baseline_v2.sql");
-const BASELINE_V2_CUTOFF_VERSION: i64 = 20260418000000;
+const BASELINE_V2_CUTOFF_VERSION: i64 = 20260422110000;
 const MIGRATIONS_TABLE_EXISTS_SQL: &str =
     "SELECT to_regclass('public._sqlx_migrations') IS NOT NULL";
 const PUBLIC_BASE_TABLE_COUNT_SQL: &str = r#"
@@ -637,6 +637,8 @@ mod tests {
                 20260413030000,
                 20260415000000,
                 20260418000000,
+                20260421000000,
+                20260422110000,
             ]
         );
     }
@@ -658,6 +660,29 @@ mod tests {
         assert!(BASELINE_V2_SQL.contains("billing_snapshot_schema_version"));
         assert!(BASELINE_V2_SQL.contains("price_per_request"));
         assert!(BASELINE_V2_SQL.contains("candidate_index integer"));
+        assert!(BASELINE_V2_SQL.contains("CREATE TABLE IF NOT EXISTS public.stats_user_summary"));
+        assert!(
+            BASELINE_V2_SQL.contains("CREATE TABLE IF NOT EXISTS public.stats_user_daily_model")
+        );
+        assert!(
+            BASELINE_V2_SQL.contains("CREATE TABLE IF NOT EXISTS public.stats_hourly_user_model")
+        );
+        assert!(BASELINE_V2_SQL.contains("CREATE TABLE IF NOT EXISTS public.schema_backfills"));
+        assert!(BASELINE_V2_SQL.contains("idx_schema_backfills_applied_at"));
+        assert!(BASELINE_V2_SQL.contains("ALTER TABLE public.stats_hourly"));
+        assert!(BASELINE_V2_SQL.contains("response_time_sum_ms double precision"));
+        assert!(
+            BASELINE_V2_SQL.contains("CREATE TABLE IF NOT EXISTS public.stats_user_daily_provider")
+        );
+        assert!(BASELINE_V2_SQL
+            .contains("CREATE TABLE IF NOT EXISTS public.stats_user_daily_api_format"));
+        assert!(BASELINE_V2_SQL
+            .contains("CREATE TABLE IF NOT EXISTS public.stats_daily_cost_savings_model_provider"));
+        assert!(BASELINE_V2_SQL.contains(
+            "CREATE TABLE IF NOT EXISTS public.stats_user_daily_cost_savings_model_provider"
+        ));
+        assert!(BASELINE_V2_SQL.contains("successful_response_time_sum_ms double precision"));
+        assert!(BASELINE_V2_SQL.contains("cache_hit_total_requests bigint DEFAULT 0 NOT NULL"));
     }
 
     #[test]
@@ -737,6 +762,8 @@ mod tests {
                 20260413030000,
                 20260415000000,
                 20260418000000,
+                20260421000000,
+                20260422110000,
             ]
         );
     }

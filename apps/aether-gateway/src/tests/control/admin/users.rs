@@ -674,6 +674,7 @@ async fn gateway_handles_admin_user_api_key_routes_locally_with_trusted_admin_pr
             Some(200),
             false,
             9,
+            0,
             1.5,
             false,
         )
@@ -835,6 +836,7 @@ async fn gateway_returns_conflict_for_admin_create_user_api_key_when_writer_unav
             Some(200),
             false,
             9,
+            0,
             1.5,
             false,
         )
@@ -963,6 +965,7 @@ async fn gateway_returns_conflict_for_admin_lock_user_api_key_when_writer_unavai
             Some(200),
             false,
             9,
+            0,
             1.5,
             false,
         )
@@ -1088,6 +1091,7 @@ async fn gateway_returns_conflict_for_admin_update_user_api_key_when_writer_unav
             Some(200),
             false,
             9,
+            0,
             1.5,
             false,
         )
@@ -1162,6 +1166,7 @@ async fn gateway_returns_conflict_for_admin_delete_user_api_key_when_writer_unav
             Some(200),
             false,
             9,
+            0,
             1.5,
             false,
         )
@@ -1238,6 +1243,7 @@ async fn gateway_lists_admin_user_api_keys_locally_with_trusted_admin_principal(
             Some(200),
             false,
             9,
+            0,
             1.5,
             false,
         )
@@ -1428,6 +1434,7 @@ async fn gateway_reveals_admin_user_full_key_locally_with_trusted_admin_principa
             Some(200),
             false,
             9,
+            0,
             1.5,
             false,
         )

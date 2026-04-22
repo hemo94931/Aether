@@ -17,12 +17,18 @@ use aether_data_contracts::repository::usage::{
     UsageTimeSeriesQuery,
 };
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use futures_util::future::BoxFuture;
 use futures_util::TryStreamExt;
 use serde_json::Map;
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{
+    postgres::{PgArguments, PgRow},
+    query::Query,
+    PgPool, Postgres, QueryBuilder, Row,
+};
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use uuid::Uuid;
 
@@ -42,6 +48,7 @@ use crate::{
 // Legacy inline body columns on public.usage are deprecated. Keep the threshold at zero so
 // newly captured bodies always spill to usage_body_blobs and resolve through usage_http_audits.
 const MAX_INLINE_USAGE_BODY_BYTES: usize = 0;
+const MAX_SUPPORTED_UNIX_SECS: u64 = 253_402_300_799;
 const FIND_USAGE_BODY_BLOB_BY_REF_SQL: &str =
     r#"SELECT payload_gzip FROM usage_body_blobs WHERE body_ref = $1 LIMIT 1"#;
 const UPSERT_USAGE_BODY_BLOB_SQL: &str = r#"
@@ -65,6 +72,877 @@ const DELETE_USAGE_BODY_BLOB_SQL: &str = r#"
 DELETE FROM usage_body_blobs
 WHERE body_ref = $1
 "#;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct AggregateRangeSplit {
+    raw_leading: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    aggregate: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    raw_trailing: Option<(DateTime<Utc>, DateTime<Utc>)>,
+}
+
+fn dashboard_non_empty_utc_range(
+    start_utc: DateTime<Utc>,
+    end_utc: DateTime<Utc>,
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    (start_utc < end_utc).then_some((start_utc, end_utc))
+}
+
+fn dashboard_unix_secs_to_utc(unix_secs: u64) -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp(unix_secs.min(MAX_SUPPORTED_UNIX_SECS) as i64, 0)
+        .expect("clamped unix timestamp should be valid")
+}
+
+fn dashboard_utc_to_unix_secs(value: DateTime<Utc>) -> u64 {
+    value.timestamp().max(0) as u64
+}
+
+fn dashboard_utc_midnight(value: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::<Utc>::from_naive_utc_and_offset(
+        value
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be valid"),
+        Utc,
+    )
+}
+
+fn dashboard_next_utc_midnight(value: DateTime<Utc>) -> DateTime<Utc> {
+    let midnight = dashboard_utc_midnight(value);
+    if value == midnight {
+        midnight
+    } else {
+        midnight + chrono::Duration::days(1)
+    }
+}
+
+fn dashboard_utc_hour(value: DateTime<Utc>) -> DateTime<Utc> {
+    let hour_unix_secs = value.timestamp().div_euclid(3600) * 3600;
+    DateTime::<Utc>::from_timestamp(hour_unix_secs, 0).expect("hour-aligned timestamp is valid")
+}
+
+fn dashboard_next_utc_hour(value: DateTime<Utc>) -> DateTime<Utc> {
+    let hour_utc = dashboard_utc_hour(value);
+    if value == hour_utc {
+        hour_utc
+    } else {
+        hour_utc + chrono::Duration::hours(1)
+    }
+}
+
+fn split_dashboard_daily_aggregate_range(
+    start_utc: DateTime<Utc>,
+    end_utc: DateTime<Utc>,
+    cutoff_utc: DateTime<Utc>,
+) -> AggregateRangeSplit {
+    if start_utc >= end_utc {
+        return AggregateRangeSplit::default();
+    }
+
+    let aggregate_start = dashboard_next_utc_midnight(start_utc);
+    let aggregate_end = dashboard_utc_midnight(end_utc).min(cutoff_utc);
+
+    if aggregate_start < aggregate_end {
+        let leading_end = aggregate_start.min(end_utc);
+        AggregateRangeSplit {
+            raw_leading: dashboard_non_empty_utc_range(start_utc, leading_end),
+            aggregate: dashboard_non_empty_utc_range(aggregate_start, aggregate_end),
+            raw_trailing: dashboard_non_empty_utc_range(aggregate_end, end_utc),
+        }
+    } else {
+        AggregateRangeSplit {
+            raw_leading: dashboard_non_empty_utc_range(start_utc, end_utc),
+            aggregate: None,
+            raw_trailing: None,
+        }
+    }
+}
+
+fn split_dashboard_hourly_aggregate_range(
+    start_utc: DateTime<Utc>,
+    end_utc: DateTime<Utc>,
+    cutoff_utc: DateTime<Utc>,
+) -> AggregateRangeSplit {
+    if start_utc >= end_utc {
+        return AggregateRangeSplit::default();
+    }
+
+    let aggregate_start = dashboard_next_utc_hour(start_utc);
+    let aggregate_end = dashboard_utc_hour(end_utc).min(cutoff_utc);
+
+    if aggregate_start < aggregate_end {
+        let leading_end = aggregate_start.min(end_utc);
+        AggregateRangeSplit {
+            raw_leading: dashboard_non_empty_utc_range(start_utc, leading_end),
+            aggregate: dashboard_non_empty_utc_range(aggregate_start, aggregate_end),
+            raw_trailing: dashboard_non_empty_utc_range(aggregate_end, end_utc),
+        }
+    } else {
+        AggregateRangeSplit {
+            raw_leading: dashboard_non_empty_utc_range(start_utc, end_utc),
+            aggregate: None,
+            raw_trailing: None,
+        }
+    }
+}
+
+fn absorb_dashboard_summary(
+    target: &mut StoredUsageDashboardSummary,
+    part: &StoredUsageDashboardSummary,
+) {
+    target.total_requests = target.total_requests.saturating_add(part.total_requests);
+    target.input_tokens = target.input_tokens.saturating_add(part.input_tokens);
+    target.effective_input_tokens = target
+        .effective_input_tokens
+        .saturating_add(part.effective_input_tokens);
+    target.output_tokens = target.output_tokens.saturating_add(part.output_tokens);
+    target.total_tokens = target.total_tokens.saturating_add(part.total_tokens);
+    target.cache_creation_tokens = target
+        .cache_creation_tokens
+        .saturating_add(part.cache_creation_tokens);
+    target.cache_read_tokens = target
+        .cache_read_tokens
+        .saturating_add(part.cache_read_tokens);
+    target.total_input_context = target
+        .total_input_context
+        .saturating_add(part.total_input_context);
+    target.cache_creation_cost_usd += part.cache_creation_cost_usd;
+    target.cache_read_cost_usd += part.cache_read_cost_usd;
+    target.total_cost_usd += part.total_cost_usd;
+    target.actual_total_cost_usd += part.actual_total_cost_usd;
+    target.error_requests = target.error_requests.saturating_add(part.error_requests);
+    target.response_time_sum_ms += part.response_time_sum_ms;
+    target.response_time_samples = target
+        .response_time_samples
+        .saturating_add(part.response_time_samples);
+}
+
+fn absorb_dashboard_provider_counts(
+    target: &mut BTreeMap<String, u64>,
+    rows: Vec<StoredUsageDashboardProviderCount>,
+) {
+    for row in rows {
+        let entry = target.entry(row.provider_name).or_default();
+        *entry = entry.saturating_add(row.request_count);
+    }
+}
+
+fn finalize_dashboard_provider_counts(
+    grouped: BTreeMap<String, u64>,
+) -> Vec<StoredUsageDashboardProviderCount> {
+    let mut items = grouped
+        .into_iter()
+        .map(
+            |(provider_name, request_count)| StoredUsageDashboardProviderCount {
+                provider_name,
+                request_count,
+            },
+        )
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        right
+            .request_count
+            .cmp(&left.request_count)
+            .then_with(|| left.provider_name.cmp(&right.provider_name))
+    });
+    items
+}
+
+fn decode_dashboard_summary_row(
+    row: &PgRow,
+) -> Result<StoredUsageDashboardSummary, DataLayerError> {
+    Ok(StoredUsageDashboardSummary {
+        total_requests: row
+            .try_get::<i64, _>("total_requests")
+            .map_postgres_err()?
+            .max(0) as u64,
+        input_tokens: row
+            .try_get::<i64, _>("input_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        effective_input_tokens: row
+            .try_get::<i64, _>("effective_input_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        output_tokens: row
+            .try_get::<i64, _>("output_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        total_tokens: row
+            .try_get::<i64, _>("total_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_creation_tokens: row
+            .try_get::<i64, _>("cache_creation_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_read_tokens: row
+            .try_get::<i64, _>("cache_read_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        total_input_context: row
+            .try_get::<i64, _>("total_input_context")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_creation_cost_usd: row
+            .try_get::<f64, _>("cache_creation_cost_usd")
+            .map_postgres_err()?,
+        cache_read_cost_usd: row
+            .try_get::<f64, _>("cache_read_cost_usd")
+            .map_postgres_err()?,
+        total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
+        actual_total_cost_usd: row
+            .try_get::<f64, _>("actual_total_cost_usd")
+            .map_postgres_err()?,
+        error_requests: row
+            .try_get::<i64, _>("error_requests")
+            .map_postgres_err()?
+            .max(0) as u64,
+        response_time_sum_ms: row
+            .try_get::<f64, _>("response_time_sum_ms")
+            .map_postgres_err()?,
+        response_time_samples: row
+            .try_get::<i64, _>("response_time_samples")
+            .map_postgres_err()?
+            .max(0) as u64,
+    })
+}
+
+fn finalize_dashboard_daily_breakdown_rows(
+    mut items: Vec<StoredUsageDashboardDailyBreakdownRow>,
+) -> Vec<StoredUsageDashboardDailyBreakdownRow> {
+    items.sort_by(|left, right| {
+        left.date
+            .cmp(&right.date)
+            .then_with(|| {
+                right
+                    .total_cost_usd
+                    .partial_cmp(&left.total_cost_usd)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| left.model.cmp(&right.model))
+            .then_with(|| left.provider.cmp(&right.provider))
+    });
+    items
+}
+
+fn decode_dashboard_daily_breakdown_row(
+    row: &PgRow,
+) -> Result<StoredUsageDashboardDailyBreakdownRow, DataLayerError> {
+    Ok(StoredUsageDashboardDailyBreakdownRow {
+        date: row.try_get::<String, _>("date").map_postgres_err()?,
+        model: row.try_get::<String, _>("model").map_postgres_err()?,
+        provider: row.try_get::<String, _>("provider").map_postgres_err()?,
+        requests: row.try_get::<i64, _>("requests").map_postgres_err()?.max(0) as u64,
+        total_tokens: row
+            .try_get::<i64, _>("total_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
+        response_time_sum_ms: row
+            .try_get::<f64, _>("response_time_sum_ms")
+            .map_postgres_err()?,
+        response_time_samples: row
+            .try_get::<i64, _>("response_time_samples")
+            .map_postgres_err()?
+            .max(0) as u64,
+    })
+}
+
+fn absorb_usage_breakdown_rows(
+    target: &mut BTreeMap<String, StoredUsageBreakdownSummaryRow>,
+    rows: Vec<StoredUsageBreakdownSummaryRow>,
+) {
+    for row in rows {
+        let group_key = row.group_key.clone();
+        let entry =
+            target
+                .entry(group_key.clone())
+                .or_insert_with(|| StoredUsageBreakdownSummaryRow {
+                    group_key,
+                    ..Default::default()
+                });
+        entry.request_count = entry.request_count.saturating_add(row.request_count);
+        entry.input_tokens = entry.input_tokens.saturating_add(row.input_tokens);
+        entry.total_tokens = entry.total_tokens.saturating_add(row.total_tokens);
+        entry.output_tokens = entry.output_tokens.saturating_add(row.output_tokens);
+        entry.effective_input_tokens = entry
+            .effective_input_tokens
+            .saturating_add(row.effective_input_tokens);
+        entry.total_input_context = entry
+            .total_input_context
+            .saturating_add(row.total_input_context);
+        entry.cache_creation_tokens = entry
+            .cache_creation_tokens
+            .saturating_add(row.cache_creation_tokens);
+        entry.cache_creation_ephemeral_5m_tokens = entry
+            .cache_creation_ephemeral_5m_tokens
+            .saturating_add(row.cache_creation_ephemeral_5m_tokens);
+        entry.cache_creation_ephemeral_1h_tokens = entry
+            .cache_creation_ephemeral_1h_tokens
+            .saturating_add(row.cache_creation_ephemeral_1h_tokens);
+        entry.cache_read_tokens = entry
+            .cache_read_tokens
+            .saturating_add(row.cache_read_tokens);
+        entry.total_cost_usd += row.total_cost_usd;
+        entry.actual_total_cost_usd += row.actual_total_cost_usd;
+        entry.success_count = entry.success_count.saturating_add(row.success_count);
+        entry.response_time_sum_ms += row.response_time_sum_ms;
+        entry.response_time_samples = entry
+            .response_time_samples
+            .saturating_add(row.response_time_samples);
+        entry.overall_response_time_sum_ms += row.overall_response_time_sum_ms;
+        entry.overall_response_time_samples = entry
+            .overall_response_time_samples
+            .saturating_add(row.overall_response_time_samples);
+    }
+}
+
+fn finalize_usage_breakdown_rows(
+    grouped: BTreeMap<String, StoredUsageBreakdownSummaryRow>,
+) -> Vec<StoredUsageBreakdownSummaryRow> {
+    let mut items = grouped.into_values().collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        right
+            .request_count
+            .cmp(&left.request_count)
+            .then_with(|| left.group_key.cmp(&right.group_key))
+    });
+    items
+}
+
+fn decode_usage_breakdown_summary_row(
+    row: &PgRow,
+) -> Result<StoredUsageBreakdownSummaryRow, DataLayerError> {
+    Ok(StoredUsageBreakdownSummaryRow {
+        group_key: row.try_get::<String, _>("group_key").map_postgres_err()?,
+        request_count: row
+            .try_get::<i64, _>("request_count")
+            .map_postgres_err()?
+            .max(0) as u64,
+        input_tokens: row
+            .try_get::<i64, _>("input_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        total_tokens: row
+            .try_get::<i64, _>("total_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        output_tokens: row
+            .try_get::<i64, _>("output_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        effective_input_tokens: row
+            .try_get::<i64, _>("effective_input_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        total_input_context: row
+            .try_get::<i64, _>("total_input_context")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_creation_tokens: row
+            .try_get::<i64, _>("cache_creation_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_creation_ephemeral_5m_tokens: row
+            .try_get::<i64, _>("cache_creation_ephemeral_5m_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_creation_ephemeral_1h_tokens: row
+            .try_get::<i64, _>("cache_creation_ephemeral_1h_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_read_tokens: row
+            .try_get::<i64, _>("cache_read_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
+        actual_total_cost_usd: row
+            .try_get::<f64, _>("actual_total_cost_usd")
+            .map_postgres_err()?,
+        success_count: row
+            .try_get::<i64, _>("success_count")
+            .map_postgres_err()?
+            .max(0) as u64,
+        response_time_sum_ms: row
+            .try_get::<f64, _>("response_time_sum_ms")
+            .map_postgres_err()?,
+        response_time_samples: row
+            .try_get::<i64, _>("response_time_samples")
+            .map_postgres_err()?
+            .max(0) as u64,
+        overall_response_time_sum_ms: row
+            .try_get::<f64, _>("overall_response_time_sum_ms")
+            .map_postgres_err()?,
+        overall_response_time_samples: row
+            .try_get::<i64, _>("overall_response_time_samples")
+            .map_postgres_err()?
+            .max(0) as u64,
+    })
+}
+
+fn absorb_usage_audit_summary(target: &mut StoredUsageAuditSummary, row: StoredUsageAuditSummary) {
+    target.total_requests = target.total_requests.saturating_add(row.total_requests);
+    target.input_tokens = target.input_tokens.saturating_add(row.input_tokens);
+    target.output_tokens = target.output_tokens.saturating_add(row.output_tokens);
+    target.recorded_total_tokens = target
+        .recorded_total_tokens
+        .saturating_add(row.recorded_total_tokens);
+    target.cache_creation_tokens = target
+        .cache_creation_tokens
+        .saturating_add(row.cache_creation_tokens);
+    target.cache_creation_ephemeral_5m_tokens = target
+        .cache_creation_ephemeral_5m_tokens
+        .saturating_add(row.cache_creation_ephemeral_5m_tokens);
+    target.cache_creation_ephemeral_1h_tokens = target
+        .cache_creation_ephemeral_1h_tokens
+        .saturating_add(row.cache_creation_ephemeral_1h_tokens);
+    target.cache_read_tokens = target
+        .cache_read_tokens
+        .saturating_add(row.cache_read_tokens);
+    target.total_cost_usd += row.total_cost_usd;
+    target.actual_total_cost_usd += row.actual_total_cost_usd;
+    target.cache_creation_cost_usd += row.cache_creation_cost_usd;
+    target.cache_read_cost_usd += row.cache_read_cost_usd;
+    target.total_response_time_ms += row.total_response_time_ms;
+    target.error_requests = target.error_requests.saturating_add(row.error_requests);
+}
+
+fn absorb_usage_cache_hit_summary(
+    target: &mut StoredUsageCacheHitSummary,
+    row: StoredUsageCacheHitSummary,
+) {
+    target.total_requests = target.total_requests.saturating_add(row.total_requests);
+    target.cache_hit_requests = target
+        .cache_hit_requests
+        .saturating_add(row.cache_hit_requests);
+}
+
+fn decode_usage_cache_hit_summary_row(
+    row: &PgRow,
+) -> Result<StoredUsageCacheHitSummary, DataLayerError> {
+    Ok(StoredUsageCacheHitSummary {
+        total_requests: row
+            .try_get::<i64, _>("total_requests")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_hit_requests: row
+            .try_get::<i64, _>("cache_hit_requests")
+            .map_postgres_err()?
+            .max(0) as u64,
+    })
+}
+
+fn absorb_usage_cache_affinity_hit_summary(
+    target: &mut StoredUsageCacheAffinityHitSummary,
+    row: StoredUsageCacheAffinityHitSummary,
+) {
+    target.total_requests = target.total_requests.saturating_add(row.total_requests);
+    target.requests_with_cache_hit = target
+        .requests_with_cache_hit
+        .saturating_add(row.requests_with_cache_hit);
+    target.input_tokens = target.input_tokens.saturating_add(row.input_tokens);
+    target.cache_read_tokens = target
+        .cache_read_tokens
+        .saturating_add(row.cache_read_tokens);
+    target.cache_creation_tokens = target
+        .cache_creation_tokens
+        .saturating_add(row.cache_creation_tokens);
+    target.total_input_context = target
+        .total_input_context
+        .saturating_add(row.total_input_context);
+    target.cache_read_cost_usd += row.cache_read_cost_usd;
+    target.cache_creation_cost_usd += row.cache_creation_cost_usd;
+}
+
+fn decode_usage_cache_affinity_hit_summary_row(
+    row: &PgRow,
+) -> Result<StoredUsageCacheAffinityHitSummary, DataLayerError> {
+    Ok(StoredUsageCacheAffinityHitSummary {
+        total_requests: row
+            .try_get::<i64, _>("total_requests")
+            .map_postgres_err()?
+            .max(0) as u64,
+        requests_with_cache_hit: row
+            .try_get::<i64, _>("requests_with_cache_hit")
+            .map_postgres_err()?
+            .max(0) as u64,
+        input_tokens: row
+            .try_get::<i64, _>("input_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_read_tokens: row
+            .try_get::<i64, _>("cache_read_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_creation_tokens: row
+            .try_get::<i64, _>("cache_creation_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        total_input_context: row
+            .try_get::<i64, _>("total_input_context")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_read_cost_usd: row
+            .try_get::<f64, _>("cache_read_cost_usd")
+            .map_postgres_err()?,
+        cache_creation_cost_usd: row
+            .try_get::<f64, _>("cache_creation_cost_usd")
+            .map_postgres_err()?,
+    })
+}
+
+fn absorb_usage_settled_cost_summary(
+    target: &mut StoredUsageSettledCostSummary,
+    row: StoredUsageSettledCostSummary,
+) {
+    target.total_cost_usd += row.total_cost_usd;
+    target.total_requests = target.total_requests.saturating_add(row.total_requests);
+    target.input_tokens = target.input_tokens.saturating_add(row.input_tokens);
+    target.output_tokens = target.output_tokens.saturating_add(row.output_tokens);
+    target.cache_creation_tokens = target
+        .cache_creation_tokens
+        .saturating_add(row.cache_creation_tokens);
+    target.cache_read_tokens = target
+        .cache_read_tokens
+        .saturating_add(row.cache_read_tokens);
+    target.first_finalized_at_unix_secs = match (
+        target.first_finalized_at_unix_secs,
+        row.first_finalized_at_unix_secs,
+    ) {
+        (Some(existing), Some(candidate)) => Some(existing.min(candidate)),
+        (None, candidate) => candidate,
+        (existing, None) => existing,
+    };
+    target.last_finalized_at_unix_secs = match (
+        target.last_finalized_at_unix_secs,
+        row.last_finalized_at_unix_secs,
+    ) {
+        (Some(existing), Some(candidate)) => Some(existing.max(candidate)),
+        (None, candidate) => candidate,
+        (existing, None) => existing,
+    };
+}
+
+fn decode_usage_settled_cost_row(
+    row: &PgRow,
+) -> Result<StoredUsageSettledCostSummary, DataLayerError> {
+    Ok(StoredUsageSettledCostSummary {
+        total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
+        total_requests: row
+            .try_get::<i64, _>("total_requests")
+            .map_postgres_err()?
+            .max(0) as u64,
+        input_tokens: row
+            .try_get::<i64, _>("input_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        output_tokens: row
+            .try_get::<i64, _>("output_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_creation_tokens: row
+            .try_get::<i64, _>("cache_creation_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_read_tokens: row
+            .try_get::<i64, _>("cache_read_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        first_finalized_at_unix_secs: row
+            .try_get::<Option<i64>, _>("first_finalized_at_unix_secs")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+        last_finalized_at_unix_secs: row
+            .try_get::<Option<i64>, _>("last_finalized_at_unix_secs")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+    })
+}
+
+fn absorb_usage_cost_savings_summary(
+    target: &mut StoredUsageCostSavingsSummary,
+    row: StoredUsageCostSavingsSummary,
+) {
+    target.cache_read_tokens = target
+        .cache_read_tokens
+        .saturating_add(row.cache_read_tokens);
+    target.cache_read_cost_usd += row.cache_read_cost_usd;
+    target.cache_creation_cost_usd += row.cache_creation_cost_usd;
+    target.estimated_full_cost_usd += row.estimated_full_cost_usd;
+}
+
+fn decode_usage_cost_savings_row(
+    row: &PgRow,
+) -> Result<StoredUsageCostSavingsSummary, DataLayerError> {
+    Ok(StoredUsageCostSavingsSummary {
+        cache_read_tokens: row
+            .try_get::<i64, _>("cache_read_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_read_cost_usd: row
+            .try_get::<f64, _>("cache_read_cost_usd")
+            .map_postgres_err()?,
+        cache_creation_cost_usd: row
+            .try_get::<f64, _>("cache_creation_cost_usd")
+            .map_postgres_err()?,
+        estimated_full_cost_usd: row
+            .try_get::<f64, _>("estimated_full_cost_usd")
+            .map_postgres_err()?,
+    })
+}
+
+fn decode_usage_audit_summary_row(row: &PgRow) -> Result<StoredUsageAuditSummary, DataLayerError> {
+    Ok(StoredUsageAuditSummary {
+        total_requests: row
+            .try_get::<i64, _>("total_requests")
+            .map_postgres_err()?
+            .max(0) as u64,
+        input_tokens: row
+            .try_get::<i64, _>("input_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        output_tokens: row
+            .try_get::<i64, _>("output_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        recorded_total_tokens: row
+            .try_get::<i64, _>("recorded_total_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_creation_tokens: row
+            .try_get::<i64, _>("cache_creation_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_creation_ephemeral_5m_tokens: row
+            .try_get::<i64, _>("cache_creation_ephemeral_5m_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_creation_ephemeral_1h_tokens: row
+            .try_get::<i64, _>("cache_creation_ephemeral_1h_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_read_tokens: row
+            .try_get::<i64, _>("cache_read_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
+        actual_total_cost_usd: row
+            .try_get::<f64, _>("actual_total_cost_usd")
+            .map_postgres_err()?,
+        cache_creation_cost_usd: row
+            .try_get::<f64, _>("cache_creation_cost_usd")
+            .map_postgres_err()?,
+        cache_read_cost_usd: row
+            .try_get::<f64, _>("cache_read_cost_usd")
+            .map_postgres_err()?,
+        total_response_time_ms: row
+            .try_get::<f64, _>("total_response_time_ms")
+            .map_postgres_err()?,
+        error_requests: row
+            .try_get::<i64, _>("error_requests")
+            .map_postgres_err()?
+            .max(0) as u64,
+    })
+}
+
+fn decode_usage_error_distribution_row(
+    row: &PgRow,
+) -> Result<StoredUsageErrorDistributionRow, DataLayerError> {
+    Ok(StoredUsageErrorDistributionRow {
+        date: row.try_get::<String, _>("date").map_postgres_err()?,
+        error_category: row
+            .try_get::<String, _>("error_category")
+            .map_postgres_err()?,
+        count: row.try_get::<i64, _>("count").map_postgres_err()?.max(0) as u64,
+    })
+}
+
+fn absorb_usage_error_distribution_rows(
+    target: &mut BTreeMap<(String, String), u64>,
+    rows: Vec<StoredUsageErrorDistributionRow>,
+) {
+    for row in rows {
+        let key = (row.date, row.error_category);
+        let entry = target.entry(key).or_default();
+        *entry = entry.saturating_add(row.count);
+    }
+}
+
+fn finalize_usage_error_distribution_rows(
+    grouped: BTreeMap<(String, String), u64>,
+) -> Vec<StoredUsageErrorDistributionRow> {
+    let mut items = grouped
+        .into_iter()
+        .map(
+            |((date, error_category), count)| StoredUsageErrorDistributionRow {
+                date,
+                error_category,
+                count,
+            },
+        )
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        left.date
+            .cmp(&right.date)
+            .then_with(|| right.count.cmp(&left.count))
+            .then_with(|| left.error_category.cmp(&right.error_category))
+    });
+    items
+}
+
+fn decode_usage_performance_percentiles_row(
+    row: &PgRow,
+) -> Result<StoredUsagePerformancePercentilesRow, DataLayerError> {
+    Ok(StoredUsagePerformancePercentilesRow {
+        date: row.try_get::<String, _>("date").map_postgres_err()?,
+        p50_response_time_ms: row
+            .try_get::<Option<i64>, _>("p50_response_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+        p90_response_time_ms: row
+            .try_get::<Option<i64>, _>("p90_response_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+        p99_response_time_ms: row
+            .try_get::<Option<i64>, _>("p99_response_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+        p50_first_byte_time_ms: row
+            .try_get::<Option<i64>, _>("p50_first_byte_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+        p90_first_byte_time_ms: row
+            .try_get::<Option<i64>, _>("p90_first_byte_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+        p99_first_byte_time_ms: row
+            .try_get::<Option<i64>, _>("p99_first_byte_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+    })
+}
+
+fn decode_usage_time_series_bucket_row(
+    row: &PgRow,
+) -> Result<StoredUsageTimeSeriesBucket, DataLayerError> {
+    Ok(StoredUsageTimeSeriesBucket {
+        bucket_key: row.try_get::<String, _>("bucket_key").map_postgres_err()?,
+        total_requests: row
+            .try_get::<i64, _>("total_requests")
+            .map_postgres_err()?
+            .max(0) as u64,
+        input_tokens: row
+            .try_get::<i64, _>("input_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        output_tokens: row
+            .try_get::<i64, _>("output_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_creation_tokens: row
+            .try_get::<i64, _>("cache_creation_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        cache_read_tokens: row
+            .try_get::<i64, _>("cache_read_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
+        total_response_time_ms: row
+            .try_get::<f64, _>("total_response_time_ms")
+            .map_postgres_err()?,
+    })
+}
+
+fn absorb_usage_time_series_buckets(
+    target: &mut BTreeMap<String, StoredUsageTimeSeriesBucket>,
+    buckets: Vec<StoredUsageTimeSeriesBucket>,
+) {
+    for bucket in buckets {
+        let entry = target.entry(bucket.bucket_key.clone()).or_insert_with(|| {
+            StoredUsageTimeSeriesBucket {
+                bucket_key: bucket.bucket_key.clone(),
+                ..Default::default()
+            }
+        });
+        entry.total_requests = entry.total_requests.saturating_add(bucket.total_requests);
+        entry.input_tokens = entry.input_tokens.saturating_add(bucket.input_tokens);
+        entry.output_tokens = entry.output_tokens.saturating_add(bucket.output_tokens);
+        entry.cache_creation_tokens = entry
+            .cache_creation_tokens
+            .saturating_add(bucket.cache_creation_tokens);
+        entry.cache_read_tokens = entry
+            .cache_read_tokens
+            .saturating_add(bucket.cache_read_tokens);
+        entry.total_cost_usd += bucket.total_cost_usd;
+        entry.total_response_time_ms += bucket.total_response_time_ms;
+    }
+}
+
+fn finalize_usage_time_series_buckets(
+    grouped: BTreeMap<String, StoredUsageTimeSeriesBucket>,
+) -> Vec<StoredUsageTimeSeriesBucket> {
+    grouped.into_values().collect()
+}
+
+fn decode_usage_leaderboard_row(
+    row: &PgRow,
+) -> Result<StoredUsageLeaderboardSummary, DataLayerError> {
+    Ok(StoredUsageLeaderboardSummary {
+        group_key: row.try_get::<String, _>("group_key").map_postgres_err()?,
+        legacy_name: row
+            .try_get::<Option<String>, _>("legacy_name")
+            .map_postgres_err()?,
+        request_count: row
+            .try_get::<i64, _>("request_count")
+            .map_postgres_err()?
+            .max(0) as u64,
+        total_tokens: row
+            .try_get::<i64, _>("total_tokens")
+            .map_postgres_err()?
+            .max(0) as u64,
+        total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
+    })
+}
+
+fn absorb_usage_leaderboard_rows(
+    target: &mut BTreeMap<String, StoredUsageLeaderboardSummary>,
+    rows: Vec<StoredUsageLeaderboardSummary>,
+) {
+    for row in rows {
+        let entry =
+            target
+                .entry(row.group_key.clone())
+                .or_insert_with(|| StoredUsageLeaderboardSummary {
+                    group_key: row.group_key.clone(),
+                    ..Default::default()
+                });
+        if entry.legacy_name.is_none() {
+            entry.legacy_name = row.legacy_name.clone();
+        }
+        entry.request_count = entry.request_count.saturating_add(row.request_count);
+        entry.total_tokens = entry.total_tokens.saturating_add(row.total_tokens);
+        entry.total_cost_usd += row.total_cost_usd;
+    }
+}
+
+fn finalize_usage_leaderboard_rows(
+    grouped: BTreeMap<String, StoredUsageLeaderboardSummary>,
+) -> Vec<StoredUsageLeaderboardSummary> {
+    grouped.into_values().collect()
+}
+
+async fn fetch_usage_leaderboard_query<'q>(
+    query: Query<'q, Postgres, PgArguments>,
+    pool: &PgPool,
+) -> Result<Vec<StoredUsageLeaderboardSummary>, DataLayerError> {
+    let mut rows = query.fetch(pool);
+    let mut items = Vec::new();
+    while let Some(row) = rows.try_next().await.map_postgres_err()? {
+        items.push(decode_usage_leaderboard_row(&row)?);
+    }
+    Ok(items)
+}
 const RESET_STALE_VOID_USAGE_SQL: &str = r#"
 UPDATE "usage"
 SET
@@ -565,23 +1443,15 @@ ORDER BY "usage".user_id ASC
 
 const SUMMARIZE_USAGE_BY_PROVIDER_API_KEY_IDS_SQL: &str = r#"
 SELECT
-  provider_api_key_id,
-  COUNT(*)::BIGINT AS request_count,
-  COALESCE(
-    SUM(
-      COALESCE(
-        total_tokens,
-        COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
-      )
-    ),
-    0
-  ) AS total_tokens,
-  COALESCE(CAST(SUM(total_cost_usd) AS DOUBLE PRECISION), 0) AS total_cost_usd,
-  CAST(EXTRACT(EPOCH FROM MAX(created_at)) AS BIGINT) AS last_used_at_unix_secs
-FROM "usage"
-WHERE provider_api_key_id = ANY($1::TEXT[])
-GROUP BY provider_api_key_id
-ORDER BY provider_api_key_id ASC
+  id AS provider_api_key_id,
+  COALESCE(request_count, 0)::BIGINT AS request_count,
+  COALESCE(total_tokens, 0)::BIGINT AS total_tokens,
+  CAST(COALESCE(total_cost_usd, 0) AS DOUBLE PRECISION) AS total_cost_usd,
+  CAST(EXTRACT(EPOCH FROM last_used_at) AS BIGINT) AS last_used_at_unix_secs
+FROM provider_api_keys
+WHERE id = ANY($1::TEXT[])
+  AND COALESCE(request_count, 0) > 0
+ORDER BY id ASC
 "#;
 
 const APPLY_PROVIDER_API_KEY_USAGE_DELTA_SQL: &str = r#"
@@ -1357,6 +2227,394 @@ impl SqlxUsageReadRepository {
         &self.tx_runner
     }
 
+    async fn read_stats_daily_cutoff_date(&self) -> Result<Option<DateTime<Utc>>, DataLayerError> {
+        let row = sqlx::query(
+            r#"
+SELECT cutoff_date
+FROM stats_summary
+ORDER BY updated_at DESC, created_at DESC
+LIMIT 1
+"#,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_postgres_err()?;
+
+        row.map(|row| {
+            row.try_get::<DateTime<Utc>, _>("cutoff_date")
+                .map_postgres_err()
+        })
+        .transpose()
+    }
+
+    async fn read_stats_hourly_cutoff(&self) -> Result<Option<DateTime<Utc>>, DataLayerError> {
+        let row = sqlx::query(
+            r#"
+SELECT MAX(hour_utc) AS latest_hour
+FROM stats_hourly
+WHERE is_complete IS TRUE
+"#,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_postgres_err()?;
+        let latest_hour = row
+            .try_get::<Option<DateTime<Utc>>, _>("latest_hour")
+            .map_postgres_err()?;
+        Ok(latest_hour.map(|value| value + chrono::Duration::hours(1)))
+    }
+
+    async fn summarize_dashboard_usage_from_daily_aggregates(
+        &self,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+        user_id: Option<&str>,
+    ) -> Result<StoredUsageDashboardSummary, DataLayerError> {
+        if start_day_utc >= end_day_utc {
+            return Ok(StoredUsageDashboardSummary::default());
+        }
+
+        let row = if let Some(user_id) = user_id {
+            sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(effective_input_tokens), 0)::BIGINT AS effective_input_tokens,
+  COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
+  COALESCE(SUM(input_tokens + output_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(total_input_context), 0)::BIGINT AS total_input_context,
+  COALESCE(SUM(cache_creation_cost), 0) AS cache_creation_cost_usd,
+  COALESCE(SUM(cache_read_cost), 0) AS cache_read_cost_usd,
+  COALESCE(SUM(total_cost), 0) AS total_cost_usd,
+  COALESCE(SUM(actual_total_cost), 0) AS actual_total_cost_usd,
+  COALESCE(SUM(error_requests), 0)::BIGINT AS error_requests,
+  COALESCE(SUM(response_time_sum_ms), 0) AS response_time_sum_ms,
+  COALESCE(SUM(response_time_samples), 0)::BIGINT AS response_time_samples
+FROM stats_user_daily
+WHERE user_id = $1
+  AND date >= $2
+  AND date < $3
+"#,
+            )
+            .bind(user_id)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?
+        } else {
+            sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(effective_input_tokens), 0)::BIGINT AS effective_input_tokens,
+  COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
+  COALESCE(SUM(input_tokens + output_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(total_input_context), 0)::BIGINT AS total_input_context,
+  COALESCE(SUM(cache_creation_cost), 0) AS cache_creation_cost_usd,
+  COALESCE(SUM(cache_read_cost), 0) AS cache_read_cost_usd,
+  COALESCE(SUM(total_cost), 0) AS total_cost_usd,
+  COALESCE(SUM(actual_total_cost), 0) AS actual_total_cost_usd,
+  COALESCE(SUM(error_requests), 0)::BIGINT AS error_requests,
+  COALESCE(SUM(response_time_sum_ms), 0) AS response_time_sum_ms,
+  COALESCE(SUM(response_time_samples), 0)::BIGINT AS response_time_samples
+FROM stats_daily
+WHERE date >= $1
+  AND date < $2
+"#,
+            )
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?
+        };
+
+        decode_dashboard_summary_row(&row)
+    }
+
+    async fn summarize_dashboard_usage_raw(
+        &self,
+        created_from_unix_secs: u64,
+        created_until_unix_secs: u64,
+        user_id: Option<&str>,
+    ) -> Result<StoredUsageDashboardSummary, DataLayerError> {
+        if created_from_unix_secs >= created_until_unix_secs {
+            return Ok(StoredUsageDashboardSummary::default());
+        }
+
+        let mut builder = QueryBuilder::<Postgres>::new(
+            r#"
+SELECT
+  COUNT(*)::BIGINT AS total_requests,
+  COALESCE(SUM(GREATEST(COALESCE("usage".input_tokens, 0), 0)), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(
+    CASE
+      WHEN GREATEST(COALESCE("usage".input_tokens, 0), 0) <= 0 THEN 0
+      WHEN GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0) <= 0
+      THEN GREATEST(COALESCE("usage".input_tokens, 0), 0)
+      WHEN split_part(lower(COALESCE(COALESCE("usage".endpoint_api_format, "usage".api_format), '')), ':', 1)
+           IN ('openai', 'gemini', 'google')
+      THEN GREATEST(
+        GREATEST(COALESCE("usage".input_tokens, 0), 0)
+          - GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0),
+        0
+      )
+      ELSE GREATEST(COALESCE("usage".input_tokens, 0), 0)
+    END
+  ), 0)::BIGINT AS effective_input_tokens,
+  COALESCE(SUM(GREATEST(COALESCE("usage".output_tokens, 0), 0)), 0)::BIGINT AS output_tokens,
+  COALESCE(SUM(GREATEST(COALESCE("usage".total_tokens, 0), 0)), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(
+    CASE
+      WHEN COALESCE("usage".cache_creation_input_tokens, 0) = 0
+           AND (
+             COALESCE("usage".cache_creation_input_tokens_5m, 0)
+             + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+           ) > 0
+      THEN COALESCE("usage".cache_creation_input_tokens_5m, 0)
+         + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+      ELSE COALESCE("usage".cache_creation_input_tokens, 0)
+    END
+  ), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)), 0)::BIGINT
+    AS cache_read_tokens,
+  COALESCE(SUM(
+    CASE
+      WHEN split_part(lower(COALESCE(COALESCE("usage".endpoint_api_format, "usage".api_format), '')), ':', 1)
+           IN ('claude', 'anthropic')
+      THEN GREATEST(COALESCE("usage".input_tokens, 0), 0)
+         + CASE
+             WHEN COALESCE("usage".cache_creation_input_tokens, 0) = 0
+                  AND (
+                    COALESCE("usage".cache_creation_input_tokens_5m, 0)
+                    + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+                  ) > 0
+             THEN COALESCE("usage".cache_creation_input_tokens_5m, 0)
+                + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+             ELSE COALESCE("usage".cache_creation_input_tokens, 0)
+           END
+         + GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)
+      WHEN split_part(lower(COALESCE(COALESCE("usage".endpoint_api_format, "usage".api_format), '')), ':', 1)
+           IN ('openai', 'gemini', 'google')
+      THEN (
+        CASE
+          WHEN GREATEST(COALESCE("usage".input_tokens, 0), 0) <= 0 THEN 0
+          WHEN GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0) <= 0
+          THEN GREATEST(COALESCE("usage".input_tokens, 0), 0)
+          ELSE GREATEST(
+            GREATEST(COALESCE("usage".input_tokens, 0), 0)
+              - GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0),
+            0
+          )
+        END
+      ) + GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)
+      ELSE CASE
+        WHEN (
+          CASE
+            WHEN COALESCE("usage".cache_creation_input_tokens, 0) = 0
+                 AND (
+                   COALESCE("usage".cache_creation_input_tokens_5m, 0)
+                   + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+                 ) > 0
+            THEN COALESCE("usage".cache_creation_input_tokens_5m, 0)
+               + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+            ELSE COALESCE("usage".cache_creation_input_tokens, 0)
+          END
+        ) > 0
+        THEN GREATEST(COALESCE("usage".input_tokens, 0), 0)
+           + (
+             CASE
+               WHEN COALESCE("usage".cache_creation_input_tokens, 0) = 0
+                    AND (
+                      COALESCE("usage".cache_creation_input_tokens_5m, 0)
+                      + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+                    ) > 0
+               THEN COALESCE("usage".cache_creation_input_tokens_5m, 0)
+                  + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+               ELSE COALESCE("usage".cache_creation_input_tokens, 0)
+             END
+           )
+           + GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)
+        ELSE GREATEST(COALESCE("usage".input_tokens, 0), 0)
+           + GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)
+      END
+    END
+  ), 0)::BIGINT AS total_input_context,
+  COALESCE(SUM(COALESCE(CAST("usage".cache_creation_cost_usd AS DOUBLE PRECISION), 0)), 0)
+    AS cache_creation_cost_usd,
+  COALESCE(SUM(COALESCE(CAST("usage".cache_read_cost_usd AS DOUBLE PRECISION), 0)), 0)
+    AS cache_read_cost_usd,
+  COALESCE(SUM(COALESCE(CAST("usage".total_cost_usd AS DOUBLE PRECISION), 0)), 0)
+    AS total_cost_usd,
+  COALESCE(SUM(COALESCE(CAST("usage".actual_total_cost_usd AS DOUBLE PRECISION), 0)), 0)
+    AS actual_total_cost_usd,
+  COALESCE(SUM(
+    CASE
+      WHEN COALESCE("usage".status_code, 0) >= 400
+           OR lower(COALESCE("usage".status, '')) = 'failed'
+      THEN 1
+      ELSE 0
+    END
+  ), 0)::BIGINT AS error_requests,
+  COALESCE(SUM(
+    CASE
+      WHEN "usage".response_time_ms IS NOT NULL
+      THEN GREATEST(COALESCE("usage".response_time_ms, 0), 0)::DOUBLE PRECISION
+      ELSE 0
+    END
+  ), 0) AS response_time_sum_ms,
+  COALESCE(SUM(
+    CASE
+      WHEN "usage".response_time_ms IS NOT NULL THEN 1
+      ELSE 0
+    END
+  ), 0)::BIGINT AS response_time_samples
+FROM "usage"
+"#,
+        );
+        let mut has_where = false;
+
+        builder.push(if has_where { " AND " } else { " WHERE " });
+        has_where = true;
+        builder
+            .push("\"usage\".created_at >= TO_TIMESTAMP(")
+            .push_bind(created_from_unix_secs as f64)
+            .push("::double precision)");
+        builder.push(if has_where { " AND " } else { " WHERE " });
+        builder
+            .push("\"usage\".created_at < TO_TIMESTAMP(")
+            .push_bind(created_until_unix_secs as f64)
+            .push("::double precision)");
+        builder.push(if has_where { " AND " } else { " WHERE " });
+        builder.push("\"usage\".status NOT IN ('pending', 'streaming')");
+        builder.push(if has_where { " AND " } else { " WHERE " });
+        builder.push("\"usage\".provider_name NOT IN ('unknown', 'pending')");
+        if let Some(user_id) = user_id {
+            builder.push(if has_where { " AND " } else { " WHERE " });
+            builder
+                .push("\"usage\".user_id = ")
+                .push_bind(user_id.to_string());
+        }
+
+        let row = builder
+            .build()
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?;
+        decode_dashboard_summary_row(&row)
+    }
+
+    async fn summarize_dashboard_provider_counts_from_hourly_aggregates(
+        &self,
+        start_utc: DateTime<Utc>,
+        end_utc: DateTime<Utc>,
+    ) -> Result<Vec<StoredUsageDashboardProviderCount>, DataLayerError> {
+        if start_utc >= end_utc {
+            return Ok(Vec::new());
+        }
+
+        let mut rows = sqlx::query(
+            r#"
+SELECT
+  provider_name,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS request_count
+FROM stats_hourly_provider
+WHERE hour_utc >= $1
+  AND hour_utc < $2
+GROUP BY provider_name
+ORDER BY request_count DESC, provider_name ASC
+"#,
+        )
+        .bind(start_utc)
+        .bind(end_utc)
+        .fetch(&self.pool);
+
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            items.push(StoredUsageDashboardProviderCount {
+                provider_name: row
+                    .try_get::<String, _>("provider_name")
+                    .map_postgres_err()?,
+                request_count: row
+                    .try_get::<i64, _>("request_count")
+                    .map_postgres_err()?
+                    .max(0) as u64,
+            });
+        }
+        Ok(items)
+    }
+
+    async fn summarize_dashboard_provider_counts_raw(
+        &self,
+        created_from_unix_secs: u64,
+        created_until_unix_secs: u64,
+        user_id: Option<&str>,
+    ) -> Result<Vec<StoredUsageDashboardProviderCount>, DataLayerError> {
+        if created_from_unix_secs >= created_until_unix_secs {
+            return Ok(Vec::new());
+        }
+
+        let mut builder = QueryBuilder::<Postgres>::new(
+            r#"
+SELECT
+  "usage".provider_name AS provider_name,
+  COUNT(*)::BIGINT AS request_count
+FROM "usage"
+"#,
+        );
+        let mut has_where = false;
+
+        builder.push(if has_where { " AND " } else { " WHERE " });
+        has_where = true;
+        builder
+            .push("\"usage\".created_at >= TO_TIMESTAMP(")
+            .push_bind(created_from_unix_secs as f64)
+            .push("::double precision)");
+        builder.push(if has_where { " AND " } else { " WHERE " });
+        builder
+            .push("\"usage\".created_at < TO_TIMESTAMP(")
+            .push_bind(created_until_unix_secs as f64)
+            .push("::double precision)");
+        builder.push(if has_where { " AND " } else { " WHERE " });
+        builder.push("\"usage\".status NOT IN ('pending', 'streaming')");
+        builder.push(if has_where { " AND " } else { " WHERE " });
+        builder.push("\"usage\".provider_name NOT IN ('unknown', 'pending')");
+        if let Some(user_id) = user_id {
+            builder.push(if has_where { " AND " } else { " WHERE " });
+            builder
+                .push("\"usage\".user_id = ")
+                .push_bind(user_id.to_string());
+        }
+        builder.push(
+            r#"
+GROUP BY "usage".provider_name
+ORDER BY request_count DESC, "usage".provider_name ASC
+"#,
+        );
+
+        let mut rows = builder.build().fetch(&self.pool);
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            items.push(StoredUsageDashboardProviderCount {
+                provider_name: row
+                    .try_get::<String, _>("provider_name")
+                    .map_postgres_err()?,
+                request_count: row
+                    .try_get::<i64, _>("request_count")
+                    .map_postgres_err()?
+                    .max(0) as u64,
+            });
+        }
+        Ok(items)
+    }
+
     pub async fn find_by_request_id(
         &self,
         request_id: &str,
@@ -2034,10 +3292,95 @@ OR (\"usage\".error_message IS NOT NULL AND BTRIM(\"usage\".error_message) <> ''
         Ok(row.try_get::<i64, _>("total").map_postgres_err()?.max(0) as u64)
     }
 
-    pub async fn summarize_usage_audits(
+    async fn summarize_usage_audits_from_daily_aggregates(
         &self,
-        query: &UsageAuditSummaryQuery,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+        user_id: Option<&str>,
     ) -> Result<StoredUsageAuditSummary, DataLayerError> {
+        if start_day_utc >= end_day_utc {
+            return Ok(StoredUsageAuditSummary::default());
+        }
+
+        let row = if let Some(user_id) = user_id {
+            sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
+  COALESCE(SUM(input_tokens + output_tokens), 0)::BIGINT AS recorded_total_tokens,
+  COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(cache_creation_ephemeral_5m_tokens), 0)::BIGINT
+    AS cache_creation_ephemeral_5m_tokens,
+  COALESCE(SUM(cache_creation_ephemeral_1h_tokens), 0)::BIGINT
+    AS cache_creation_ephemeral_1h_tokens,
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(total_cost), 0) AS total_cost_usd,
+  COALESCE(SUM(actual_total_cost), 0) AS actual_total_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0) AS cache_creation_cost_usd,
+  COALESCE(SUM(cache_read_cost), 0) AS cache_read_cost_usd,
+  COALESCE(SUM(response_time_sum_ms), 0) AS total_response_time_ms,
+  COALESCE(SUM(error_requests), 0)::BIGINT AS error_requests
+FROM stats_user_daily
+WHERE user_id = $1
+  AND date >= $2
+  AND date < $3
+"#,
+            )
+            .bind(user_id)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?
+        } else {
+            sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
+  COALESCE(SUM(input_tokens + output_tokens), 0)::BIGINT AS recorded_total_tokens,
+  COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(cache_creation_ephemeral_5m_tokens), 0)::BIGINT
+    AS cache_creation_ephemeral_5m_tokens,
+  COALESCE(SUM(cache_creation_ephemeral_1h_tokens), 0)::BIGINT
+    AS cache_creation_ephemeral_1h_tokens,
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(total_cost), 0) AS total_cost_usd,
+  COALESCE(SUM(actual_total_cost), 0) AS actual_total_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0) AS cache_creation_cost_usd,
+  COALESCE(SUM(cache_read_cost), 0) AS cache_read_cost_usd,
+  COALESCE(SUM(response_time_sum_ms), 0) AS total_response_time_ms,
+  COALESCE(SUM(error_requests), 0)::BIGINT AS error_requests
+FROM stats_daily
+WHERE date >= $1
+  AND date < $2
+"#,
+            )
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?
+        };
+
+        decode_usage_audit_summary_row(&row)
+    }
+
+    async fn summarize_usage_audits_raw(
+        &self,
+        created_from_unix_secs: u64,
+        created_until_unix_secs: u64,
+        user_id: Option<&str>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<StoredUsageAuditSummary, DataLayerError> {
+        if created_from_unix_secs >= created_until_unix_secs {
+            return Ok(StoredUsageAuditSummary::default());
+        }
+
         let mut builder = QueryBuilder::<Postgres>::new(
             r#"
 SELECT
@@ -2088,27 +3431,27 @@ FROM "usage"
         has_where = true;
         builder
             .push("\"usage\".created_at >= TO_TIMESTAMP(")
-            .push_bind(query.created_from_unix_secs as f64)
+            .push_bind(created_from_unix_secs as f64)
             .push("::double precision)");
         builder.push(if has_where { " AND " } else { " WHERE " });
         builder
             .push("\"usage\".created_at < TO_TIMESTAMP(")
-            .push_bind(query.created_until_unix_secs as f64)
+            .push_bind(created_until_unix_secs as f64)
             .push("::double precision)");
-        if let Some(user_id) = query.user_id.as_deref() {
+        if let Some(user_id) = user_id {
             builder.push(if has_where { " AND " } else { " WHERE " });
             builder
                 .push("\"usage\".user_id = ")
                 .push_bind(user_id.to_string());
         }
-        if let Some(provider_name) = query.provider_name.as_deref() {
+        if let Some(provider_name) = provider_name {
             builder.push(if has_where { " AND " } else { " WHERE " });
             has_where = true;
             builder
                 .push("\"usage\".provider_name = ")
                 .push_bind(provider_name.to_string());
         }
-        if let Some(model) = query.model.as_deref() {
+        if let Some(model) = model {
             builder.push(if has_where { " AND " } else { " WHERE " });
             builder
                 .push("\"usage\".model = ")
@@ -2120,60 +3463,94 @@ FROM "usage"
             .fetch_one(&self.pool)
             .await
             .map_postgres_err()?;
-        Ok(StoredUsageAuditSummary {
-            total_requests: row
-                .try_get::<i64, _>("total_requests")
-                .map_postgres_err()?
-                .max(0) as u64,
-            input_tokens: row
-                .try_get::<i64, _>("input_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            output_tokens: row
-                .try_get::<i64, _>("output_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            recorded_total_tokens: row
-                .try_get::<i64, _>("recorded_total_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_creation_tokens: row
-                .try_get::<i64, _>("cache_creation_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_creation_ephemeral_5m_tokens: row
-                .try_get::<i64, _>("cache_creation_ephemeral_5m_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_creation_ephemeral_1h_tokens: row
-                .try_get::<i64, _>("cache_creation_ephemeral_1h_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_read_tokens: row
-                .try_get::<i64, _>("cache_read_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
-            actual_total_cost_usd: row
-                .try_get::<f64, _>("actual_total_cost_usd")
-                .map_postgres_err()?,
-            cache_creation_cost_usd: row
-                .try_get::<f64, _>("cache_creation_cost_usd")
-                .map_postgres_err()?,
-            cache_read_cost_usd: row
-                .try_get::<f64, _>("cache_read_cost_usd")
-                .map_postgres_err()?,
-            total_response_time_ms: row
-                .try_get::<f64, _>("total_response_time_ms")
-                .map_postgres_err()?,
-            error_requests: row
-                .try_get::<i64, _>("error_requests")
-                .map_postgres_err()?
-                .max(0) as u64,
-        })
+        decode_usage_audit_summary_row(&row)
     }
 
-    pub async fn summarize_usage_cache_hit_summary(
+    pub async fn summarize_usage_audits(
+        &self,
+        query: &UsageAuditSummaryQuery,
+    ) -> Result<StoredUsageAuditSummary, DataLayerError> {
+        if query.provider_name.is_some() || query.model.is_some() {
+            return self
+                .summarize_usage_audits_raw(
+                    query.created_from_unix_secs,
+                    query.created_until_unix_secs,
+                    query.user_id.as_deref(),
+                    query.provider_name.as_deref(),
+                    query.model.as_deref(),
+                )
+                .await;
+        }
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self
+                .summarize_usage_audits_raw(
+                    query.created_from_unix_secs,
+                    query.created_until_unix_secs,
+                    query.user_id.as_deref(),
+                    None,
+                    None,
+                )
+                .await;
+        };
+
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_usage_audits_raw(
+                    query.created_from_unix_secs,
+                    query.created_until_unix_secs,
+                    query.user_id.as_deref(),
+                    None,
+                    None,
+                )
+                .await;
+        };
+
+        let mut summary = StoredUsageAuditSummary::default();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            absorb_usage_audit_summary(
+                &mut summary,
+                self.summarize_usage_audits_raw(
+                    dashboard_utc_to_unix_secs(raw_start),
+                    dashboard_utc_to_unix_secs(raw_end),
+                    query.user_id.as_deref(),
+                    None,
+                    None,
+                )
+                .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            absorb_usage_audit_summary(
+                &mut summary,
+                self.summarize_usage_audits_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                    query.user_id.as_deref(),
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            absorb_usage_audit_summary(
+                &mut summary,
+                self.summarize_usage_audits_raw(
+                    dashboard_utc_to_unix_secs(raw_start),
+                    dashboard_utc_to_unix_secs(raw_end),
+                    query.user_id.as_deref(),
+                    None,
+                    None,
+                )
+                .await?,
+            );
+        }
+
+        Ok(summary)
+    }
+
+    async fn summarize_usage_cache_hit_summary_raw(
         &self,
         query: &UsageCacheHitSummaryQuery,
     ) -> Result<StoredUsageCacheHitSummary, DataLayerError> {
@@ -2212,19 +3589,175 @@ FROM "usage"
             .fetch_one(&self.pool)
             .await
             .map_postgres_err()?;
-        Ok(StoredUsageCacheHitSummary {
-            total_requests: row
-                .try_get::<i64, _>("total_requests")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_hit_requests: row
-                .try_get::<i64, _>("cache_hit_requests")
-                .map_postgres_err()?
-                .max(0) as u64,
-        })
+        decode_usage_cache_hit_summary_row(&row)
     }
 
-    pub async fn summarize_usage_settled_cost(
+    async fn summarize_usage_cache_hit_summary_from_daily_aggregates(
+        &self,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+    ) -> Result<StoredUsageCacheHitSummary, DataLayerError> {
+        let row = sqlx::query(
+            r#"
+SELECT
+  COALESCE(SUM(cache_hit_total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(cache_hit_requests), 0)::BIGINT AS cache_hit_requests
+FROM stats_daily
+WHERE date >= $1
+  AND date < $2
+"#,
+        )
+        .bind(start_day_utc)
+        .bind(end_day_utc)
+        .fetch_one(&self.pool)
+        .await
+        .map_postgres_err()?;
+        decode_usage_cache_hit_summary_row(&row)
+    }
+
+    async fn summarize_usage_cache_hit_summary_from_hourly_aggregates(
+        &self,
+        start_utc: DateTime<Utc>,
+        end_utc: DateTime<Utc>,
+    ) -> Result<StoredUsageCacheHitSummary, DataLayerError> {
+        let row = sqlx::query(
+            r#"
+SELECT
+  COALESCE(SUM(cache_hit_total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(cache_hit_requests), 0)::BIGINT AS cache_hit_requests
+FROM stats_hourly
+WHERE hour_utc >= $1
+  AND hour_utc < $2
+"#,
+        )
+        .bind(start_utc)
+        .bind(end_utc)
+        .fetch_one(&self.pool)
+        .await
+        .map_postgres_err()?;
+        decode_usage_cache_hit_summary_row(&row)
+    }
+
+    async fn summarize_global_usage_cache_hit_summary_segment(
+        &self,
+        start_utc: DateTime<Utc>,
+        end_utc: DateTime<Utc>,
+    ) -> Result<StoredUsageCacheHitSummary, DataLayerError> {
+        if start_utc >= end_utc {
+            return Ok(StoredUsageCacheHitSummary::default());
+        }
+
+        let Some(cutoff_utc) = self.read_stats_hourly_cutoff().await? else {
+            return self
+                .summarize_usage_cache_hit_summary_raw(&UsageCacheHitSummaryQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(start_utc),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(end_utc),
+                    user_id: None,
+                })
+                .await;
+        };
+
+        let split = split_dashboard_hourly_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_usage_cache_hit_summary_raw(&UsageCacheHitSummaryQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(start_utc),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(end_utc),
+                    user_id: None,
+                })
+                .await;
+        };
+
+        let mut summary = StoredUsageCacheHitSummary::default();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            absorb_usage_cache_hit_summary(
+                &mut summary,
+                self.summarize_usage_cache_hit_summary_raw(&UsageCacheHitSummaryQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    user_id: None,
+                })
+                .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            absorb_usage_cache_hit_summary(
+                &mut summary,
+                self.summarize_usage_cache_hit_summary_from_hourly_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            absorb_usage_cache_hit_summary(
+                &mut summary,
+                self.summarize_usage_cache_hit_summary_raw(&UsageCacheHitSummaryQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    user_id: None,
+                })
+                .await?,
+            );
+        }
+
+        Ok(summary)
+    }
+
+    pub async fn summarize_usage_cache_hit_summary(
+        &self,
+        query: &UsageCacheHitSummaryQuery,
+    ) -> Result<StoredUsageCacheHitSummary, DataLayerError> {
+        if query.user_id.is_some() {
+            return self.summarize_usage_cache_hit_summary_raw(query).await;
+        }
+
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self
+                .summarize_global_usage_cache_hit_summary_segment(start_utc, end_utc)
+                .await;
+        };
+
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_global_usage_cache_hit_summary_segment(start_utc, end_utc)
+                .await;
+        };
+
+        let mut summary = StoredUsageCacheHitSummary::default();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            absorb_usage_cache_hit_summary(
+                &mut summary,
+                self.summarize_global_usage_cache_hit_summary_segment(raw_start, raw_end)
+                    .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            absorb_usage_cache_hit_summary(
+                &mut summary,
+                self.summarize_usage_cache_hit_summary_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            absorb_usage_cache_hit_summary(
+                &mut summary,
+                self.summarize_global_usage_cache_hit_summary_segment(raw_start, raw_end)
+                    .await?,
+            );
+        }
+
+        Ok(summary)
+    }
+
+    async fn summarize_usage_settled_cost_raw(
         &self,
         query: &UsageSettledCostSummaryQuery,
     ) -> Result<StoredUsageSettledCostSummary, DataLayerError> {
@@ -2278,40 +3811,241 @@ FROM "usage"
             .fetch_one(&self.pool)
             .await
             .map_postgres_err()?;
-        Ok(StoredUsageSettledCostSummary {
-            total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
-            total_requests: row
-                .try_get::<i64, _>("total_requests")
-                .map_postgres_err()?
-                .max(0) as u64,
-            input_tokens: row
-                .try_get::<i64, _>("input_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            output_tokens: row
-                .try_get::<i64, _>("output_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_creation_tokens: row
-                .try_get::<i64, _>("cache_creation_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_read_tokens: row
-                .try_get::<i64, _>("cache_read_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            first_finalized_at_unix_secs: row
-                .try_get::<Option<i64>, _>("first_finalized_at_unix_secs")
-                .map_postgres_err()?
-                .map(|value| value.max(0) as u64),
-            last_finalized_at_unix_secs: row
-                .try_get::<Option<i64>, _>("last_finalized_at_unix_secs")
-                .map_postgres_err()?
-                .map(|value| value.max(0) as u64),
-        })
+        decode_usage_settled_cost_row(&row)
     }
 
-    pub async fn summarize_usage_cache_affinity_hit_summary(
+    async fn summarize_usage_settled_cost_from_daily_aggregates(
+        &self,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+        user_id: Option<&str>,
+    ) -> Result<StoredUsageSettledCostSummary, DataLayerError> {
+        let row = if let Some(user_id) = user_id {
+            sqlx::query(
+                r#"
+SELECT
+  CAST(COALESCE(SUM(settled_total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd,
+  COALESCE(SUM(settled_total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(settled_input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(settled_output_tokens), 0)::BIGINT AS output_tokens,
+  COALESCE(SUM(settled_cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(settled_cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  MIN(settled_first_finalized_at_unix_secs) AS first_finalized_at_unix_secs,
+  MAX(settled_last_finalized_at_unix_secs) AS last_finalized_at_unix_secs
+FROM stats_user_daily
+WHERE date >= $1
+  AND date < $2
+  AND user_id = $3
+"#,
+            )
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .bind(user_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?
+        } else {
+            sqlx::query(
+                r#"
+SELECT
+  CAST(COALESCE(SUM(settled_total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd,
+  COALESCE(SUM(settled_total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(settled_input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(settled_output_tokens), 0)::BIGINT AS output_tokens,
+  COALESCE(SUM(settled_cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(settled_cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  MIN(settled_first_finalized_at_unix_secs) AS first_finalized_at_unix_secs,
+  MAX(settled_last_finalized_at_unix_secs) AS last_finalized_at_unix_secs
+FROM stats_daily
+WHERE date >= $1
+  AND date < $2
+"#,
+            )
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?
+        };
+        decode_usage_settled_cost_row(&row)
+    }
+
+    async fn summarize_usage_settled_cost_from_hourly_aggregates(
+        &self,
+        start_utc: DateTime<Utc>,
+        end_utc: DateTime<Utc>,
+        user_id: Option<&str>,
+    ) -> Result<StoredUsageSettledCostSummary, DataLayerError> {
+        let row = if let Some(user_id) = user_id {
+            sqlx::query(
+                r#"
+SELECT
+  CAST(COALESCE(SUM(settled_total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd,
+  COALESCE(SUM(settled_total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(settled_input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(settled_output_tokens), 0)::BIGINT AS output_tokens,
+  COALESCE(SUM(settled_cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(settled_cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  MIN(settled_first_finalized_at_unix_secs) AS first_finalized_at_unix_secs,
+  MAX(settled_last_finalized_at_unix_secs) AS last_finalized_at_unix_secs
+FROM stats_hourly_user
+WHERE hour_utc >= $1
+  AND hour_utc < $2
+  AND user_id = $3
+"#,
+            )
+            .bind(start_utc)
+            .bind(end_utc)
+            .bind(user_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?
+        } else {
+            sqlx::query(
+                r#"
+SELECT
+  CAST(COALESCE(SUM(settled_total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd,
+  COALESCE(SUM(settled_total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(settled_input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(settled_output_tokens), 0)::BIGINT AS output_tokens,
+  COALESCE(SUM(settled_cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(settled_cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  MIN(settled_first_finalized_at_unix_secs) AS first_finalized_at_unix_secs,
+  MAX(settled_last_finalized_at_unix_secs) AS last_finalized_at_unix_secs
+FROM stats_hourly
+WHERE hour_utc >= $1
+  AND hour_utc < $2
+"#,
+            )
+            .bind(start_utc)
+            .bind(end_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?
+        };
+        decode_usage_settled_cost_row(&row)
+    }
+
+    async fn summarize_usage_settled_cost_segment(
+        &self,
+        start_utc: DateTime<Utc>,
+        end_utc: DateTime<Utc>,
+        user_id: Option<&str>,
+    ) -> Result<StoredUsageSettledCostSummary, DataLayerError> {
+        if start_utc >= end_utc {
+            return Ok(StoredUsageSettledCostSummary::default());
+        }
+
+        let Some(cutoff_utc) = self.read_stats_hourly_cutoff().await? else {
+            return self
+                .summarize_usage_settled_cost_raw(&UsageSettledCostSummaryQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(start_utc),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(end_utc),
+                    user_id: user_id.map(ToOwned::to_owned),
+                })
+                .await;
+        };
+
+        let split = split_dashboard_hourly_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_usage_settled_cost_raw(&UsageSettledCostSummaryQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(start_utc),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(end_utc),
+                    user_id: user_id.map(ToOwned::to_owned),
+                })
+                .await;
+        };
+
+        let mut summary = StoredUsageSettledCostSummary::default();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            absorb_usage_settled_cost_summary(
+                &mut summary,
+                self.summarize_usage_settled_cost_raw(&UsageSettledCostSummaryQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    user_id: user_id.map(ToOwned::to_owned),
+                })
+                .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            absorb_usage_settled_cost_summary(
+                &mut summary,
+                self.summarize_usage_settled_cost_from_hourly_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                    user_id,
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            absorb_usage_settled_cost_summary(
+                &mut summary,
+                self.summarize_usage_settled_cost_raw(&UsageSettledCostSummaryQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    user_id: user_id.map(ToOwned::to_owned),
+                })
+                .await?,
+            );
+        }
+
+        Ok(summary)
+    }
+
+    pub async fn summarize_usage_settled_cost(
+        &self,
+        query: &UsageSettledCostSummaryQuery,
+    ) -> Result<StoredUsageSettledCostSummary, DataLayerError> {
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let user_id = query.user_id.as_deref();
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self
+                .summarize_usage_settled_cost_segment(start_utc, end_utc, user_id)
+                .await;
+        };
+
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_usage_settled_cost_segment(start_utc, end_utc, user_id)
+                .await;
+        };
+
+        let mut summary = StoredUsageSettledCostSummary::default();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            absorb_usage_settled_cost_summary(
+                &mut summary,
+                self.summarize_usage_settled_cost_segment(raw_start, raw_end, user_id)
+                    .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            absorb_usage_settled_cost_summary(
+                &mut summary,
+                self.summarize_usage_settled_cost_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                    user_id,
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            absorb_usage_settled_cost_summary(
+                &mut summary,
+                self.summarize_usage_settled_cost_segment(raw_start, raw_end, user_id)
+                    .await?,
+            );
+        }
+
+        Ok(summary)
+    }
+
+    async fn summarize_usage_cache_affinity_hit_summary_raw(
         &self,
         query: &UsageCacheAffinityHitSummaryQuery,
     ) -> Result<StoredUsageCacheAffinityHitSummary, DataLayerError> {
@@ -2443,38 +4177,200 @@ FROM "usage"
             .fetch_one(&self.pool)
             .await
             .map_postgres_err()?;
-        Ok(StoredUsageCacheAffinityHitSummary {
-            total_requests: row
-                .try_get::<i64, _>("total_requests")
-                .map_postgres_err()?
-                .max(0) as u64,
-            requests_with_cache_hit: row
-                .try_get::<i64, _>("requests_with_cache_hit")
-                .map_postgres_err()?
-                .max(0) as u64,
-            input_tokens: row
-                .try_get::<i64, _>("input_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_read_tokens: row
-                .try_get::<i64, _>("cache_read_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_creation_tokens: row
-                .try_get::<i64, _>("cache_creation_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            total_input_context: row
-                .try_get::<i64, _>("total_input_context")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_read_cost_usd: row
-                .try_get::<f64, _>("cache_read_cost_usd")
-                .map_postgres_err()?,
-            cache_creation_cost_usd: row
-                .try_get::<f64, _>("cache_creation_cost_usd")
-                .map_postgres_err()?,
-        })
+        decode_usage_cache_affinity_hit_summary_row(&row)
+    }
+
+    async fn summarize_usage_cache_affinity_hit_summary_from_daily_aggregates(
+        &self,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+    ) -> Result<StoredUsageCacheAffinityHitSummary, DataLayerError> {
+        let row = sqlx::query(
+            r#"
+SELECT
+  COALESCE(SUM(completed_total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(completed_cache_hit_requests), 0)::BIGINT AS requests_with_cache_hit,
+  COALESCE(SUM(completed_input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(completed_cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(completed_cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(completed_total_input_context), 0)::BIGINT AS total_input_context,
+  CAST(COALESCE(SUM(completed_cache_read_cost), 0) AS DOUBLE PRECISION) AS cache_read_cost_usd,
+  CAST(COALESCE(SUM(completed_cache_creation_cost), 0) AS DOUBLE PRECISION)
+    AS cache_creation_cost_usd
+FROM stats_daily
+WHERE date >= $1
+  AND date < $2
+"#,
+        )
+        .bind(start_day_utc)
+        .bind(end_day_utc)
+        .fetch_one(&self.pool)
+        .await
+        .map_postgres_err()?;
+        decode_usage_cache_affinity_hit_summary_row(&row)
+    }
+
+    async fn summarize_usage_cache_affinity_hit_summary_from_hourly_aggregates(
+        &self,
+        start_utc: DateTime<Utc>,
+        end_utc: DateTime<Utc>,
+    ) -> Result<StoredUsageCacheAffinityHitSummary, DataLayerError> {
+        let row = sqlx::query(
+            r#"
+SELECT
+  COALESCE(SUM(completed_total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(completed_cache_hit_requests), 0)::BIGINT AS requests_with_cache_hit,
+  COALESCE(SUM(completed_input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(completed_cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(completed_cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(completed_total_input_context), 0)::BIGINT AS total_input_context,
+  CAST(COALESCE(SUM(completed_cache_read_cost), 0) AS DOUBLE PRECISION) AS cache_read_cost_usd,
+  CAST(COALESCE(SUM(completed_cache_creation_cost), 0) AS DOUBLE PRECISION)
+    AS cache_creation_cost_usd
+FROM stats_hourly
+WHERE hour_utc >= $1
+  AND hour_utc < $2
+"#,
+        )
+        .bind(start_utc)
+        .bind(end_utc)
+        .fetch_one(&self.pool)
+        .await
+        .map_postgres_err()?;
+        decode_usage_cache_affinity_hit_summary_row(&row)
+    }
+
+    async fn summarize_global_usage_cache_affinity_hit_summary_segment(
+        &self,
+        start_utc: DateTime<Utc>,
+        end_utc: DateTime<Utc>,
+    ) -> Result<StoredUsageCacheAffinityHitSummary, DataLayerError> {
+        if start_utc >= end_utc {
+            return Ok(StoredUsageCacheAffinityHitSummary::default());
+        }
+
+        let Some(cutoff_utc) = self.read_stats_hourly_cutoff().await? else {
+            return self
+                .summarize_usage_cache_affinity_hit_summary_raw(
+                    &UsageCacheAffinityHitSummaryQuery {
+                        created_from_unix_secs: dashboard_utc_to_unix_secs(start_utc),
+                        created_until_unix_secs: dashboard_utc_to_unix_secs(end_utc),
+                        user_id: None,
+                        api_key_id: None,
+                    },
+                )
+                .await;
+        };
+
+        let split = split_dashboard_hourly_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_usage_cache_affinity_hit_summary_raw(
+                    &UsageCacheAffinityHitSummaryQuery {
+                        created_from_unix_secs: dashboard_utc_to_unix_secs(start_utc),
+                        created_until_unix_secs: dashboard_utc_to_unix_secs(end_utc),
+                        user_id: None,
+                        api_key_id: None,
+                    },
+                )
+                .await;
+        };
+
+        let mut summary = StoredUsageCacheAffinityHitSummary::default();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            absorb_usage_cache_affinity_hit_summary(
+                &mut summary,
+                self.summarize_usage_cache_affinity_hit_summary_raw(
+                    &UsageCacheAffinityHitSummaryQuery {
+                        created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                        created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                        user_id: None,
+                        api_key_id: None,
+                    },
+                )
+                .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            absorb_usage_cache_affinity_hit_summary(
+                &mut summary,
+                self.summarize_usage_cache_affinity_hit_summary_from_hourly_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            absorb_usage_cache_affinity_hit_summary(
+                &mut summary,
+                self.summarize_usage_cache_affinity_hit_summary_raw(
+                    &UsageCacheAffinityHitSummaryQuery {
+                        created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                        created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                        user_id: None,
+                        api_key_id: None,
+                    },
+                )
+                .await?,
+            );
+        }
+
+        Ok(summary)
+    }
+
+    pub async fn summarize_usage_cache_affinity_hit_summary(
+        &self,
+        query: &UsageCacheAffinityHitSummaryQuery,
+    ) -> Result<StoredUsageCacheAffinityHitSummary, DataLayerError> {
+        if query.user_id.is_some() || query.api_key_id.is_some() {
+            return self
+                .summarize_usage_cache_affinity_hit_summary_raw(query)
+                .await;
+        }
+
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self
+                .summarize_global_usage_cache_affinity_hit_summary_segment(start_utc, end_utc)
+                .await;
+        };
+
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_global_usage_cache_affinity_hit_summary_segment(start_utc, end_utc)
+                .await;
+        };
+
+        let mut summary = StoredUsageCacheAffinityHitSummary::default();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            absorb_usage_cache_affinity_hit_summary(
+                &mut summary,
+                self.summarize_global_usage_cache_affinity_hit_summary_segment(raw_start, raw_end)
+                    .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            absorb_usage_cache_affinity_hit_summary(
+                &mut summary,
+                self.summarize_usage_cache_affinity_hit_summary_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            absorb_usage_cache_affinity_hit_summary(
+                &mut summary,
+                self.summarize_global_usage_cache_affinity_hit_summary_segment(raw_start, raw_end)
+                    .await?,
+            );
+        }
+
+        Ok(summary)
     }
 
     pub async fn list_usage_cache_affinity_intervals(
@@ -2588,223 +4484,131 @@ ORDER BY created_at_unix_secs ASC, group_id ASC, usage_id ASC
         &self,
         query: &UsageDashboardSummaryQuery,
     ) -> Result<StoredUsageDashboardSummary, DataLayerError> {
-        let mut builder = QueryBuilder::<Postgres>::new(
-            r#"
-SELECT
-  COUNT(*)::BIGINT AS total_requests,
-  COALESCE(SUM(GREATEST(COALESCE("usage".input_tokens, 0), 0)), 0)::BIGINT AS input_tokens,
-  COALESCE(SUM(
-    CASE
-      WHEN GREATEST(COALESCE("usage".input_tokens, 0), 0) <= 0 THEN 0
-      WHEN GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0) <= 0
-      THEN GREATEST(COALESCE("usage".input_tokens, 0), 0)
-      WHEN split_part(lower(COALESCE(COALESCE("usage".endpoint_api_format, "usage".api_format), '')), ':', 1)
-           IN ('openai', 'gemini', 'google')
-      THEN GREATEST(
-        GREATEST(COALESCE("usage".input_tokens, 0), 0)
-          - GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0),
-        0
-      )
-      ELSE GREATEST(COALESCE("usage".input_tokens, 0), 0)
-    END
-  ), 0)::BIGINT AS effective_input_tokens,
-  COALESCE(SUM(GREATEST(COALESCE("usage".output_tokens, 0), 0)), 0)::BIGINT AS output_tokens,
-  COALESCE(SUM(GREATEST(COALESCE("usage".total_tokens, 0), 0)), 0)::BIGINT AS total_tokens,
-  COALESCE(SUM(
-    CASE
-      WHEN COALESCE("usage".cache_creation_input_tokens, 0) = 0
-           AND (
-             COALESCE("usage".cache_creation_input_tokens_5m, 0)
-             + COALESCE("usage".cache_creation_input_tokens_1h, 0)
-           ) > 0
-      THEN COALESCE("usage".cache_creation_input_tokens_5m, 0)
-         + COALESCE("usage".cache_creation_input_tokens_1h, 0)
-      ELSE COALESCE("usage".cache_creation_input_tokens, 0)
-    END
-  ), 0)::BIGINT AS cache_creation_tokens,
-  COALESCE(SUM(GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)), 0)::BIGINT
-    AS cache_read_tokens,
-  COALESCE(SUM(
-    CASE
-      WHEN split_part(lower(COALESCE(COALESCE("usage".endpoint_api_format, "usage".api_format), '')), ':', 1)
-           IN ('claude', 'anthropic')
-      THEN GREATEST(COALESCE("usage".input_tokens, 0), 0)
-         + CASE
-             WHEN COALESCE("usage".cache_creation_input_tokens, 0) = 0
-                  AND (
-                    COALESCE("usage".cache_creation_input_tokens_5m, 0)
-                    + COALESCE("usage".cache_creation_input_tokens_1h, 0)
-                  ) > 0
-             THEN COALESCE("usage".cache_creation_input_tokens_5m, 0)
-                + COALESCE("usage".cache_creation_input_tokens_1h, 0)
-             ELSE COALESCE("usage".cache_creation_input_tokens, 0)
-           END
-         + GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)
-      WHEN split_part(lower(COALESCE(COALESCE("usage".endpoint_api_format, "usage".api_format), '')), ':', 1)
-           IN ('openai', 'gemini', 'google')
-      THEN (
-        CASE
-          WHEN GREATEST(COALESCE("usage".input_tokens, 0), 0) <= 0 THEN 0
-          WHEN GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0) <= 0
-          THEN GREATEST(COALESCE("usage".input_tokens, 0), 0)
-          ELSE GREATEST(
-            GREATEST(COALESCE("usage".input_tokens, 0), 0)
-              - GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0),
-            0
-          )
-        END
-      ) + GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)
-      ELSE CASE
-        WHEN (
-          CASE
-            WHEN COALESCE("usage".cache_creation_input_tokens, 0) = 0
-                 AND (
-                   COALESCE("usage".cache_creation_input_tokens_5m, 0)
-                   + COALESCE("usage".cache_creation_input_tokens_1h, 0)
-                 ) > 0
-            THEN COALESCE("usage".cache_creation_input_tokens_5m, 0)
-               + COALESCE("usage".cache_creation_input_tokens_1h, 0)
-            ELSE COALESCE("usage".cache_creation_input_tokens, 0)
-          END
-        ) > 0
-        THEN GREATEST(COALESCE("usage".input_tokens, 0), 0)
-           + (
-             CASE
-               WHEN COALESCE("usage".cache_creation_input_tokens, 0) = 0
-                    AND (
-                      COALESCE("usage".cache_creation_input_tokens_5m, 0)
-                      + COALESCE("usage".cache_creation_input_tokens_1h, 0)
-                    ) > 0
-               THEN COALESCE("usage".cache_creation_input_tokens_5m, 0)
-                  + COALESCE("usage".cache_creation_input_tokens_1h, 0)
-               ELSE COALESCE("usage".cache_creation_input_tokens, 0)
-             END
-           )
-           + GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)
-        ELSE GREATEST(COALESCE("usage".input_tokens, 0), 0)
-           + GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)
-      END
-    END
-  ), 0)::BIGINT AS total_input_context,
-  COALESCE(SUM(COALESCE(CAST("usage".cache_creation_cost_usd AS DOUBLE PRECISION), 0)), 0)
-    AS cache_creation_cost_usd,
-  COALESCE(SUM(COALESCE(CAST("usage".cache_read_cost_usd AS DOUBLE PRECISION), 0)), 0)
-    AS cache_read_cost_usd,
-  COALESCE(SUM(COALESCE(CAST("usage".total_cost_usd AS DOUBLE PRECISION), 0)), 0)
-    AS total_cost_usd,
-  COALESCE(SUM(COALESCE(CAST("usage".actual_total_cost_usd AS DOUBLE PRECISION), 0)), 0)
-    AS actual_total_cost_usd,
-  COALESCE(SUM(
-    CASE
-      WHEN COALESCE("usage".status_code, 0) >= 400
-           OR lower(COALESCE("usage".status, '')) = 'failed'
-      THEN 1
-      ELSE 0
-    END
-  ), 0)::BIGINT AS error_requests,
-  COALESCE(SUM(
-    CASE
-      WHEN "usage".response_time_ms IS NOT NULL
-      THEN GREATEST(COALESCE("usage".response_time_ms, 0), 0)::DOUBLE PRECISION
-      ELSE 0
-    END
-  ), 0) AS response_time_sum_ms,
-  COALESCE(SUM(
-    CASE
-      WHEN "usage".response_time_ms IS NOT NULL THEN 1
-      ELSE 0
-    END
-  ), 0)::BIGINT AS response_time_samples
-FROM "usage"
-"#,
-        );
-        let mut has_where = false;
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self
+                .summarize_dashboard_usage_raw(
+                    query.created_from_unix_secs,
+                    query.created_until_unix_secs,
+                    query.user_id.as_deref(),
+                )
+                .await;
+        };
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_dashboard_usage_raw(
+                    query.created_from_unix_secs,
+                    query.created_until_unix_secs,
+                    query.user_id.as_deref(),
+                )
+                .await;
+        };
 
-        builder.push(if has_where { " AND " } else { " WHERE " });
-        has_where = true;
-        builder
-            .push("\"usage\".created_at >= TO_TIMESTAMP(")
-            .push_bind(query.created_from_unix_secs as f64)
-            .push("::double precision)");
-        builder.push(if has_where { " AND " } else { " WHERE " });
-        builder
-            .push("\"usage\".created_at < TO_TIMESTAMP(")
-            .push_bind(query.created_until_unix_secs as f64)
-            .push("::double precision)");
-        builder.push(if has_where { " AND " } else { " WHERE " });
-        builder.push("\"usage\".status NOT IN ('pending', 'streaming')");
-        builder.push(if has_where { " AND " } else { " WHERE " });
-        builder.push("\"usage\".provider_name NOT IN ('unknown', 'pending')");
-        if let Some(user_id) = query.user_id.as_deref() {
-            builder.push(if has_where { " AND " } else { " WHERE " });
-            builder
-                .push("\"usage\".user_id = ")
-                .push_bind(user_id.to_string());
+        let mut summary = StoredUsageDashboardSummary::default();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            let raw = self
+                .summarize_dashboard_usage_raw(
+                    dashboard_utc_to_unix_secs(raw_start),
+                    dashboard_utc_to_unix_secs(raw_end),
+                    query.user_id.as_deref(),
+                )
+                .await?;
+            absorb_dashboard_summary(&mut summary, &raw);
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            let aggregate = self
+                .summarize_dashboard_usage_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                    query.user_id.as_deref(),
+                )
+                .await?;
+            absorb_dashboard_summary(&mut summary, &aggregate);
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            let raw = self
+                .summarize_dashboard_usage_raw(
+                    dashboard_utc_to_unix_secs(raw_start),
+                    dashboard_utc_to_unix_secs(raw_end),
+                    query.user_id.as_deref(),
+                )
+                .await?;
+            absorb_dashboard_summary(&mut summary, &raw);
         }
 
-        let row = builder
-            .build()
-            .fetch_one(&self.pool)
-            .await
-            .map_postgres_err()?;
-        Ok(StoredUsageDashboardSummary {
-            total_requests: row
-                .try_get::<i64, _>("total_requests")
-                .map_postgres_err()?
-                .max(0) as u64,
-            input_tokens: row
-                .try_get::<i64, _>("input_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            effective_input_tokens: row
-                .try_get::<i64, _>("effective_input_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            output_tokens: row
-                .try_get::<i64, _>("output_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            total_tokens: row
-                .try_get::<i64, _>("total_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_creation_tokens: row
-                .try_get::<i64, _>("cache_creation_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_read_tokens: row
-                .try_get::<i64, _>("cache_read_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            total_input_context: row
-                .try_get::<i64, _>("total_input_context")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_creation_cost_usd: row
-                .try_get::<f64, _>("cache_creation_cost_usd")
-                .map_postgres_err()?,
-            cache_read_cost_usd: row
-                .try_get::<f64, _>("cache_read_cost_usd")
-                .map_postgres_err()?,
-            total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
-            actual_total_cost_usd: row
-                .try_get::<f64, _>("actual_total_cost_usd")
-                .map_postgres_err()?,
-            error_requests: row
-                .try_get::<i64, _>("error_requests")
-                .map_postgres_err()?
-                .max(0) as u64,
-            response_time_sum_ms: row
-                .try_get::<f64, _>("response_time_sum_ms")
-                .map_postgres_err()?,
-            response_time_samples: row
-                .try_get::<i64, _>("response_time_samples")
-                .map_postgres_err()?
-                .max(0) as u64,
-        })
+        Ok(summary)
     }
 
-    pub async fn list_dashboard_daily_breakdown(
+    async fn list_dashboard_daily_breakdown_from_daily_aggregates(
+        &self,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+        user_id: Option<&str>,
+    ) -> Result<Vec<StoredUsageDashboardDailyBreakdownRow>, DataLayerError> {
+        if start_day_utc >= end_day_utc {
+            return Ok(Vec::new());
+        }
+
+        let sql = if user_id.is_some() {
+            r#"
+SELECT
+  TO_CHAR(date, 'YYYY-MM-DD') AS date,
+  model,
+  provider_name AS provider,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS requests,
+  COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(total_cost), 0)::DOUBLE PRECISION AS total_cost_usd,
+  COALESCE(SUM(response_time_sum_ms), 0) AS response_time_sum_ms,
+  COALESCE(SUM(response_time_samples), 0)::BIGINT AS response_time_samples
+FROM stats_user_daily_model_provider
+WHERE user_id = $1
+  AND date >= $2
+  AND date < $3
+GROUP BY date, model, provider_name
+ORDER BY date ASC, total_cost_usd DESC, model ASC, provider_name ASC
+"#
+        } else {
+            r#"
+SELECT
+  TO_CHAR(date, 'YYYY-MM-DD') AS date,
+  model,
+  provider_name AS provider,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS requests,
+  COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(total_cost), 0)::DOUBLE PRECISION AS total_cost_usd,
+  COALESCE(SUM(response_time_sum_ms), 0) AS response_time_sum_ms,
+  COALESCE(SUM(response_time_samples), 0)::BIGINT AS response_time_samples
+FROM stats_daily_model_provider
+WHERE date >= $1
+  AND date < $2
+GROUP BY date, model, provider_name
+ORDER BY date ASC, total_cost_usd DESC, model ASC, provider_name ASC
+"#
+        };
+
+        let mut rows = if let Some(user_id) = user_id {
+            sqlx::query(sql)
+                .bind(user_id)
+                .bind(start_day_utc)
+                .bind(end_day_utc)
+                .fetch(&self.pool)
+        } else {
+            sqlx::query(sql)
+                .bind(start_day_utc)
+                .bind(end_day_utc)
+                .fetch(&self.pool)
+        };
+
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            items.push(decode_dashboard_daily_breakdown_row(&row)?);
+        }
+        Ok(items)
+    }
+
+    async fn list_dashboard_daily_breakdown_raw(
         &self,
         query: &UsageDashboardDailyBreakdownQuery,
     ) -> Result<Vec<StoredUsageDashboardDailyBreakdownRow>, DataLayerError> {
@@ -2876,87 +4680,197 @@ ORDER BY date ASC, total_cost_usd DESC, "usage".model ASC, "usage".provider_name
         let mut rows = builder.build().fetch(&self.pool);
         let mut items = Vec::new();
         while let Some(row) = rows.try_next().await.map_postgres_err()? {
-            items.push(StoredUsageDashboardDailyBreakdownRow {
-                date: row.try_get::<String, _>("date").map_postgres_err()?,
-                model: row.try_get::<String, _>("model").map_postgres_err()?,
-                provider: row.try_get::<String, _>("provider").map_postgres_err()?,
-                requests: row.try_get::<i64, _>("requests").map_postgres_err()?.max(0) as u64,
-                total_tokens: row
-                    .try_get::<i64, _>("total_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
-                response_time_sum_ms: row
-                    .try_get::<f64, _>("response_time_sum_ms")
-                    .map_postgres_err()?,
-                response_time_samples: row
-                    .try_get::<i64, _>("response_time_samples")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-            });
+            items.push(decode_dashboard_daily_breakdown_row(&row)?);
         }
         Ok(items)
+    }
+
+    pub async fn list_dashboard_daily_breakdown(
+        &self,
+        query: &UsageDashboardDailyBreakdownQuery,
+    ) -> Result<Vec<StoredUsageDashboardDailyBreakdownRow>, DataLayerError> {
+        if query.tz_offset_minutes != 0 {
+            return self.list_dashboard_daily_breakdown_raw(query).await;
+        }
+
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self.list_dashboard_daily_breakdown_raw(query).await;
+        };
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self.list_dashboard_daily_breakdown_raw(query).await;
+        };
+
+        let mut items = Vec::new();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            items.extend(
+                self.list_dashboard_daily_breakdown_raw(&UsageDashboardDailyBreakdownQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    tz_offset_minutes: 0,
+                    user_id: query.user_id.clone(),
+                })
+                .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            items.extend(
+                self.list_dashboard_daily_breakdown_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                    query.user_id.as_deref(),
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            items.extend(
+                self.list_dashboard_daily_breakdown_raw(&UsageDashboardDailyBreakdownQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    tz_offset_minutes: 0,
+                    user_id: query.user_id.clone(),
+                })
+                .await?,
+            );
+        }
+
+        Ok(finalize_dashboard_daily_breakdown_rows(items))
     }
 
     pub async fn summarize_dashboard_provider_counts(
         &self,
         query: &UsageDashboardProviderCountsQuery,
     ) -> Result<Vec<StoredUsageDashboardProviderCount>, DataLayerError> {
-        let mut builder = QueryBuilder::<Postgres>::new(
+        if query.user_id.is_some() {
+            return self
+                .summarize_dashboard_provider_counts_raw(
+                    query.created_from_unix_secs,
+                    query.created_until_unix_secs,
+                    query.user_id.as_deref(),
+                )
+                .await;
+        }
+
+        let Some(cutoff_utc) = self.read_stats_hourly_cutoff().await? else {
+            return self
+                .summarize_dashboard_provider_counts_raw(
+                    query.created_from_unix_secs,
+                    query.created_until_unix_secs,
+                    None,
+                )
+                .await;
+        };
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let split = split_dashboard_hourly_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_dashboard_provider_counts_raw(
+                    query.created_from_unix_secs,
+                    query.created_until_unix_secs,
+                    None,
+                )
+                .await;
+        };
+
+        let mut grouped = BTreeMap::<String, u64>::new();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            let raw = self
+                .summarize_dashboard_provider_counts_raw(
+                    dashboard_utc_to_unix_secs(raw_start),
+                    dashboard_utc_to_unix_secs(raw_end),
+                    None,
+                )
+                .await?;
+            absorb_dashboard_provider_counts(&mut grouped, raw);
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            let aggregate = self
+                .summarize_dashboard_provider_counts_from_hourly_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                )
+                .await?;
+            absorb_dashboard_provider_counts(&mut grouped, aggregate);
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            let raw = self
+                .summarize_dashboard_provider_counts_raw(
+                    dashboard_utc_to_unix_secs(raw_start),
+                    dashboard_utc_to_unix_secs(raw_end),
+                    None,
+                )
+                .await?;
+            absorb_dashboard_provider_counts(&mut grouped, raw);
+        }
+
+        Ok(finalize_dashboard_provider_counts(grouped))
+    }
+
+    async fn summarize_usage_breakdown_from_daily_aggregates(
+        &self,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+        user_id: &str,
+        group_by: UsageBreakdownGroupBy,
+    ) -> Result<Vec<StoredUsageBreakdownSummaryRow>, DataLayerError> {
+        if start_day_utc >= end_day_utc {
+            return Ok(Vec::new());
+        }
+
+        let (table_name, group_column) = match group_by {
+            UsageBreakdownGroupBy::Model => ("stats_user_daily_model", "model"),
+            UsageBreakdownGroupBy::Provider => ("stats_user_daily_provider", "provider_name"),
+            UsageBreakdownGroupBy::ApiFormat => ("stats_user_daily_api_format", "api_format"),
+        };
+        let sql = format!(
             r#"
 SELECT
-  "usage".provider_name AS provider_name,
-  COUNT(*)::BIGINT AS request_count
-FROM "usage"
-"#,
-        );
-        let mut has_where = false;
-
-        builder.push(if has_where { " AND " } else { " WHERE " });
-        has_where = true;
-        builder
-            .push("\"usage\".created_at >= TO_TIMESTAMP(")
-            .push_bind(query.created_from_unix_secs as f64)
-            .push("::double precision)");
-        builder.push(if has_where { " AND " } else { " WHERE " });
-        builder
-            .push("\"usage\".created_at < TO_TIMESTAMP(")
-            .push_bind(query.created_until_unix_secs as f64)
-            .push("::double precision)");
-        builder.push(if has_where { " AND " } else { " WHERE " });
-        builder.push("\"usage\".status NOT IN ('pending', 'streaming')");
-        builder.push(if has_where { " AND " } else { " WHERE " });
-        builder.push("\"usage\".provider_name NOT IN ('unknown', 'pending')");
-        if let Some(user_id) = query.user_id.as_deref() {
-            builder.push(if has_where { " AND " } else { " WHERE " });
-            builder
-                .push("\"usage\".user_id = ")
-                .push_bind(user_id.to_string());
-        }
-        builder.push(
-            r#"
-GROUP BY "usage".provider_name
-ORDER BY request_count DESC, "usage".provider_name ASC
+  {group_column} AS group_key,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS request_count,
+  COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
+  COALESCE(SUM(effective_input_tokens), 0)::BIGINT AS effective_input_tokens,
+  COALESCE(SUM(total_input_context), 0)::BIGINT AS total_input_context,
+  COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(cache_creation_ephemeral_5m_tokens), 0)::BIGINT
+    AS cache_creation_ephemeral_5m_tokens,
+  COALESCE(SUM(cache_creation_ephemeral_1h_tokens), 0)::BIGINT
+    AS cache_creation_ephemeral_1h_tokens,
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(total_cost), 0)::DOUBLE PRECISION AS total_cost_usd,
+  COALESCE(SUM(actual_total_cost), 0)::DOUBLE PRECISION AS actual_total_cost_usd,
+  COALESCE(SUM(success_requests), 0)::BIGINT AS success_count,
+  COALESCE(SUM(successful_response_time_sum_ms), 0) AS response_time_sum_ms,
+  COALESCE(SUM(successful_response_time_samples), 0)::BIGINT AS response_time_samples,
+  COALESCE(SUM(response_time_sum_ms), 0) AS overall_response_time_sum_ms,
+  COALESCE(SUM(response_time_samples), 0)::BIGINT AS overall_response_time_samples
+FROM {table_name}
+WHERE user_id = $1
+  AND date >= $2
+  AND date < $3
+GROUP BY {group_column}
+ORDER BY request_count DESC, group_key ASC
 "#,
         );
 
-        let mut rows = builder.build().fetch(&self.pool);
+        let mut rows = sqlx::query(&sql)
+            .bind(user_id)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch(&self.pool);
         let mut items = Vec::new();
         while let Some(row) = rows.try_next().await.map_postgres_err()? {
-            items.push(StoredUsageDashboardProviderCount {
-                provider_name: row
-                    .try_get::<String, _>("provider_name")
-                    .map_postgres_err()?,
-                request_count: row
-                    .try_get::<i64, _>("request_count")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-            });
+            items.push(decode_usage_breakdown_summary_row(&row)?);
         }
         Ok(items)
     }
 
-    pub async fn summarize_usage_breakdown(
+    async fn summarize_usage_breakdown_raw(
         &self,
         query: &UsageBreakdownSummaryQuery,
     ) -> Result<Vec<StoredUsageBreakdownSummaryRow>, DataLayerError> {
@@ -3137,73 +5051,65 @@ ORDER BY request_count DESC, group_key ASC
         let mut rows = builder.build().fetch(&self.pool);
         let mut items = Vec::new();
         while let Some(row) = rows.try_next().await.map_postgres_err()? {
-            items.push(StoredUsageBreakdownSummaryRow {
-                group_key: row.try_get::<String, _>("group_key").map_postgres_err()?,
-                request_count: row
-                    .try_get::<i64, _>("request_count")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                input_tokens: row
-                    .try_get::<i64, _>("input_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                total_tokens: row
-                    .try_get::<i64, _>("total_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                output_tokens: row
-                    .try_get::<i64, _>("output_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                effective_input_tokens: row
-                    .try_get::<i64, _>("effective_input_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                total_input_context: row
-                    .try_get::<i64, _>("total_input_context")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                cache_creation_tokens: row
-                    .try_get::<i64, _>("cache_creation_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                cache_creation_ephemeral_5m_tokens: row
-                    .try_get::<i64, _>("cache_creation_ephemeral_5m_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                cache_creation_ephemeral_1h_tokens: row
-                    .try_get::<i64, _>("cache_creation_ephemeral_1h_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                cache_read_tokens: row
-                    .try_get::<i64, _>("cache_read_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
-                actual_total_cost_usd: row
-                    .try_get::<f64, _>("actual_total_cost_usd")
-                    .map_postgres_err()?,
-                success_count: row
-                    .try_get::<i64, _>("success_count")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                response_time_sum_ms: row
-                    .try_get::<f64, _>("response_time_sum_ms")
-                    .map_postgres_err()?,
-                response_time_samples: row
-                    .try_get::<i64, _>("response_time_samples")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                overall_response_time_sum_ms: row
-                    .try_get::<f64, _>("overall_response_time_sum_ms")
-                    .map_postgres_err()?,
-                overall_response_time_samples: row
-                    .try_get::<i64, _>("overall_response_time_samples")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-            });
+            items.push(decode_usage_breakdown_summary_row(&row)?);
         }
         Ok(items)
+    }
+
+    pub async fn summarize_usage_breakdown(
+        &self,
+        query: &UsageBreakdownSummaryQuery,
+    ) -> Result<Vec<StoredUsageBreakdownSummaryRow>, DataLayerError> {
+        let Some(user_id) = query.user_id.as_deref() else {
+            return self.summarize_usage_breakdown_raw(query).await;
+        };
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self.summarize_usage_breakdown_raw(query).await;
+        };
+
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self.summarize_usage_breakdown_raw(query).await;
+        };
+
+        let mut grouped = BTreeMap::<String, StoredUsageBreakdownSummaryRow>::new();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            let raw = self
+                .summarize_usage_breakdown_raw(&UsageBreakdownSummaryQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    user_id: Some(user_id.to_string()),
+                    group_by: query.group_by,
+                })
+                .await?;
+            absorb_usage_breakdown_rows(&mut grouped, raw);
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            let aggregate = self
+                .summarize_usage_breakdown_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                    user_id,
+                    query.group_by,
+                )
+                .await?;
+            absorb_usage_breakdown_rows(&mut grouped, aggregate);
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            let raw = self
+                .summarize_usage_breakdown_raw(&UsageBreakdownSummaryQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    user_id: Some(user_id.to_string()),
+                    group_by: query.group_by,
+                })
+                .await?;
+            absorb_usage_breakdown_rows(&mut grouped, raw);
+        }
+
+        Ok(finalize_usage_breakdown_rows(grouped))
     }
 
     pub async fn count_monitoring_usage_errors(
@@ -3284,7 +5190,7 @@ ORDER BY "usage".created_at DESC, "usage".id ASC
         Ok(items)
     }
 
-    pub async fn summarize_usage_error_distribution(
+    async fn summarize_usage_error_distribution_raw(
         &self,
         query: &UsageErrorDistributionQuery,
     ) -> Result<Vec<StoredUsageErrorDistributionRow>, DataLayerError> {
@@ -3324,18 +5230,99 @@ ORDER BY date ASC, count DESC, "usage".error_category ASC
         let mut rows = builder.build().fetch(&self.pool);
         let mut items = Vec::new();
         while let Some(row) = rows.try_next().await.map_postgres_err()? {
-            items.push(StoredUsageErrorDistributionRow {
-                date: row.try_get::<String, _>("date").map_postgres_err()?,
-                error_category: row
-                    .try_get::<String, _>("error_category")
-                    .map_postgres_err()?,
-                count: row.try_get::<i64, _>("count").map_postgres_err()?.max(0) as u64,
-            });
+            items.push(decode_usage_error_distribution_row(&row)?);
         }
         Ok(items)
     }
 
-    pub async fn summarize_usage_performance_percentiles(
+    async fn summarize_usage_error_distribution_from_daily_aggregates(
+        &self,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+    ) -> Result<Vec<StoredUsageErrorDistributionRow>, DataLayerError> {
+        if start_day_utc >= end_day_utc {
+            return Ok(Vec::new());
+        }
+
+        let mut rows = sqlx::query(
+            r#"
+SELECT
+  TO_CHAR(date, 'YYYY-MM-DD') AS date,
+  error_category,
+  COALESCE(SUM(count), 0)::BIGINT AS count
+FROM stats_daily_error
+WHERE date >= $1
+  AND date < $2
+GROUP BY date, error_category
+ORDER BY date ASC, count DESC, error_category ASC
+"#,
+        )
+        .bind(start_day_utc)
+        .bind(end_day_utc)
+        .fetch(&self.pool);
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            items.push(decode_usage_error_distribution_row(&row)?);
+        }
+        Ok(items)
+    }
+
+    pub async fn summarize_usage_error_distribution(
+        &self,
+        query: &UsageErrorDistributionQuery,
+    ) -> Result<Vec<StoredUsageErrorDistributionRow>, DataLayerError> {
+        if query.tz_offset_minutes != 0 {
+            return self.summarize_usage_error_distribution_raw(query).await;
+        }
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self.summarize_usage_error_distribution_raw(query).await;
+        };
+
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self.summarize_usage_error_distribution_raw(query).await;
+        };
+
+        let mut grouped = BTreeMap::<(String, String), u64>::new();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            absorb_usage_error_distribution_rows(
+                &mut grouped,
+                self.summarize_usage_error_distribution_raw(&UsageErrorDistributionQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    tz_offset_minutes: 0,
+                })
+                .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            absorb_usage_error_distribution_rows(
+                &mut grouped,
+                self.summarize_usage_error_distribution_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            absorb_usage_error_distribution_rows(
+                &mut grouped,
+                self.summarize_usage_error_distribution_raw(&UsageErrorDistributionQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    tz_offset_minutes: 0,
+                })
+                .await?,
+            );
+        }
+
+        Ok(finalize_usage_error_distribution_rows(grouped))
+    }
+
+    async fn summarize_usage_performance_percentiles_raw(
         &self,
         query: &UsagePerformancePercentilesQuery,
     ) -> Result<Vec<StoredUsagePerformancePercentilesRow>, DataLayerError> {
@@ -3409,41 +5396,138 @@ ORDER BY date ASC
         let mut rows = builder.build().fetch(&self.pool);
         let mut items = Vec::new();
         while let Some(row) = rows.try_next().await.map_postgres_err()? {
-            items.push(StoredUsagePerformancePercentilesRow {
-                date: row.try_get::<String, _>("date").map_postgres_err()?,
-                p50_response_time_ms: row
-                    .try_get::<Option<i64>, _>("p50_response_time_ms")
-                    .map_postgres_err()?
-                    .map(|value| value.max(0) as u64),
-                p90_response_time_ms: row
-                    .try_get::<Option<i64>, _>("p90_response_time_ms")
-                    .map_postgres_err()?
-                    .map(|value| value.max(0) as u64),
-                p99_response_time_ms: row
-                    .try_get::<Option<i64>, _>("p99_response_time_ms")
-                    .map_postgres_err()?
-                    .map(|value| value.max(0) as u64),
-                p50_first_byte_time_ms: row
-                    .try_get::<Option<i64>, _>("p50_first_byte_time_ms")
-                    .map_postgres_err()?
-                    .map(|value| value.max(0) as u64),
-                p90_first_byte_time_ms: row
-                    .try_get::<Option<i64>, _>("p90_first_byte_time_ms")
-                    .map_postgres_err()?
-                    .map(|value| value.max(0) as u64),
-                p99_first_byte_time_ms: row
-                    .try_get::<Option<i64>, _>("p99_first_byte_time_ms")
-                    .map_postgres_err()?
-                    .map(|value| value.max(0) as u64),
-            });
+            items.push(decode_usage_performance_percentiles_row(&row)?);
         }
         Ok(items)
     }
 
-    pub async fn summarize_usage_cost_savings(
+    async fn summarize_usage_performance_percentiles_from_daily_aggregates(
         &self,
-        query: &UsageCostSavingsSummaryQuery,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+    ) -> Result<Vec<StoredUsagePerformancePercentilesRow>, DataLayerError> {
+        if start_day_utc >= end_day_utc {
+            return Ok(Vec::new());
+        }
+
+        let mut rows = sqlx::query(
+            r#"
+SELECT
+  TO_CHAR(date, 'YYYY-MM-DD') AS date,
+  CASE
+    WHEN p50_response_time_ms IS NOT NULL THEN GREATEST(p50_response_time_ms, 0)::BIGINT
+    ELSE NULL
+  END AS p50_response_time_ms,
+  CASE
+    WHEN p90_response_time_ms IS NOT NULL THEN GREATEST(p90_response_time_ms, 0)::BIGINT
+    ELSE NULL
+  END AS p90_response_time_ms,
+  CASE
+    WHEN p99_response_time_ms IS NOT NULL THEN GREATEST(p99_response_time_ms, 0)::BIGINT
+    ELSE NULL
+  END AS p99_response_time_ms,
+  CASE
+    WHEN p50_first_byte_time_ms IS NOT NULL THEN GREATEST(p50_first_byte_time_ms, 0)::BIGINT
+    ELSE NULL
+  END AS p50_first_byte_time_ms,
+  CASE
+    WHEN p90_first_byte_time_ms IS NOT NULL THEN GREATEST(p90_first_byte_time_ms, 0)::BIGINT
+    ELSE NULL
+  END AS p90_first_byte_time_ms,
+  CASE
+    WHEN p99_first_byte_time_ms IS NOT NULL THEN GREATEST(p99_first_byte_time_ms, 0)::BIGINT
+    ELSE NULL
+  END AS p99_first_byte_time_ms
+FROM stats_daily
+WHERE date >= $1
+  AND date < $2
+ORDER BY date ASC
+"#,
+        )
+        .bind(start_day_utc)
+        .bind(end_day_utc)
+        .fetch(&self.pool);
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            items.push(decode_usage_performance_percentiles_row(&row)?);
+        }
+        Ok(items)
+    }
+
+    pub async fn summarize_usage_performance_percentiles(
+        &self,
+        query: &UsagePerformancePercentilesQuery,
+    ) -> Result<Vec<StoredUsagePerformancePercentilesRow>, DataLayerError> {
+        if query.tz_offset_minutes != 0 {
+            return self
+                .summarize_usage_performance_percentiles_raw(query)
+                .await;
+        }
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self
+                .summarize_usage_performance_percentiles_raw(query)
+                .await;
+        };
+
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_usage_performance_percentiles_raw(query)
+                .await;
+        };
+
+        let mut items = Vec::new();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            items.extend(
+                self.summarize_usage_performance_percentiles_raw(
+                    &UsagePerformancePercentilesQuery {
+                        created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                        created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                        tz_offset_minutes: 0,
+                    },
+                )
+                .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            items.extend(
+                self.summarize_usage_performance_percentiles_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            items.extend(
+                self.summarize_usage_performance_percentiles_raw(
+                    &UsagePerformancePercentilesQuery {
+                        created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                        created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                        tz_offset_minutes: 0,
+                    },
+                )
+                .await?,
+            );
+        }
+        items.sort_by(|left, right| left.date.cmp(&right.date));
+        Ok(items)
+    }
+
+    async fn summarize_usage_cost_savings_raw_from_range(
+        &self,
+        start_utc: DateTime<Utc>,
+        end_utc: DateTime<Utc>,
+        user_id: Option<&str>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
     ) -> Result<StoredUsageCostSavingsSummary, DataLayerError> {
+        if start_utc >= end_utc {
+            return Ok(StoredUsageCostSavingsSummary::default());
+        }
+
         let mut builder = QueryBuilder::<Postgres>::new(
             r#"
 SELECT
@@ -3465,33 +5549,26 @@ LEFT JOIN usage_settlement_snapshots
   ON usage_settlement_snapshots.request_id = "usage".request_id
 "#,
         );
-        let mut has_where = false;
-
-        builder.push(if has_where { " AND " } else { " WHERE " });
-        has_where = true;
         builder
-            .push("\"usage\".created_at >= TO_TIMESTAMP(")
-            .push_bind(query.created_from_unix_secs as f64)
-            .push("::double precision)");
-        builder.push(if has_where { " AND " } else { " WHERE " });
+            .push(" WHERE \"usage\".created_at >= ")
+            .push_bind(start_utc);
         builder
-            .push("\"usage\".created_at < TO_TIMESTAMP(")
-            .push_bind(query.created_until_unix_secs as f64)
-            .push("::double precision)");
-        if let Some(user_id) = query.user_id.as_deref() {
-            builder.push(if has_where { " AND " } else { " WHERE " });
+            .push(" AND \"usage\".created_at < ")
+            .push_bind(end_utc);
+        if let Some(user_id) = user_id {
+            builder.push(" AND ");
             builder
                 .push("\"usage\".user_id = ")
                 .push_bind(user_id.to_string());
         }
-        if let Some(provider_name) = query.provider_name.as_deref() {
-            builder.push(if has_where { " AND " } else { " WHERE " });
+        if let Some(provider_name) = provider_name {
+            builder.push(" AND ");
             builder
                 .push("\"usage\".provider_name = ")
                 .push_bind(provider_name.to_string());
         }
-        if let Some(model) = query.model.as_deref() {
-            builder.push(if has_where { " AND " } else { " WHERE " });
+        if let Some(model) = model {
+            builder.push(" AND ");
             builder
                 .push("\"usage\".model = ")
                 .push_bind(model.to_string());
@@ -3502,26 +5579,273 @@ LEFT JOIN usage_settlement_snapshots
             .fetch_one(&self.pool)
             .await
             .map_postgres_err()?;
-        Ok(StoredUsageCostSavingsSummary {
-            cache_read_tokens: row
-                .try_get::<i64, _>("cache_read_tokens")
-                .map_postgres_err()?
-                .max(0) as u64,
-            cache_read_cost_usd: row
-                .try_get::<f64, _>("cache_read_cost_usd")
-                .map_postgres_err()?,
-            cache_creation_cost_usd: row
-                .try_get::<f64, _>("cache_creation_cost_usd")
-                .map_postgres_err()?,
-            estimated_full_cost_usd: row
-                .try_get::<f64, _>("estimated_full_cost_usd")
-                .map_postgres_err()?,
-        })
+        decode_usage_cost_savings_row(&row)
     }
 
-    pub async fn summarize_usage_time_series(
+    async fn summarize_usage_cost_savings_from_daily_aggregates(
+        &self,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+        user_id: Option<&str>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<StoredUsageCostSavingsSummary, DataLayerError> {
+        if start_day_utc >= end_day_utc {
+            return Ok(StoredUsageCostSavingsSummary::default());
+        }
+
+        let row = match (user_id, provider_name, model) {
+            (None, None, None) => sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(estimated_full_cost), 0)::DOUBLE PRECISION AS estimated_full_cost_usd
+FROM stats_daily_cost_savings
+WHERE date >= $1
+  AND date < $2
+"#,
+            )
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?,
+            (None, Some(provider_name), None) => sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(estimated_full_cost), 0)::DOUBLE PRECISION AS estimated_full_cost_usd
+FROM stats_daily_cost_savings_provider
+WHERE provider_name = $1
+  AND date >= $2
+  AND date < $3
+"#,
+            )
+            .bind(provider_name)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?,
+            (None, None, Some(model)) => sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(estimated_full_cost), 0)::DOUBLE PRECISION AS estimated_full_cost_usd
+FROM stats_daily_cost_savings_model
+WHERE model = $1
+  AND date >= $2
+  AND date < $3
+"#,
+            )
+            .bind(model)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?,
+            (None, Some(provider_name), Some(model)) => sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(estimated_full_cost), 0)::DOUBLE PRECISION AS estimated_full_cost_usd
+FROM stats_daily_cost_savings_model_provider
+WHERE provider_name = $1
+  AND model = $2
+  AND date >= $3
+  AND date < $4
+"#,
+            )
+            .bind(provider_name)
+            .bind(model)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?,
+            (Some(user_id), None, None) => sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(estimated_full_cost), 0)::DOUBLE PRECISION AS estimated_full_cost_usd
+FROM stats_user_daily_cost_savings
+WHERE user_id = $1
+  AND date >= $2
+  AND date < $3
+"#,
+            )
+            .bind(user_id)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?,
+            (Some(user_id), Some(provider_name), None) => sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(estimated_full_cost), 0)::DOUBLE PRECISION AS estimated_full_cost_usd
+FROM stats_user_daily_cost_savings_provider
+WHERE user_id = $1
+  AND provider_name = $2
+  AND date >= $3
+  AND date < $4
+"#,
+            )
+            .bind(user_id)
+            .bind(provider_name)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?,
+            (Some(user_id), None, Some(model)) => sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(estimated_full_cost), 0)::DOUBLE PRECISION AS estimated_full_cost_usd
+FROM stats_user_daily_cost_savings_model
+WHERE user_id = $1
+  AND model = $2
+  AND date >= $3
+  AND date < $4
+"#,
+            )
+            .bind(user_id)
+            .bind(model)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?,
+            (Some(user_id), Some(provider_name), Some(model)) => sqlx::query(
+                r#"
+SELECT
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(estimated_full_cost), 0)::DOUBLE PRECISION AS estimated_full_cost_usd
+FROM stats_user_daily_cost_savings_model_provider
+WHERE user_id = $1
+  AND provider_name = $2
+  AND model = $3
+  AND date >= $4
+  AND date < $5
+"#,
+            )
+            .bind(user_id)
+            .bind(provider_name)
+            .bind(model)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_one(&self.pool)
+            .await
+            .map_postgres_err()?,
+        };
+
+        decode_usage_cost_savings_row(&row)
+    }
+
+    pub async fn summarize_usage_cost_savings(
+        &self,
+        query: &UsageCostSavingsSummaryQuery,
+    ) -> Result<StoredUsageCostSavingsSummary, DataLayerError> {
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let user_id = query.user_id.as_deref();
+        let provider_name = query.provider_name.as_deref();
+        let model = query.model.as_deref();
+
+        if start_utc >= end_utc {
+            return Ok(StoredUsageCostSavingsSummary::default());
+        }
+
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self
+                .summarize_usage_cost_savings_raw_from_range(
+                    start_utc,
+                    end_utc,
+                    user_id,
+                    provider_name,
+                    model,
+                )
+                .await;
+        };
+
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_usage_cost_savings_raw_from_range(
+                    start_utc,
+                    end_utc,
+                    user_id,
+                    provider_name,
+                    model,
+                )
+                .await;
+        };
+
+        let mut summary = StoredUsageCostSavingsSummary::default();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            absorb_usage_cost_savings_summary(
+                &mut summary,
+                self.summarize_usage_cost_savings_raw_from_range(
+                    raw_start,
+                    raw_end,
+                    user_id,
+                    provider_name,
+                    model,
+                )
+                .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            absorb_usage_cost_savings_summary(
+                &mut summary,
+                self.summarize_usage_cost_savings_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                    user_id,
+                    provider_name,
+                    model,
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            absorb_usage_cost_savings_summary(
+                &mut summary,
+                self.summarize_usage_cost_savings_raw_from_range(
+                    raw_start,
+                    raw_end,
+                    user_id,
+                    provider_name,
+                    model,
+                )
+                .await?,
+            );
+        }
+        Ok(summary)
+    }
+
+    async fn summarize_usage_time_series_raw(
         &self,
         query: &UsageTimeSeriesQuery,
+        excluded_only: bool,
     ) -> Result<Vec<StoredUsageTimeSeriesBucket>, DataLayerError> {
         let mut builder = QueryBuilder::<Postgres>::new("SELECT ");
         match query.granularity {
@@ -3587,43 +5911,307 @@ FROM "usage"
                 .push("\"usage\".model = ")
                 .push_bind(model.to_string());
         }
+        if excluded_only {
+            builder.push(if has_where { " AND " } else { " WHERE " });
+            builder.push(
+                r#"(
+  "usage".status IS NULL
+  OR "usage".status IN ('pending', 'streaming')
+  OR "usage".provider_name IS NULL
+  OR "usage".provider_name IN ('unknown', 'pending')
+)"#,
+            );
+        }
         builder.push(" GROUP BY bucket_key ORDER BY bucket_key ASC");
 
         let mut rows = builder.build().fetch(&self.pool);
         let mut items = Vec::new();
         while let Some(row) = rows.try_next().await.map_postgres_err()? {
-            items.push(StoredUsageTimeSeriesBucket {
-                bucket_key: row.try_get::<String, _>("bucket_key").map_postgres_err()?,
-                total_requests: row
-                    .try_get::<i64, _>("total_requests")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                input_tokens: row
-                    .try_get::<i64, _>("input_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                output_tokens: row
-                    .try_get::<i64, _>("output_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                cache_creation_tokens: row
-                    .try_get::<i64, _>("cache_creation_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                cache_read_tokens: row
-                    .try_get::<i64, _>("cache_read_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
-                total_response_time_ms: row
-                    .try_get::<f64, _>("total_response_time_ms")
-                    .map_postgres_err()?,
-            });
+            items.push(decode_usage_time_series_bucket_row(&row)?);
         }
         Ok(items)
     }
 
-    pub async fn summarize_usage_leaderboard(
+    async fn summarize_usage_time_series_from_daily_aggregates(
+        &self,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+        user_id: Option<&str>,
+    ) -> Result<Vec<StoredUsageTimeSeriesBucket>, DataLayerError> {
+        if start_day_utc >= end_day_utc {
+            return Ok(Vec::new());
+        }
+
+        let rows = if let Some(user_id) = user_id {
+            sqlx::query(
+                r#"
+SELECT
+  TO_CHAR(date, 'YYYY-MM-DD') AS bucket_key,
+  total_requests::BIGINT AS total_requests,
+  input_tokens::BIGINT AS input_tokens,
+  output_tokens::BIGINT AS output_tokens,
+  cache_creation_tokens::BIGINT AS cache_creation_tokens,
+  cache_read_tokens::BIGINT AS cache_read_tokens,
+  CAST(total_cost AS DOUBLE PRECISION) AS total_cost_usd,
+  CAST(response_time_sum_ms AS DOUBLE PRECISION) AS total_response_time_ms
+FROM stats_user_daily
+WHERE user_id = $1
+  AND date >= $2
+  AND date < $3
+ORDER BY date ASC
+"#,
+            )
+            .bind(user_id)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_all(&self.pool)
+            .await
+            .map_postgres_err()?
+        } else {
+            sqlx::query(
+                r#"
+SELECT
+  TO_CHAR(date, 'YYYY-MM-DD') AS bucket_key,
+  total_requests::BIGINT AS total_requests,
+  input_tokens::BIGINT AS input_tokens,
+  output_tokens::BIGINT AS output_tokens,
+  cache_creation_tokens::BIGINT AS cache_creation_tokens,
+  cache_read_tokens::BIGINT AS cache_read_tokens,
+  CAST(total_cost AS DOUBLE PRECISION) AS total_cost_usd,
+  CAST(response_time_sum_ms AS DOUBLE PRECISION) AS total_response_time_ms
+FROM stats_daily
+WHERE date >= $1
+  AND date < $2
+ORDER BY date ASC
+"#,
+            )
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch_all(&self.pool)
+            .await
+            .map_postgres_err()?
+        };
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(decode_usage_time_series_bucket_row(&row)?);
+        }
+        Ok(items)
+    }
+
+    async fn summarize_usage_time_series_from_hourly_aggregates(
+        &self,
+        start_utc: DateTime<Utc>,
+        end_utc: DateTime<Utc>,
+        granularity: UsageTimeSeriesGranularity,
+        tz_offset_minutes: i32,
+    ) -> Result<Vec<StoredUsageTimeSeriesBucket>, DataLayerError> {
+        if start_utc >= end_utc {
+            return Ok(Vec::new());
+        }
+
+        let mut builder = QueryBuilder::<Postgres>::new("SELECT ");
+        match granularity {
+            UsageTimeSeriesGranularity::Day => {
+                builder
+                    .push("TO_CHAR(date_trunc('day', hour_utc + (")
+                    .push_bind(tz_offset_minutes)
+                    .push("::integer * INTERVAL '1 minute')), 'YYYY-MM-DD') AS bucket_key");
+            }
+            UsageTimeSeriesGranularity::Hour => {
+                builder
+                    .push("TO_CHAR(date_trunc('hour', hour_utc + (")
+                    .push_bind(tz_offset_minutes)
+                    .push("::integer * INTERVAL '1 minute')), 'YYYY-MM-DD\"T\"HH24:00:00+00:00') AS bucket_key");
+            }
+        }
+        builder.push(
+            r#",
+  COALESCE(SUM(total_requests), 0)::BIGINT AS total_requests,
+  COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
+  COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
+  COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
+  COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
+  COALESCE(SUM(CAST(total_cost AS DOUBLE PRECISION)), 0) AS total_cost_usd,
+  COALESCE(SUM(CAST(response_time_sum_ms AS DOUBLE PRECISION)), 0) AS total_response_time_ms
+FROM stats_hourly
+WHERE is_complete IS TRUE
+  AND hour_utc >= "#,
+        );
+        builder.push_bind(start_utc).push(
+            r#"
+  AND hour_utc < "#,
+        );
+        builder
+            .push_bind(end_utc)
+            .push("\nGROUP BY bucket_key ORDER BY bucket_key ASC");
+
+        let mut rows = builder.build().fetch(&self.pool);
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            items.push(decode_usage_time_series_bucket_row(&row)?);
+        }
+        Ok(items)
+    }
+
+    pub async fn summarize_usage_time_series(
+        &self,
+        query: &UsageTimeSeriesQuery,
+    ) -> Result<Vec<StoredUsageTimeSeriesBucket>, DataLayerError> {
+        if query.provider_name.is_some() || query.model.is_some() {
+            return self.summarize_usage_time_series_raw(query, false).await;
+        }
+
+        if query.granularity == UsageTimeSeriesGranularity::Day && query.tz_offset_minutes == 0 {
+            if let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? {
+                let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+                let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+                let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+                if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+                    let mut grouped = BTreeMap::<String, StoredUsageTimeSeriesBucket>::new();
+                    if let Some((raw_start, raw_end)) = split.raw_leading {
+                        absorb_usage_time_series_buckets(
+                            &mut grouped,
+                            self.summarize_usage_time_series_raw(
+                                &UsageTimeSeriesQuery {
+                                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                                    granularity: UsageTimeSeriesGranularity::Day,
+                                    tz_offset_minutes: 0,
+                                    user_id: query.user_id.clone(),
+                                    provider_name: None,
+                                    model: None,
+                                },
+                                false,
+                            )
+                            .await?,
+                        );
+                    }
+                    absorb_usage_time_series_buckets(
+                        &mut grouped,
+                        self.summarize_usage_time_series_from_daily_aggregates(
+                            aggregate_start,
+                            aggregate_end,
+                            query.user_id.as_deref(),
+                        )
+                        .await?,
+                    );
+                    absorb_usage_time_series_buckets(
+                        &mut grouped,
+                        self.summarize_usage_time_series_raw(
+                            &UsageTimeSeriesQuery {
+                                created_from_unix_secs: dashboard_utc_to_unix_secs(aggregate_start),
+                                created_until_unix_secs: dashboard_utc_to_unix_secs(aggregate_end),
+                                granularity: UsageTimeSeriesGranularity::Day,
+                                tz_offset_minutes: 0,
+                                user_id: query.user_id.clone(),
+                                provider_name: None,
+                                model: None,
+                            },
+                            true,
+                        )
+                        .await?,
+                    );
+                    if let Some((raw_start, raw_end)) = split.raw_trailing {
+                        absorb_usage_time_series_buckets(
+                            &mut grouped,
+                            self.summarize_usage_time_series_raw(
+                                &UsageTimeSeriesQuery {
+                                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                                    granularity: UsageTimeSeriesGranularity::Day,
+                                    tz_offset_minutes: 0,
+                                    user_id: query.user_id.clone(),
+                                    provider_name: None,
+                                    model: None,
+                                },
+                                false,
+                            )
+                            .await?,
+                        );
+                    }
+                    return Ok(finalize_usage_time_series_buckets(grouped));
+                }
+            }
+        }
+
+        if query.user_id.is_none() && query.tz_offset_minutes % 60 == 0 {
+            if let Some(cutoff_utc) = self.read_stats_hourly_cutoff().await? {
+                let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+                let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+                let split = split_dashboard_hourly_aggregate_range(start_utc, end_utc, cutoff_utc);
+                if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+                    let mut grouped = BTreeMap::<String, StoredUsageTimeSeriesBucket>::new();
+                    if let Some((raw_start, raw_end)) = split.raw_leading {
+                        absorb_usage_time_series_buckets(
+                            &mut grouped,
+                            self.summarize_usage_time_series_raw(
+                                &UsageTimeSeriesQuery {
+                                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                                    granularity: query.granularity,
+                                    tz_offset_minutes: query.tz_offset_minutes,
+                                    user_id: None,
+                                    provider_name: None,
+                                    model: None,
+                                },
+                                false,
+                            )
+                            .await?,
+                        );
+                    }
+                    absorb_usage_time_series_buckets(
+                        &mut grouped,
+                        self.summarize_usage_time_series_from_hourly_aggregates(
+                            aggregate_start,
+                            aggregate_end,
+                            query.granularity,
+                            query.tz_offset_minutes,
+                        )
+                        .await?,
+                    );
+                    absorb_usage_time_series_buckets(
+                        &mut grouped,
+                        self.summarize_usage_time_series_raw(
+                            &UsageTimeSeriesQuery {
+                                created_from_unix_secs: dashboard_utc_to_unix_secs(aggregate_start),
+                                created_until_unix_secs: dashboard_utc_to_unix_secs(aggregate_end),
+                                granularity: query.granularity,
+                                tz_offset_minutes: query.tz_offset_minutes,
+                                user_id: None,
+                                provider_name: None,
+                                model: None,
+                            },
+                            true,
+                        )
+                        .await?,
+                    );
+                    if let Some((raw_start, raw_end)) = split.raw_trailing {
+                        absorb_usage_time_series_buckets(
+                            &mut grouped,
+                            self.summarize_usage_time_series_raw(
+                                &UsageTimeSeriesQuery {
+                                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                                    granularity: query.granularity,
+                                    tz_offset_minutes: query.tz_offset_minutes,
+                                    user_id: None,
+                                    provider_name: None,
+                                    model: None,
+                                },
+                                false,
+                            )
+                            .await?,
+                        );
+                    }
+                    return Ok(finalize_usage_time_series_buckets(grouped));
+                }
+            }
+        }
+
+        self.summarize_usage_time_series_raw(query, false).await
+    }
+
+    async fn summarize_usage_leaderboard_raw(
         &self,
         query: &UsageLeaderboardQuery,
     ) -> Result<Vec<StoredUsageLeaderboardSummary>, DataLayerError> {
@@ -3667,23 +6255,343 @@ ORDER BY group_key ASC
             .fetch(&self.pool);
         let mut items = Vec::new();
         while let Some(row) = rows.try_next().await.map_postgres_err()? {
-            items.push(StoredUsageLeaderboardSummary {
-                group_key: row.try_get::<String, _>("group_key").map_postgres_err()?,
-                legacy_name: row
-                    .try_get::<Option<String>, _>("legacy_name")
-                    .map_postgres_err()?,
-                request_count: row
-                    .try_get::<i64, _>("request_count")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                total_tokens: row
-                    .try_get::<i64, _>("total_tokens")
-                    .map_postgres_err()?
-                    .max(0) as u64,
-                total_cost_usd: row.try_get::<f64, _>("total_cost_usd").map_postgres_err()?,
-            });
+            items.push(decode_usage_leaderboard_row(&row)?);
         }
         Ok(items)
+    }
+
+    async fn summarize_usage_leaderboard_from_daily_aggregates(
+        &self,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+        query: &UsageLeaderboardQuery,
+    ) -> Result<Option<Vec<StoredUsageLeaderboardSummary>>, DataLayerError> {
+        let items = match query.group_by {
+            UsageLeaderboardGroupBy::Model => {
+                let mut builder = if let Some(user_id) = query.user_id.as_deref() {
+                    if let Some(provider_name) = query.provider_name.as_deref() {
+                        let mut builder = QueryBuilder::<Postgres>::new(
+                            r#"
+SELECT
+  model AS group_key,
+  NULL::varchar AS legacy_name,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS request_count,
+  COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
+  CAST(COALESCE(SUM(total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd
+FROM stats_user_daily_model_provider
+WHERE date >=
+"#,
+                        );
+                        builder
+                            .push_bind(start_day_utc)
+                            .push(" AND date < ")
+                            .push_bind(end_day_utc)
+                            .push(" AND user_id = ")
+                            .push_bind(user_id.to_string())
+                            .push(" AND provider_name = ")
+                            .push_bind(provider_name.to_string());
+                        if let Some(model) = query.model.as_deref() {
+                            builder.push(" AND model = ").push_bind(model.to_string());
+                        }
+                        builder.push(" GROUP BY model ORDER BY model ASC");
+                        builder
+                    } else {
+                        let mut builder = QueryBuilder::<Postgres>::new(
+                            r#"
+SELECT
+  model AS group_key,
+  NULL::varchar AS legacy_name,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS request_count,
+  COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
+  CAST(COALESCE(SUM(total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd
+FROM stats_user_daily_model
+WHERE date >=
+"#,
+                        );
+                        builder
+                            .push_bind(start_day_utc)
+                            .push(" AND date < ")
+                            .push_bind(end_day_utc)
+                            .push(" AND user_id = ")
+                            .push_bind(user_id.to_string());
+                        if let Some(model) = query.model.as_deref() {
+                            builder.push(" AND model = ").push_bind(model.to_string());
+                        }
+                        builder.push(" GROUP BY model ORDER BY model ASC");
+                        builder
+                    }
+                } else if let Some(provider_name) = query.provider_name.as_deref() {
+                    let mut builder = QueryBuilder::<Postgres>::new(
+                        r#"
+SELECT
+  model AS group_key,
+  NULL::varchar AS legacy_name,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS request_count,
+  COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
+  CAST(COALESCE(SUM(total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd
+FROM stats_daily_model_provider
+WHERE date >=
+"#,
+                    );
+                    builder
+                        .push_bind(start_day_utc)
+                        .push(" AND date < ")
+                        .push_bind(end_day_utc)
+                        .push(" AND provider_name = ")
+                        .push_bind(provider_name.to_string());
+                    if let Some(model) = query.model.as_deref() {
+                        builder.push(" AND model = ").push_bind(model.to_string());
+                    }
+                    builder.push(" GROUP BY model ORDER BY model ASC");
+                    builder
+                } else {
+                    let mut builder = QueryBuilder::<Postgres>::new(
+                        r#"
+SELECT
+  model AS group_key,
+  NULL::varchar AS legacy_name,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS request_count,
+  COALESCE(
+    SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens),
+    0
+  )::BIGINT AS total_tokens,
+  CAST(COALESCE(SUM(total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd
+FROM stats_daily_model
+WHERE date >=
+"#,
+                    );
+                    builder
+                        .push_bind(start_day_utc)
+                        .push(" AND date < ")
+                        .push_bind(end_day_utc);
+                    if let Some(model) = query.model.as_deref() {
+                        builder.push(" AND model = ").push_bind(model.to_string());
+                    }
+                    builder.push(" GROUP BY model ORDER BY model ASC");
+                    builder
+                };
+                fetch_usage_leaderboard_query(builder.build(), &self.pool).await?
+            }
+            UsageLeaderboardGroupBy::User => {
+                let mut builder = if query.provider_name.is_some() && query.model.is_some() {
+                    let mut builder = QueryBuilder::<Postgres>::new(
+                        r#"
+SELECT
+  user_id AS group_key,
+  MAX(NULLIF(BTRIM(username), '')) AS legacy_name,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS request_count,
+  COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
+  CAST(COALESCE(SUM(total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd
+FROM stats_user_daily_model_provider
+WHERE date >=
+"#,
+                    );
+                    builder
+                        .push_bind(start_day_utc)
+                        .push(" AND date < ")
+                        .push_bind(end_day_utc)
+                        .push(" AND provider_name = ")
+                        .push_bind(query.provider_name.as_deref().unwrap().to_string())
+                        .push(" AND model = ")
+                        .push_bind(query.model.as_deref().unwrap().to_string());
+                    if let Some(user_id) = query.user_id.as_deref() {
+                        builder
+                            .push(" AND user_id = ")
+                            .push_bind(user_id.to_string());
+                    }
+                    builder.push(" GROUP BY user_id ORDER BY user_id ASC");
+                    builder
+                } else if let Some(provider_name) = query.provider_name.as_deref() {
+                    let mut builder = QueryBuilder::<Postgres>::new(
+                        r#"
+SELECT
+  user_id AS group_key,
+  MAX(NULLIF(BTRIM(username), '')) AS legacy_name,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS request_count,
+  COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
+  CAST(COALESCE(SUM(total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd
+FROM stats_user_daily_provider
+WHERE date >=
+"#,
+                    );
+                    builder
+                        .push_bind(start_day_utc)
+                        .push(" AND date < ")
+                        .push_bind(end_day_utc)
+                        .push(" AND provider_name = ")
+                        .push_bind(provider_name.to_string());
+                    if let Some(user_id) = query.user_id.as_deref() {
+                        builder
+                            .push(" AND user_id = ")
+                            .push_bind(user_id.to_string());
+                    }
+                    builder.push(" GROUP BY user_id ORDER BY user_id ASC");
+                    builder
+                } else if let Some(model) = query.model.as_deref() {
+                    let mut builder = QueryBuilder::<Postgres>::new(
+                        r#"
+SELECT
+  user_id AS group_key,
+  MAX(NULLIF(BTRIM(username), '')) AS legacy_name,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS request_count,
+  COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
+  CAST(COALESCE(SUM(total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd
+FROM stats_user_daily_model
+WHERE date >=
+"#,
+                    );
+                    builder
+                        .push_bind(start_day_utc)
+                        .push(" AND date < ")
+                        .push_bind(end_day_utc)
+                        .push(" AND model = ")
+                        .push_bind(model.to_string());
+                    if let Some(user_id) = query.user_id.as_deref() {
+                        builder
+                            .push(" AND user_id = ")
+                            .push_bind(user_id.to_string());
+                    }
+                    builder.push(" GROUP BY user_id ORDER BY user_id ASC");
+                    builder
+                } else {
+                    let mut builder = QueryBuilder::<Postgres>::new(
+                        r#"
+SELECT
+  user_id AS group_key,
+  MAX(NULLIF(BTRIM(username), '')) AS legacy_name,
+  COALESCE(SUM(total_requests), 0)::BIGINT AS request_count,
+  COALESCE(
+    SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens),
+    0
+  )::BIGINT AS total_tokens,
+  CAST(COALESCE(SUM(total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd
+FROM stats_user_daily
+WHERE date >=
+"#,
+                    );
+                    builder
+                        .push_bind(start_day_utc)
+                        .push(" AND date < ")
+                        .push_bind(end_day_utc)
+                        .push(" AND user_id IS NOT NULL");
+                    if let Some(user_id) = query.user_id.as_deref() {
+                        builder
+                            .push(" AND user_id = ")
+                            .push_bind(user_id.to_string());
+                    }
+                    builder.push(" GROUP BY user_id ORDER BY user_id ASC");
+                    builder
+                };
+                fetch_usage_leaderboard_query(builder.build(), &self.pool).await?
+            }
+            UsageLeaderboardGroupBy::ApiKey => {
+                if query.provider_name.is_some() || query.model.is_some() {
+                    return Ok(None);
+                }
+                let mut builder = QueryBuilder::<Postgres>::new(
+                    r#"
+SELECT
+  stats_daily_api_key.api_key_id AS group_key,
+  COALESCE(
+    MAX(NULLIF(BTRIM(stats_daily_api_key.api_key_name), '')),
+    MAX(NULLIF(BTRIM(api_keys.name), ''))
+  ) AS legacy_name,
+  COALESCE(SUM(stats_daily_api_key.total_requests), 0)::BIGINT AS request_count,
+  COALESCE(
+    SUM(
+      stats_daily_api_key.input_tokens
+      + stats_daily_api_key.output_tokens
+      + stats_daily_api_key.cache_creation_tokens
+      + stats_daily_api_key.cache_read_tokens
+    ),
+    0
+  )::BIGINT AS total_tokens,
+  CAST(COALESCE(SUM(stats_daily_api_key.total_cost), 0) AS DOUBLE PRECISION) AS total_cost_usd
+FROM stats_daily_api_key
+LEFT JOIN api_keys ON api_keys.id = stats_daily_api_key.api_key_id
+WHERE stats_daily_api_key.date >=
+"#,
+                );
+                builder
+                    .push_bind(start_day_utc)
+                    .push(" AND stats_daily_api_key.date < ")
+                    .push_bind(end_day_utc)
+                    .push(" AND stats_daily_api_key.api_key_id IS NOT NULL");
+                if let Some(user_id) = query.user_id.as_deref() {
+                    builder
+                        .push(" AND api_keys.user_id = ")
+                        .push_bind(user_id.to_string());
+                }
+                builder.push(
+                    " GROUP BY stats_daily_api_key.api_key_id ORDER BY stats_daily_api_key.api_key_id ASC",
+                );
+                fetch_usage_leaderboard_query(builder.build(), &self.pool).await?
+            }
+        };
+        Ok(Some(items))
+    }
+
+    pub async fn summarize_usage_leaderboard(
+        &self,
+        query: &UsageLeaderboardQuery,
+    ) -> Result<Vec<StoredUsageLeaderboardSummary>, DataLayerError> {
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self.summarize_usage_leaderboard_raw(query).await;
+        };
+
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = dashboard_unix_secs_to_utc(query.created_until_unix_secs);
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let mut grouped = BTreeMap::new();
+
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            absorb_usage_leaderboard_rows(
+                &mut grouped,
+                self.summarize_usage_leaderboard_raw(&UsageLeaderboardQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    ..query.clone()
+                })
+                .await?,
+            );
+        }
+
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            if let Some(rows) = self
+                .summarize_usage_leaderboard_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                    query,
+                )
+                .await?
+            {
+                absorb_usage_leaderboard_rows(&mut grouped, rows);
+            } else {
+                absorb_usage_leaderboard_rows(
+                    &mut grouped,
+                    self.summarize_usage_leaderboard_raw(&UsageLeaderboardQuery {
+                        created_from_unix_secs: dashboard_utc_to_unix_secs(aggregate_start),
+                        created_until_unix_secs: dashboard_utc_to_unix_secs(aggregate_end),
+                        ..query.clone()
+                    })
+                    .await?,
+                );
+            }
+        }
+
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            absorb_usage_leaderboard_rows(
+                &mut grouped,
+                self.summarize_usage_leaderboard_raw(&UsageLeaderboardQuery {
+                    created_from_unix_secs: dashboard_utc_to_unix_secs(raw_start),
+                    created_until_unix_secs: dashboard_utc_to_unix_secs(raw_end),
+                    ..query.clone()
+                })
+                .await?,
+            );
+        }
+
+        Ok(finalize_usage_leaderboard_rows(grouped))
     }
 
     pub async fn aggregate_usage_audits(
@@ -3913,10 +6821,16 @@ LIMIT $3
         Ok(items)
     }
 
-    pub async fn summarize_usage_daily_heatmap(
+    async fn summarize_usage_daily_heatmap_raw_from_range(
         &self,
-        query: &UsageDailyHeatmapQuery,
+        start_utc: DateTime<Utc>,
+        end_utc: DateTime<Utc>,
+        user_id: Option<&str>,
     ) -> Result<Vec<StoredUsageDailySummary>, DataLayerError> {
+        if start_utc >= end_utc {
+            return Ok(Vec::new());
+        }
+
         let mut sql = String::from(
             r#"SELECT
   DATE("usage".created_at) AS day,
@@ -3932,26 +6846,20 @@ LIMIT $3
   COALESCE(SUM(CAST("usage".total_cost_usd AS DOUBLE PRECISION)), 0) AS total_cost_usd,
   COALESCE(SUM(CAST("usage".actual_total_cost_usd AS DOUBLE PRECISION)), 0) AS actual_total_cost_usd
 FROM "usage"
-WHERE "usage".created_at >= TO_TIMESTAMP($1::double precision)"#,
+WHERE "usage".created_at >= $1
+  AND "usage".created_at < $2
+  AND "usage".status NOT IN ('pending', 'streaming')
+  AND "usage".provider_name NOT IN ('unknown', 'pending')"#,
         );
-        if query.admin_mode {
-            sql.push_str(" AND \"usage\".status NOT IN ('pending', 'streaming')");
-        } else {
-            sql.push_str(
-                " AND \"usage\".billing_status = 'settled' AND CAST(\"usage\".total_cost_usd AS DOUBLE PRECISION) > 0",
-            );
-        }
-        let mut bind_index = 2;
-        if query.user_id.is_some() {
+        let bind_index = 3;
+        if user_id.is_some() {
             sql.push_str(&format!(" AND \"usage\".user_id = ${bind_index}"));
-            bind_index += 1;
         }
-        let _ = bind_index;
         sql.push_str(" GROUP BY day ORDER BY day ASC");
 
-        let mut q = sqlx::query(&sql).bind(query.created_from_unix_secs as f64);
-        if let Some(user_id) = &query.user_id {
-            q = q.bind(user_id.clone());
+        let mut q = sqlx::query(&sql).bind(start_utc).bind(end_utc);
+        if let Some(user_id) = user_id {
+            q = q.bind(user_id.to_string());
         }
 
         let mut rows = q.fetch(&self.pool);
@@ -3965,12 +6873,148 @@ WHERE "usage".created_at >= TO_TIMESTAMP($1::double precision)"#,
                 row.try_get("actual_total_cost_usd").map_postgres_err()?;
             items.push(StoredUsageDailySummary {
                 date: day.to_string(),
-                requests: requests as u64,
-                total_tokens: total_tokens as u64,
+                requests: requests.max(0) as u64,
+                total_tokens: total_tokens.max(0) as u64,
                 total_cost_usd,
                 actual_total_cost_usd,
             });
         }
+        Ok(items)
+    }
+
+    async fn summarize_usage_daily_heatmap_from_daily_aggregates(
+        &self,
+        start_day_utc: DateTime<Utc>,
+        end_day_utc: DateTime<Utc>,
+        user_id: Option<&str>,
+    ) -> Result<Vec<StoredUsageDailySummary>, DataLayerError> {
+        if start_day_utc >= end_day_utc {
+            return Ok(Vec::new());
+        }
+
+        let mut rows = if let Some(user_id) = user_id {
+            sqlx::query(
+                r#"
+SELECT
+  date,
+  total_requests,
+  input_tokens,
+  output_tokens,
+  cache_creation_tokens,
+  cache_read_tokens,
+  total_cost,
+  COALESCE(actual_total_cost, 0) AS actual_total_cost
+FROM stats_user_daily
+WHERE user_id = $1
+  AND date >= $2
+  AND date < $3
+ORDER BY date ASC
+"#,
+            )
+            .bind(user_id)
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch(&self.pool)
+        } else {
+            sqlx::query(
+                r#"
+SELECT
+  date,
+  total_requests,
+  input_tokens,
+  output_tokens,
+  cache_creation_tokens,
+  cache_read_tokens,
+  total_cost,
+  actual_total_cost
+FROM stats_daily
+WHERE date >= $1
+  AND date < $2
+ORDER BY date ASC
+"#,
+            )
+            .bind(start_day_utc)
+            .bind(end_day_utc)
+            .fetch(&self.pool)
+        };
+
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            let date = row.try_get::<DateTime<Utc>, _>("date").map_postgres_err()?;
+            let requests = row.try_get::<i64, _>("total_requests").map_postgres_err()?;
+            let input_tokens = row.try_get::<i64, _>("input_tokens").map_postgres_err()?;
+            let output_tokens = row.try_get::<i64, _>("output_tokens").map_postgres_err()?;
+            let cache_creation_tokens = row
+                .try_get::<i64, _>("cache_creation_tokens")
+                .map_postgres_err()?;
+            let cache_read_tokens = row
+                .try_get::<i64, _>("cache_read_tokens")
+                .map_postgres_err()?;
+            let total_cost_usd = row.try_get::<f64, _>("total_cost").map_postgres_err()?;
+            let actual_total_cost_usd = row
+                .try_get::<f64, _>("actual_total_cost")
+                .map_postgres_err()?;
+            items.push(StoredUsageDailySummary {
+                date: date.date_naive().to_string(),
+                requests: requests.max(0) as u64,
+                total_tokens: input_tokens
+                    .saturating_add(output_tokens)
+                    .saturating_add(cache_creation_tokens)
+                    .saturating_add(cache_read_tokens)
+                    .max(0) as u64,
+                total_cost_usd,
+                actual_total_cost_usd,
+            });
+        }
+
+        Ok(items)
+    }
+
+    pub async fn summarize_usage_daily_heatmap(
+        &self,
+        query: &UsageDailyHeatmapQuery,
+    ) -> Result<Vec<StoredUsageDailySummary>, DataLayerError> {
+        let start_utc = dashboard_unix_secs_to_utc(query.created_from_unix_secs);
+        let end_utc = Utc::now() + chrono::Duration::seconds(1);
+        let user_id = query.user_id.as_deref();
+
+        let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? else {
+            return self
+                .summarize_usage_daily_heatmap_raw_from_range(start_utc, end_utc, user_id)
+                .await;
+        };
+
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+        let Some(_) = split.aggregate else {
+            return self
+                .summarize_usage_daily_heatmap_raw_from_range(start_utc, end_utc, user_id)
+                .await;
+        };
+
+        let mut items = Vec::new();
+        if let Some((raw_start, raw_end)) = split.raw_leading {
+            items.extend(
+                self.summarize_usage_daily_heatmap_raw_from_range(raw_start, raw_end, user_id)
+                    .await?,
+            );
+        }
+        if let Some((aggregate_start, aggregate_end)) = split.aggregate {
+            items.extend(
+                self.summarize_usage_daily_heatmap_from_daily_aggregates(
+                    aggregate_start,
+                    aggregate_end,
+                    user_id,
+                )
+                .await?,
+            );
+        }
+        if let Some((raw_start, raw_end)) = split.raw_trailing {
+            items.extend(
+                self.summarize_usage_daily_heatmap_raw_from_range(raw_start, raw_end, user_id)
+                    .await?,
+            );
+        }
+        items.sort_by(|left, right| left.date.cmp(&right.date));
         Ok(items)
     }
 
@@ -4007,11 +7051,80 @@ WHERE "usage".created_at >= TO_TIMESTAMP($1::double precision)"#,
             return Ok(std::collections::BTreeMap::new());
         }
 
+        let mut totals = std::collections::BTreeMap::new();
+        if let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? {
+            let mut aggregate_rows = sqlx::query(
+                r#"
+SELECT
+  api_key_id,
+  COALESCE(
+    SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens),
+    0
+  )::BIGINT AS total_tokens
+FROM stats_daily_api_key
+WHERE api_key_id = ANY($1::TEXT[])
+  AND date < $2
+GROUP BY api_key_id
+ORDER BY api_key_id ASC
+"#,
+            )
+            .bind(api_key_ids)
+            .bind(cutoff_utc)
+            .fetch(&self.pool);
+
+            while let Some(row) = aggregate_rows.try_next().await.map_postgres_err()? {
+                let api_key_id: String = row.try_get("api_key_id").map_postgres_err()?;
+                let total_tokens = row
+                    .try_get::<i64, _>("total_tokens")
+                    .map_postgres_err()?
+                    .max(0) as u64;
+                totals.insert(api_key_id, total_tokens);
+            }
+
+            let mut builder = QueryBuilder::<Postgres>::new(
+                r#"
+SELECT
+  api_key_id,
+  COALESCE(
+    SUM(
+      COALESCE(
+        total_tokens,
+        COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
+      )
+    ),
+    0
+  ) AS total_tokens
+FROM "usage"
+WHERE api_key_id = ANY(
+"#,
+            );
+            builder
+                .push_bind(api_key_ids)
+                .push("::TEXT[]) AND created_at >= ")
+                .push_bind(cutoff_utc)
+                .push(
+                    r#"
+GROUP BY api_key_id
+ORDER BY api_key_id ASC
+"#,
+                );
+
+            let mut raw_rows = builder.build().fetch(&self.pool);
+            while let Some(row) = raw_rows.try_next().await.map_postgres_err()? {
+                let api_key_id: String = row.try_get("api_key_id").map_postgres_err()?;
+                let total_tokens = row
+                    .try_get::<i64, _>("total_tokens")
+                    .map_postgres_err()?
+                    .max(0) as u64;
+                let entry = totals.entry(api_key_id).or_default();
+                *entry = entry.saturating_add(total_tokens);
+            }
+            return Ok(totals);
+        }
+
         let mut rows = sqlx::query(SUMMARIZE_TOTAL_TOKENS_BY_API_KEY_IDS_SQL)
             .bind(api_key_ids)
             .fetch(&self.pool);
-
-        let mut totals = std::collections::BTreeMap::new();
         while let Some(row) = rows.try_next().await.map_postgres_err()? {
             let api_key_id: String = row.try_get("api_key_id").map_postgres_err()?;
             let total_tokens = row
@@ -4031,10 +7144,101 @@ WHERE "usage".created_at >= TO_TIMESTAMP($1::double precision)"#,
             return Ok(Vec::new());
         }
 
-        let mut rows = sqlx::query(SUMMARIZE_USAGE_TOTALS_BY_USER_IDS_SQL)
+        let mut totals = std::collections::BTreeMap::<String, StoredUsageUserTotals>::new();
+        if let Some(cutoff_utc) = self.read_stats_daily_cutoff_date().await? {
+            let mut aggregate_rows = sqlx::query(
+                r#"
+SELECT
+  user_id,
+  COALESCE(all_time_requests, 0)::BIGINT AS request_count,
+  COALESCE(
+    all_time_input_tokens
+      + all_time_output_tokens
+      + all_time_cache_creation_tokens
+      + all_time_cache_read_tokens,
+    0
+  )::BIGINT AS total_tokens
+FROM stats_user_summary
+WHERE user_id = ANY($1::TEXT[])
+ORDER BY user_id ASC
+"#,
+            )
             .bind(user_ids)
             .fetch(&self.pool);
 
+            while let Some(row) = aggregate_rows.try_next().await.map_postgres_err()? {
+                let user_id = row.try_get::<String, _>("user_id").map_postgres_err()?;
+                let request_count = row
+                    .try_get::<i64, _>("request_count")
+                    .map_postgres_err()?
+                    .max(0) as u64;
+                let total_tokens = row
+                    .try_get::<i64, _>("total_tokens")
+                    .map_postgres_err()?
+                    .max(0) as u64;
+                totals.insert(
+                    user_id.clone(),
+                    StoredUsageUserTotals {
+                        user_id,
+                        request_count,
+                        total_tokens,
+                    },
+                );
+            }
+
+            let mut builder = QueryBuilder::<Postgres>::new(
+                r#"
+SELECT
+  "usage".user_id,
+  COUNT(*)::BIGINT AS request_count,
+  COALESCE(SUM(GREATEST(COALESCE("usage".total_tokens, 0), 0)), 0)::BIGINT AS total_tokens
+FROM "usage"
+WHERE "usage".user_id = ANY(
+"#,
+            );
+            builder
+                .push_bind(user_ids)
+                .push("::TEXT[])")
+                .push(" AND \"usage\".created_at >= ")
+                .push_bind(cutoff_utc)
+                .push(
+                    r#"
+  AND "usage".status NOT IN ('pending', 'streaming')
+  AND "usage".provider_name NOT IN ('unknown', 'pending')
+GROUP BY "usage".user_id
+ORDER BY "usage".user_id ASC
+"#,
+                );
+
+            let mut raw_rows = builder.build().fetch(&self.pool);
+            while let Some(row) = raw_rows.try_next().await.map_postgres_err()? {
+                let user_id = row.try_get::<String, _>("user_id").map_postgres_err()?;
+                let request_count = row
+                    .try_get::<i64, _>("request_count")
+                    .map_postgres_err()?
+                    .max(0) as u64;
+                let total_tokens = row
+                    .try_get::<i64, _>("total_tokens")
+                    .map_postgres_err()?
+                    .max(0) as u64;
+                let entry =
+                    totals
+                        .entry(user_id.clone())
+                        .or_insert_with(|| StoredUsageUserTotals {
+                            user_id,
+                            request_count: 0,
+                            total_tokens: 0,
+                        });
+                entry.request_count = entry.request_count.saturating_add(request_count);
+                entry.total_tokens = entry.total_tokens.saturating_add(total_tokens);
+            }
+
+            return Ok(totals.into_values().collect());
+        }
+
+        let mut rows = sqlx::query(SUMMARIZE_USAGE_TOTALS_BY_USER_IDS_SQL)
+            .bind(user_ids)
+            .fetch(&self.pool);
         let mut items = Vec::new();
         while let Some(row) = rows.try_next().await.map_postgres_err()? {
             items.push(StoredUsageUserTotals {
@@ -6016,6 +9220,7 @@ fn usage_body_sql_columns(field: UsageBodyField) -> (&'static str, &'static str)
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
     use serde_json::json;
 
     use super::{
@@ -6023,9 +9228,10 @@ mod tests {
         attach_usage_routing_snapshot_metadata, attach_usage_settlement_pricing_snapshot_metadata,
         inflate_usage_json_value, prepare_request_metadata_for_body_storage,
         prepare_usage_body_storage, resolved_read_usage_body_ref, resolved_write_usage_body_ref,
+        split_dashboard_daily_aggregate_range, split_dashboard_hourly_aggregate_range,
         usage_body_ref, usage_http_audit_body_refs, usage_http_audit_capture_mode,
         usage_routing_snapshot_from_usage, usage_settlement_pricing_snapshot_from_usage,
-        SqlxUsageReadRepository, UsageHttpAuditRefs, UsageRoutingSnapshot,
+        AggregateRangeSplit, SqlxUsageReadRepository, UsageHttpAuditRefs, UsageRoutingSnapshot,
         UsageSettlementPricingSnapshot, MAX_INLINE_USAGE_BODY_BYTES,
     };
     use crate::postgres::{PostgresPoolConfig, PostgresPoolFactory};
@@ -6144,6 +9350,91 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_daily_aggregate_split_keeps_partial_days_raw() {
+        let start_utc = Utc
+            .with_ymd_and_hms(2026, 4, 20, 13, 15, 0)
+            .single()
+            .unwrap();
+        let end_utc = Utc
+            .with_ymd_and_hms(2026, 4, 23, 4, 45, 0)
+            .single()
+            .unwrap();
+        let cutoff_utc = Utc.with_ymd_and_hms(2026, 4, 23, 0, 0, 0).single().unwrap();
+
+        let split = split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc);
+
+        assert_eq!(
+            split,
+            AggregateRangeSplit {
+                raw_leading: Some((
+                    Utc.with_ymd_and_hms(2026, 4, 20, 13, 15, 0)
+                        .single()
+                        .unwrap(),
+                    Utc.with_ymd_and_hms(2026, 4, 21, 0, 0, 0).single().unwrap(),
+                )),
+                aggregate: Some((
+                    Utc.with_ymd_and_hms(2026, 4, 21, 0, 0, 0).single().unwrap(),
+                    Utc.with_ymd_and_hms(2026, 4, 23, 0, 0, 0).single().unwrap(),
+                )),
+                raw_trailing: Some((
+                    Utc.with_ymd_and_hms(2026, 4, 23, 0, 0, 0).single().unwrap(),
+                    Utc.with_ymd_and_hms(2026, 4, 23, 4, 45, 0)
+                        .single()
+                        .unwrap(),
+                )),
+            }
+        );
+    }
+
+    #[test]
+    fn dashboard_hourly_aggregate_split_keeps_partial_hours_raw() {
+        let start_utc = Utc
+            .with_ymd_and_hms(2026, 4, 20, 10, 15, 0)
+            .single()
+            .unwrap();
+        let end_utc = Utc
+            .with_ymd_and_hms(2026, 4, 20, 15, 30, 0)
+            .single()
+            .unwrap();
+        let cutoff_utc = Utc
+            .with_ymd_and_hms(2026, 4, 20, 15, 0, 0)
+            .single()
+            .unwrap();
+
+        let split = split_dashboard_hourly_aggregate_range(start_utc, end_utc, cutoff_utc);
+
+        assert_eq!(
+            split,
+            AggregateRangeSplit {
+                raw_leading: Some((
+                    Utc.with_ymd_and_hms(2026, 4, 20, 10, 15, 0)
+                        .single()
+                        .unwrap(),
+                    Utc.with_ymd_and_hms(2026, 4, 20, 11, 0, 0)
+                        .single()
+                        .unwrap(),
+                )),
+                aggregate: Some((
+                    Utc.with_ymd_and_hms(2026, 4, 20, 11, 0, 0)
+                        .single()
+                        .unwrap(),
+                    Utc.with_ymd_and_hms(2026, 4, 20, 15, 0, 0)
+                        .single()
+                        .unwrap(),
+                )),
+                raw_trailing: Some((
+                    Utc.with_ymd_and_hms(2026, 4, 20, 15, 0, 0)
+                        .single()
+                        .unwrap(),
+                    Utc.with_ymd_and_hms(2026, 4, 20, 15, 30, 0)
+                        .single()
+                        .unwrap(),
+                )),
+            }
+        );
+    }
+
+    #[test]
     fn usage_sql_does_not_require_updated_at_column() {
         assert!(!super::FIND_BY_REQUEST_ID_SQL.contains("COALESCE(updated_at, created_at)"));
         assert!(!super::LIST_USAGE_AUDITS_PREFIX.contains("COALESCE(updated_at, created_at)"));
@@ -6159,9 +9450,11 @@ mod tests {
 
     #[test]
     fn usage_sql_summarizes_usage_by_provider_api_key_ids_in_database() {
+        assert!(
+            super::SUMMARIZE_USAGE_BY_PROVIDER_API_KEY_IDS_SQL.contains("FROM provider_api_keys")
+        );
         assert!(super::SUMMARIZE_USAGE_BY_PROVIDER_API_KEY_IDS_SQL
-            .contains("GROUP BY provider_api_key_id"));
-        assert!(super::SUMMARIZE_USAGE_BY_PROVIDER_API_KEY_IDS_SQL.contains("MAX(created_at)"));
+            .contains("COALESCE(request_count, 0) > 0"));
         assert!(super::SUMMARIZE_USAGE_BY_PROVIDER_API_KEY_IDS_SQL.contains("ANY($1::TEXT[])"));
     }
 
@@ -6198,6 +9491,132 @@ mod tests {
     #[test]
     fn usage_sql_cache_affinity_interval_query_casts_interval_minutes_to_double_precision() {
         assert!(include_str!("sql.rs").contains("AS DOUBLE PRECISION) AS interval_minutes"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_usage_audits_supports_daily_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("summarize_usage_audits_from_daily_aggregates"));
+        assert!(source.contains("FROM stats_daily"));
+        assert!(source.contains("FROM stats_user_daily"));
+        assert!(source.contains("cache_creation_ephemeral_5m_tokens"));
+        assert!(source
+            .contains("split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc)"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_usage_cache_hit_summary_supports_global_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("summarize_usage_cache_hit_summary_from_daily_aggregates"));
+        assert!(source.contains("summarize_usage_cache_hit_summary_from_hourly_aggregates"));
+        assert!(source.contains("FROM stats_daily"));
+        assert!(source.contains("FROM stats_hourly"));
+        assert!(source
+            .contains("split_dashboard_hourly_aggregate_range(start_utc, end_utc, cutoff_utc)"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_usage_cache_affinity_hit_summary_supports_global_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("summarize_usage_cache_affinity_hit_summary_from_daily_aggregates"));
+        assert!(
+            source.contains("summarize_usage_cache_affinity_hit_summary_from_hourly_aggregates")
+        );
+        assert!(source.contains("FROM stats_daily"));
+        assert!(source.contains("FROM stats_hourly"));
+        assert!(source.contains("completed_total_requests"));
+        assert!(source
+            .contains("split_dashboard_hourly_aggregate_range(start_utc, end_utc, cutoff_utc)"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_usage_settled_cost_supports_user_and_global_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("summarize_usage_settled_cost_from_daily_aggregates"));
+        assert!(source.contains("summarize_usage_settled_cost_from_hourly_aggregates"));
+        assert!(source.contains("FROM stats_daily"));
+        assert!(source.contains("FROM stats_user_daily"));
+        assert!(source.contains("FROM stats_hourly"));
+        assert!(source.contains("FROM stats_hourly_user"));
+        assert!(source.contains("settled_total_cost"));
+        assert!(source
+            .contains("split_dashboard_hourly_aggregate_range(start_utc, end_utc, cutoff_utc)"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_usage_error_distribution_supports_daily_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("summarize_usage_error_distribution_from_daily_aggregates"));
+        assert!(source.contains("FROM stats_daily_error"));
+        assert!(source
+            .contains("split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc)"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_usage_performance_percentiles_supports_daily_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("summarize_usage_performance_percentiles_from_daily_aggregates"));
+        assert!(source.contains("FROM stats_daily"));
+        assert!(source.contains("p50_response_time_ms"));
+        assert!(source
+            .contains("split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc)"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_usage_cost_savings_supports_daily_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("summarize_usage_cost_savings_from_daily_aggregates"));
+        assert!(source.contains("FROM stats_daily_cost_savings"));
+        assert!(source.contains("FROM stats_daily_cost_savings_model_provider"));
+        assert!(source.contains("FROM stats_user_daily_cost_savings"));
+        assert!(source.contains("FROM stats_user_daily_cost_savings_model_provider"));
+        assert!(source
+            .contains("split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc)"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_usage_time_series_supports_global_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("summarize_usage_time_series_from_daily_aggregates"));
+        assert!(source.contains("summarize_usage_time_series_from_hourly_aggregates"));
+        assert!(source.contains("FROM stats_hourly"));
+        assert!(source
+            .contains("split_dashboard_hourly_aggregate_range(start_utc, end_utc, cutoff_utc)"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_usage_daily_heatmap_supports_daily_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("summarize_usage_daily_heatmap_from_daily_aggregates"));
+        assert!(source.contains("FROM stats_daily"));
+        assert!(source.contains("FROM stats_user_daily"));
+        assert!(source
+            .contains("split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc)"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_usage_leaderboard_supports_daily_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("summarize_usage_leaderboard_from_daily_aggregates"));
+        assert!(source.contains("FROM stats_daily_model"));
+        assert!(source.contains("FROM stats_user_daily"));
+        assert!(source.contains("FROM stats_daily_api_key"));
+        assert!(source
+            .contains("split_dashboard_daily_aggregate_range(start_utc, end_utc, cutoff_utc)"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_total_tokens_by_api_key_ids_supports_daily_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("FROM stats_daily_api_key"));
+        assert!(source.contains("read_stats_daily_cutoff_date().await?"));
+    }
+
+    #[test]
+    fn usage_sql_summarize_usage_totals_by_user_ids_supports_user_summary_aggregates() {
+        let source = include_str!("sql.rs");
+        assert!(source.contains("FROM stats_user_summary"));
+        assert!(source.contains("all_time_input_tokens"));
     }
 
     #[test]

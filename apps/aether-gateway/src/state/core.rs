@@ -255,6 +255,14 @@ impl AppState {
         Ok(true)
     }
 
+    pub async fn run_postgres_backfills(&self) -> Result<bool, sqlx::migrate::MigrateError> {
+        let Some(pool) = self.postgres_pool() else {
+            return Ok(false);
+        };
+        aether_data::backfill::run_backfills(&pool).await?;
+        Ok(true)
+    }
+
     pub async fn pending_postgres_migrations(
         &self,
     ) -> Result<Option<Vec<aether_data::migrate::PendingMigrationInfo>>, sqlx::migrate::MigrateError>
@@ -275,6 +283,16 @@ impl AppState {
         Ok(Some(
             aether_data::migrate::prepare_database_for_startup(&pool).await?,
         ))
+    }
+
+    pub async fn pending_postgres_backfills(
+        &self,
+    ) -> Result<Option<Vec<aether_data::backfill::PendingBackfillInfo>>, sqlx::migrate::MigrateError>
+    {
+        let Some(pool) = self.postgres_pool() else {
+            return Ok(None);
+        };
+        Ok(Some(aether_data::backfill::pending_backfills(&pool).await?))
     }
 
     pub fn with_video_task_poller_config(mut self, interval: Duration, batch_size: usize) -> Self {

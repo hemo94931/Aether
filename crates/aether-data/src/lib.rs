@@ -1,4 +1,5 @@
 pub mod backends;
+pub mod backfill;
 mod config;
 mod error;
 pub mod migrate;

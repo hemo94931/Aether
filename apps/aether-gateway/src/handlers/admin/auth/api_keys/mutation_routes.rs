@@ -166,6 +166,7 @@ pub(super) async fn build_admin_create_api_key_response(
                 expires_at_unix_secs,
                 auto_delete_on_expiry,
                 total_requests: 0,
+                total_tokens: 0,
                 total_cost_usd: 0.0,
             },
         )

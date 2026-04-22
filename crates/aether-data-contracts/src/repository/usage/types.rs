@@ -1015,8 +1015,9 @@ pub struct StoredUsageLeaderboardSummary {
 pub struct UsageDailyHeatmapQuery {
     pub created_from_unix_secs: u64,
     pub user_id: Option<String>,
-    /// When true, exclude rows with status in ('pending', 'streaming') (admin heatmap).
-    /// When false, only include rows with billing_status = 'settled' and total_cost_usd > 0 (user heatmap).
+    /// Legacy flag used by admin and user heatmap callers.
+    /// Both modes exclude non-finalized requests and placeholder providers; user callers also
+    /// scope by `user_id` when provided.
     pub admin_mode: bool,
 }
 

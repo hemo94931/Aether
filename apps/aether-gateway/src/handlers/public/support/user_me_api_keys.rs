@@ -554,6 +554,7 @@ pub(super) async fn handle_users_me_api_key_create(
         expires_at_unix_secs: None,
         auto_delete_on_expiry: false,
         total_requests: 0,
+        total_tokens: 0,
         total_cost_usd: 0.0,
     };
     let Some(created) = (match state.create_user_api_key(record).await {

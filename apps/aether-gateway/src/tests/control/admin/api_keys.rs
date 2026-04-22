@@ -104,6 +104,7 @@ fn sample_standalone_export_record(
         Some(4_102_444_800),
         false,
         7,
+        0,
         1.25,
         true,
     )

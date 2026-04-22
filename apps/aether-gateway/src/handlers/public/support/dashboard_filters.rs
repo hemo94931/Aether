@@ -17,6 +17,18 @@ use chrono::Datelike;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::query::dashboard_stats::{
+    list_admin_dashboard_daily_model_aggregates, list_admin_dashboard_daily_provider_aggregates,
+    list_admin_dashboard_daily_totals_aggregates, list_admin_dashboard_hourly_model_aggregates,
+    list_admin_dashboard_hourly_provider_aggregates, list_admin_dashboard_hourly_totals_aggregates,
+    list_user_dashboard_daily_model_aggregates, list_user_dashboard_daily_totals_aggregates,
+    list_user_dashboard_hourly_model_aggregates, list_user_dashboard_hourly_totals_aggregates,
+    read_stats_hourly_cutoff, summarize_dashboard_usage_from_daily_aggregates,
+    DashboardDailyModelAggregateRow, DashboardDailyProviderAggregateRow,
+    DashboardDailyTotalsAggregateRow,
+};
+use crate::query::usage_heatmap::read_stats_daily_cutoff_date;
+
 #[derive(Debug, Clone, Copy)]
 struct DashboardDateRange {
     start_date: chrono::NaiveDate,
@@ -414,22 +426,100 @@ fn dashboard_range_bounds_unix(range: DashboardDateRange) -> Option<(u64, u64)> 
     Some((start_utc.max(0) as u64, end_utc.max(0) as u64))
 }
 
-async fn dashboard_summary_for_range(
-    state: &AppState,
+fn dashboard_range_bounds_utc(
     range: DashboardDateRange,
+) -> Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
+    let (created_from_unix_secs, created_until_unix_secs) = dashboard_range_bounds_unix(range)?;
+    let start_utc =
+        chrono::DateTime::<chrono::Utc>::from_timestamp(created_from_unix_secs as i64, 0)?;
+    let end_utc =
+        chrono::DateTime::<chrono::Utc>::from_timestamp(created_until_unix_secs as i64, 0)?;
+    Some((start_utc, end_utc))
+}
+
+fn dashboard_local_day_bounds_utc_exclusive(
+    range: DashboardDateRange,
+) -> Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
+    let offset = chrono::Duration::minutes(i64::from(range.tz_offset_minutes));
+    let start_local = range.start_date.and_hms_opt(0, 0, 0)?;
+    let end_exclusive_local = range
+        .end_date
+        .checked_add_signed(chrono::Duration::days(1))?
+        .and_hms_opt(0, 0, 0)?;
+    let start_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        start_local.checked_sub_signed(offset)?,
+        chrono::Utc,
+    );
+    let end_exclusive_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        end_exclusive_local.checked_sub_signed(offset)?,
+        chrono::Utc,
+    );
+    Some((start_utc, end_exclusive_utc))
+}
+
+fn dashboard_utc_midnight(value: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        value
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be valid"),
+        chrono::Utc,
+    )
+}
+
+fn dashboard_next_utc_midnight(
+    value: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
+    let midnight = dashboard_utc_midnight(value);
+    if value == midnight {
+        midnight
+    } else {
+        midnight + chrono::Duration::days(1)
+    }
+}
+
+fn dashboard_unix_secs(value: chrono::DateTime<chrono::Utc>) -> u64 {
+    value.timestamp().max(0) as u64
+}
+
+fn dashboard_absorb_dashboard_summary(
+    target: &mut StoredUsageDashboardSummary,
+    part: &StoredUsageDashboardSummary,
+) {
+    target.total_requests = target.total_requests.saturating_add(part.total_requests);
+    target.input_tokens = target.input_tokens.saturating_add(part.input_tokens);
+    target.effective_input_tokens = target
+        .effective_input_tokens
+        .saturating_add(part.effective_input_tokens);
+    target.output_tokens = target.output_tokens.saturating_add(part.output_tokens);
+    target.total_tokens = target.total_tokens.saturating_add(part.total_tokens);
+    target.cache_creation_tokens = target
+        .cache_creation_tokens
+        .saturating_add(part.cache_creation_tokens);
+    target.cache_read_tokens = target
+        .cache_read_tokens
+        .saturating_add(part.cache_read_tokens);
+    target.total_input_context = target
+        .total_input_context
+        .saturating_add(part.total_input_context);
+    target.cache_creation_cost_usd += part.cache_creation_cost_usd;
+    target.cache_read_cost_usd += part.cache_read_cost_usd;
+    target.total_cost_usd += part.total_cost_usd;
+    target.actual_total_cost_usd += part.actual_total_cost_usd;
+    target.error_requests = target.error_requests.saturating_add(part.error_requests);
+    target.response_time_sum_ms += part.response_time_sum_ms;
+    target.response_time_samples = target
+        .response_time_samples
+        .saturating_add(part.response_time_samples);
+}
+
+async fn dashboard_summary_for_unix_range_raw(
+    state: &AppState,
+    created_from_unix_secs: u64,
+    created_until_unix_secs: u64,
     user_id: Option<&str>,
     error_context: &str,
 ) -> Result<StoredUsageDashboardSummary, Response<Body>> {
-    let Some((created_from_unix_secs, created_until_unix_secs)) =
-        dashboard_range_bounds_unix(range)
-    else {
-        return Err(build_auth_error_response(
-            http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{error_context}: invalid time range"),
-            false,
-        ));
-    };
-
     match state
         .summarize_dashboard_usage(&UsageDashboardSummaryQuery {
             created_from_unix_secs,
@@ -445,6 +535,147 @@ async fn dashboard_summary_for_range(
             false,
         )),
     }
+}
+
+async fn dashboard_daily_breakdown_for_unix_range_raw(
+    state: &AppState,
+    created_from_unix_secs: u64,
+    created_until_unix_secs: u64,
+    tz_offset_minutes: i32,
+    user_id: Option<&str>,
+    error_context: &str,
+) -> Result<Vec<StoredUsageDashboardDailyBreakdownRow>, Response<Body>> {
+    match state
+        .list_dashboard_daily_breakdown(&UsageDashboardDailyBreakdownQuery {
+            created_from_unix_secs,
+            created_until_unix_secs,
+            tz_offset_minutes,
+            user_id: user_id.map(ToOwned::to_owned),
+        })
+        .await
+    {
+        Ok(value) => Ok(value),
+        Err(err) => Err(build_auth_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error_context}: {err:?}"),
+            false,
+        )),
+    }
+}
+
+async fn dashboard_summary_for_range_raw(
+    state: &AppState,
+    range: DashboardDateRange,
+    user_id: Option<&str>,
+    error_context: &str,
+) -> Result<StoredUsageDashboardSummary, Response<Body>> {
+    let Some((created_from_unix_secs, created_until_unix_secs)) =
+        dashboard_range_bounds_unix(range)
+    else {
+        return Err(build_auth_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error_context}: invalid time range"),
+            false,
+        ));
+    };
+
+    dashboard_summary_for_unix_range_raw(
+        state,
+        created_from_unix_secs,
+        created_until_unix_secs,
+        user_id,
+        error_context,
+    )
+    .await
+}
+
+async fn dashboard_summary_for_range(
+    state: &AppState,
+    range: DashboardDateRange,
+    user_id: Option<&str>,
+    error_context: &str,
+) -> Result<StoredUsageDashboardSummary, Response<Body>> {
+    let Some(pool) = state.postgres_pool() else {
+        return dashboard_summary_for_range_raw(state, range, user_id, error_context).await;
+    };
+    let cutoff_date = match read_stats_daily_cutoff_date(&pool).await {
+        Ok(value) => value,
+        Err(err) => {
+            return Err(build_auth_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{error_context}: {err:?}"),
+                false,
+            ))
+        }
+    };
+    let Some(cutoff_date) = cutoff_date else {
+        return dashboard_summary_for_range_raw(state, range, user_id, error_context).await;
+    };
+    let Some((start_utc, end_utc)) = dashboard_range_bounds_utc(range) else {
+        return Err(build_auth_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error_context}: invalid time range"),
+            false,
+        ));
+    };
+
+    let aggregate_start = dashboard_next_utc_midnight(start_utc);
+    let aggregate_end = dashboard_utc_midnight(end_utc).min(cutoff_date);
+    let mut summary = StoredUsageDashboardSummary::default();
+
+    if aggregate_start < aggregate_end {
+        let leading_end = aggregate_start.min(end_utc);
+        if start_utc < leading_end {
+            let raw = dashboard_summary_for_unix_range_raw(
+                state,
+                dashboard_unix_secs(start_utc),
+                dashboard_unix_secs(leading_end),
+                user_id,
+                error_context,
+            )
+            .await?;
+            dashboard_absorb_dashboard_summary(&mut summary, &raw);
+        }
+
+        let aggregate = summarize_dashboard_usage_from_daily_aggregates(
+            &pool,
+            aggregate_start,
+            aggregate_end,
+            user_id,
+        )
+        .await
+        .map_err(|err| {
+            build_auth_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{error_context}: {err:?}"),
+                false,
+            )
+        })?;
+        dashboard_absorb_dashboard_summary(&mut summary, &aggregate);
+        if aggregate_end < end_utc {
+            let raw = dashboard_summary_for_unix_range_raw(
+                state,
+                dashboard_unix_secs(aggregate_end),
+                dashboard_unix_secs(end_utc),
+                user_id,
+                error_context,
+            )
+            .await?;
+            dashboard_absorb_dashboard_summary(&mut summary, &raw);
+        }
+    } else if start_utc < end_utc {
+        let raw = dashboard_summary_for_unix_range_raw(
+            state,
+            dashboard_unix_secs(start_utc),
+            dashboard_unix_secs(end_utc),
+            user_id,
+            error_context,
+        )
+        .await?;
+        dashboard_absorb_dashboard_summary(&mut summary, &raw);
+    }
+
+    Ok(summary)
 }
 
 async fn dashboard_daily_breakdown_for_range(
@@ -479,6 +710,725 @@ async fn dashboard_daily_breakdown_for_range(
             false,
         )),
     }
+}
+
+fn dashboard_apply_daily_breakdown_rows(
+    usage: &[StoredUsageDashboardDailyBreakdownRow],
+    by_date: &mut std::collections::BTreeMap<chrono::NaiveDate, DashboardDailyAggregate>,
+    model_summary: &mut std::collections::BTreeMap<String, DashboardModelAggregate>,
+    provider_summary: &mut std::collections::BTreeMap<String, DashboardProviderAggregate>,
+) {
+    for row in usage {
+        let Ok(date) = chrono::NaiveDate::parse_from_str(&row.date, "%Y-%m-%d") else {
+            continue;
+        };
+        let aggregate = by_date.entry(date).or_default();
+        dashboard_daily_aggregate_record(aggregate, row);
+
+        let model = model_summary.entry(row.model.clone()).or_default();
+        model.requests = model.requests.saturating_add(row.requests);
+        model.tokens = model.tokens.saturating_add(row.total_tokens);
+        model.cost += row.total_cost_usd;
+        model.response_time_sum_ms += row.response_time_sum_ms;
+        model.response_time_samples = model
+            .response_time_samples
+            .saturating_add(row.response_time_samples);
+
+        let provider = provider_summary.entry(row.provider.clone()).or_default();
+        provider.requests = provider.requests.saturating_add(row.requests);
+        provider.tokens = provider.tokens.saturating_add(row.total_tokens);
+        provider.cost += row.total_cost_usd;
+    }
+}
+
+fn dashboard_record_daily_totals_aggregate(
+    by_date: &mut std::collections::BTreeMap<chrono::NaiveDate, DashboardDailyAggregate>,
+    row: &DashboardDailyTotalsAggregateRow,
+) {
+    let Ok(date) = chrono::NaiveDate::parse_from_str(&row.date, "%Y-%m-%d") else {
+        return;
+    };
+    let aggregate = by_date.entry(date).or_default();
+    aggregate.totals.requests = aggregate.totals.requests.saturating_add(row.requests);
+    aggregate.totals.total_tokens = aggregate
+        .totals
+        .total_tokens
+        .saturating_add(row.total_tokens);
+    aggregate.totals.total_cost_usd += row.total_cost_usd;
+    aggregate.totals.response_time_sum_ms += row.response_time_sum_ms;
+    aggregate.totals.response_time_samples = aggregate
+        .totals
+        .response_time_samples
+        .saturating_add(row.response_time_samples);
+}
+
+fn dashboard_record_daily_model_aggregate(
+    by_date: &mut std::collections::BTreeMap<chrono::NaiveDate, DashboardDailyAggregate>,
+    model_summary: &mut std::collections::BTreeMap<String, DashboardModelAggregate>,
+    row: &DashboardDailyModelAggregateRow,
+) {
+    let Ok(date) = chrono::NaiveDate::parse_from_str(&row.date, "%Y-%m-%d") else {
+        return;
+    };
+    let aggregate = by_date.entry(date).or_default();
+    let model = aggregate.models.entry(row.model.clone()).or_default();
+    model.requests = model.requests.saturating_add(row.requests);
+    model.tokens = model.tokens.saturating_add(row.total_tokens);
+    model.cost += row.total_cost_usd;
+    model.response_time_sum_ms += row.response_time_sum_ms;
+    model.response_time_samples = model
+        .response_time_samples
+        .saturating_add(row.response_time_samples);
+
+    let summary = model_summary.entry(row.model.clone()).or_default();
+    summary.requests = summary.requests.saturating_add(row.requests);
+    summary.tokens = summary.tokens.saturating_add(row.total_tokens);
+    summary.cost += row.total_cost_usd;
+    summary.response_time_sum_ms += row.response_time_sum_ms;
+    summary.response_time_samples = summary
+        .response_time_samples
+        .saturating_add(row.response_time_samples);
+}
+
+fn dashboard_record_daily_provider_aggregate(
+    by_date: &mut std::collections::BTreeMap<chrono::NaiveDate, DashboardDailyAggregate>,
+    provider_summary: &mut std::collections::BTreeMap<String, DashboardProviderAggregate>,
+    row: &DashboardDailyProviderAggregateRow,
+) {
+    let Ok(date) = chrono::NaiveDate::parse_from_str(&row.date, "%Y-%m-%d") else {
+        return;
+    };
+    let aggregate = by_date.entry(date).or_default();
+    let provider = aggregate.providers.entry(row.provider.clone()).or_default();
+    provider.requests = provider.requests.saturating_add(row.requests);
+    provider.tokens = provider.tokens.saturating_add(row.total_tokens);
+    provider.cost += row.total_cost_usd;
+
+    let summary = provider_summary.entry(row.provider.clone()).or_default();
+    summary.requests = summary.requests.saturating_add(row.requests);
+    summary.tokens = summary.tokens.saturating_add(row.total_tokens);
+    summary.cost += row.total_cost_usd;
+}
+
+fn dashboard_build_daily_stats_payload(
+    range: DashboardDateRange,
+    is_admin: bool,
+    by_date: &std::collections::BTreeMap<chrono::NaiveDate, DashboardDailyAggregate>,
+    model_summary: &std::collections::BTreeMap<String, DashboardModelAggregate>,
+    provider_summary: &std::collections::BTreeMap<String, DashboardProviderAggregate>,
+) -> serde_json::Value {
+    let mut daily_stats = Vec::new();
+    let mut cursor = range.start_date;
+    while cursor <= range.end_date {
+        let payload = if let Some(aggregate) = by_date.get(&cursor) {
+            let mut model_breakdown = aggregate
+                .models
+                .iter()
+                .map(|(model, value)| {
+                    json!({
+                        "model": model,
+                        "requests": value.requests,
+                        "tokens": value.tokens,
+                        "cost": dashboard_round_f64(value.cost, 4),
+                    })
+                })
+                .collect::<Vec<_>>();
+            model_breakdown.sort_by(|left, right| {
+                right["cost"]
+                    .as_f64()
+                    .unwrap_or_default()
+                    .partial_cmp(&left["cost"].as_f64().unwrap_or_default())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        left["model"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .cmp(right["model"].as_str().unwrap_or_default())
+                    })
+            });
+
+            let mut item = json!({
+                "date": cursor.to_string(),
+                "requests": aggregate.totals.requests,
+                "tokens": aggregate.totals.total_tokens,
+                "cost": dashboard_round_f64(aggregate.totals.total_cost_usd, 4),
+                "avg_response_time": aggregate.totals.avg_response_time_seconds(),
+                "unique_models": aggregate.models.len(),
+                "model_breakdown": model_breakdown,
+            });
+            if is_admin {
+                item["unique_providers"] = json!(aggregate.providers.len());
+            }
+            item
+        } else {
+            let mut item = json!({
+                "date": cursor.to_string(),
+                "requests": 0,
+                "tokens": 0,
+                "cost": 0.0,
+                "avg_response_time": 0.0,
+                "unique_models": 0,
+                "model_breakdown": [],
+            });
+            if is_admin {
+                item["unique_providers"] = json!(0);
+            }
+            item
+        };
+        daily_stats.push(payload);
+        cursor = cursor
+            .checked_add_signed(chrono::Duration::days(1))
+            .unwrap_or(cursor + chrono::Duration::days(1));
+    }
+
+    let mut model_summary_payload = model_summary
+        .iter()
+        .map(|(model, value)| {
+            let avg_response_time = if value.response_time_samples == 0 {
+                0.0
+            } else {
+                dashboard_round_f64(
+                    (value.response_time_sum_ms / value.response_time_samples as f64) / 1000.0,
+                    4,
+                )
+            };
+            let cost_per_request = if value.requests == 0 {
+                0.0
+            } else {
+                dashboard_round_f64(value.cost / value.requests as f64, 4)
+            };
+            let tokens_per_request = if value.requests == 0 {
+                0.0
+            } else {
+                dashboard_round_f64(value.tokens as f64 / value.requests as f64, 4)
+            };
+            json!({
+                "model": model,
+                "requests": value.requests,
+                "tokens": value.tokens,
+                "cost": dashboard_round_f64(value.cost, 4),
+                "avg_response_time": avg_response_time,
+                "cost_per_request": cost_per_request,
+                "tokens_per_request": tokens_per_request,
+            })
+        })
+        .collect::<Vec<_>>();
+    model_summary_payload.sort_by(|left, right| {
+        right["cost"]
+            .as_f64()
+            .unwrap_or_default()
+            .partial_cmp(&left["cost"].as_f64().unwrap_or_default())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let provider_summary_payload = if is_admin {
+        let mut items = provider_summary
+            .iter()
+            .map(|(provider, value)| {
+                json!({
+                    "provider": provider,
+                    "requests": value.requests,
+                    "tokens": value.tokens,
+                    "cost": dashboard_round_f64(value.cost, 4),
+                })
+            })
+            .collect::<Vec<_>>();
+        items.sort_by(|left, right| {
+            right["cost"]
+                .as_f64()
+                .unwrap_or_default()
+                .partial_cmp(&left["cost"].as_f64().unwrap_or_default())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Some(items)
+    } else {
+        None
+    };
+
+    let mut payload = json!({
+        "daily_stats": daily_stats,
+        "model_summary": model_summary_payload,
+        "period": {
+            "start_date": range.start_date.to_string(),
+            "end_date": range.end_date.to_string(),
+            "days": (range.end_date - range.start_date).num_days() + 1,
+        },
+    });
+    if let Some(provider_summary_payload) = provider_summary_payload {
+        payload["provider_summary"] = json!(provider_summary_payload);
+    }
+    payload
+}
+
+fn dashboard_range_supports_hourly_rollup(range: DashboardDateRange) -> bool {
+    range.tz_offset_minutes % 60 == 0
+}
+
+async fn dashboard_admin_hourly_stats_aggregate_payload(
+    state: &AppState,
+    range: DashboardDateRange,
+    error_context: &str,
+) -> Result<Option<serde_json::Value>, Response<Body>> {
+    if !dashboard_range_supports_hourly_rollup(range) {
+        return Ok(None);
+    }
+    let Some(pool) = state.postgres_pool() else {
+        return Ok(None);
+    };
+    let cutoff_utc = match read_stats_hourly_cutoff(&pool).await {
+        Ok(value) => value,
+        Err(err) => {
+            return Err(build_auth_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{error_context}: {err:?}"),
+                false,
+            ))
+        }
+    };
+    let Some(cutoff_utc) = cutoff_utc else {
+        return Ok(None);
+    };
+    let Some((range_start_utc, range_end_exclusive_utc)) =
+        dashboard_local_day_bounds_utc_exclusive(range)
+    else {
+        return Ok(None);
+    };
+    let aggregate_end_utc = range_end_exclusive_utc.min(cutoff_utc);
+    if range_start_utc >= aggregate_end_utc {
+        return Ok(None);
+    }
+
+    let daily_totals = list_admin_dashboard_hourly_totals_aggregates(
+        &pool,
+        range_start_utc,
+        aggregate_end_utc,
+        range.tz_offset_minutes,
+    )
+    .await
+    .map_err(|err| {
+        build_auth_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error_context}: {err:?}"),
+            false,
+        )
+    })?;
+    let daily_models = list_admin_dashboard_hourly_model_aggregates(
+        &pool,
+        range_start_utc,
+        aggregate_end_utc,
+        range.tz_offset_minutes,
+    )
+    .await
+    .map_err(|err| {
+        build_auth_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error_context}: {err:?}"),
+            false,
+        )
+    })?;
+    let daily_providers = list_admin_dashboard_hourly_provider_aggregates(
+        &pool,
+        range_start_utc,
+        aggregate_end_utc,
+        range.tz_offset_minutes,
+    )
+    .await
+    .map_err(|err| {
+        build_auth_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error_context}: {err:?}"),
+            false,
+        )
+    })?;
+
+    let mut by_date =
+        std::collections::BTreeMap::<chrono::NaiveDate, DashboardDailyAggregate>::new();
+    let mut model_summary = std::collections::BTreeMap::<String, DashboardModelAggregate>::new();
+    let mut provider_summary =
+        std::collections::BTreeMap::<String, DashboardProviderAggregate>::new();
+
+    for row in &daily_totals {
+        dashboard_record_daily_totals_aggregate(&mut by_date, row);
+    }
+    for row in &daily_models {
+        dashboard_record_daily_model_aggregate(&mut by_date, &mut model_summary, row);
+    }
+    for row in &daily_providers {
+        dashboard_record_daily_provider_aggregate(&mut by_date, &mut provider_summary, row);
+    }
+
+    if aggregate_end_utc < range_end_exclusive_utc {
+        let raw_rows = dashboard_daily_breakdown_for_unix_range_raw(
+            state,
+            dashboard_unix_secs(aggregate_end_utc),
+            dashboard_unix_secs(range_end_exclusive_utc),
+            range.tz_offset_minutes,
+            None,
+            error_context,
+        )
+        .await?;
+        dashboard_apply_daily_breakdown_rows(
+            &raw_rows,
+            &mut by_date,
+            &mut model_summary,
+            &mut provider_summary,
+        );
+    }
+
+    Ok(Some(dashboard_build_daily_stats_payload(
+        range,
+        true,
+        &by_date,
+        &model_summary,
+        &provider_summary,
+    )))
+}
+
+async fn dashboard_user_hourly_stats_aggregate_payload(
+    state: &AppState,
+    range: DashboardDateRange,
+    user_id: &str,
+    error_context: &str,
+) -> Result<Option<serde_json::Value>, Response<Body>> {
+    if !dashboard_range_supports_hourly_rollup(range) {
+        return Ok(None);
+    }
+    let Some(pool) = state.postgres_pool() else {
+        return Ok(None);
+    };
+    let cutoff_utc = match read_stats_hourly_cutoff(&pool).await {
+        Ok(value) => value,
+        Err(err) => {
+            return Err(build_auth_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{error_context}: {err:?}"),
+                false,
+            ))
+        }
+    };
+    let Some(cutoff_utc) = cutoff_utc else {
+        return Ok(None);
+    };
+    let Some((range_start_utc, range_end_exclusive_utc)) =
+        dashboard_local_day_bounds_utc_exclusive(range)
+    else {
+        return Ok(None);
+    };
+    let aggregate_end_utc = range_end_exclusive_utc.min(cutoff_utc);
+    if range_start_utc >= aggregate_end_utc {
+        return Ok(None);
+    }
+
+    let daily_totals = list_user_dashboard_hourly_totals_aggregates(
+        &pool,
+        range_start_utc,
+        aggregate_end_utc,
+        range.tz_offset_minutes,
+        user_id,
+    )
+    .await
+    .map_err(|err| {
+        build_auth_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error_context}: {err:?}"),
+            false,
+        )
+    })?;
+    let daily_models = list_user_dashboard_hourly_model_aggregates(
+        &pool,
+        range_start_utc,
+        aggregate_end_utc,
+        range.tz_offset_minutes,
+        user_id,
+    )
+    .await
+    .map_err(|err| {
+        build_auth_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error_context}: {err:?}"),
+            false,
+        )
+    })?;
+
+    let mut by_date =
+        std::collections::BTreeMap::<chrono::NaiveDate, DashboardDailyAggregate>::new();
+    let mut model_summary = std::collections::BTreeMap::<String, DashboardModelAggregate>::new();
+    let mut provider_summary =
+        std::collections::BTreeMap::<String, DashboardProviderAggregate>::new();
+
+    for row in &daily_totals {
+        dashboard_record_daily_totals_aggregate(&mut by_date, row);
+    }
+    for row in &daily_models {
+        dashboard_record_daily_model_aggregate(&mut by_date, &mut model_summary, row);
+    }
+
+    if aggregate_end_utc < range_end_exclusive_utc {
+        let raw_rows = dashboard_daily_breakdown_for_unix_range_raw(
+            state,
+            dashboard_unix_secs(aggregate_end_utc),
+            dashboard_unix_secs(range_end_exclusive_utc),
+            range.tz_offset_minutes,
+            Some(user_id),
+            error_context,
+        )
+        .await?;
+        dashboard_apply_daily_breakdown_rows(
+            &raw_rows,
+            &mut by_date,
+            &mut model_summary,
+            &mut provider_summary,
+        );
+    }
+
+    Ok(Some(dashboard_build_daily_stats_payload(
+        range,
+        false,
+        &by_date,
+        &model_summary,
+        &provider_summary,
+    )))
+}
+
+async fn dashboard_admin_daily_stats_aggregate_payload(
+    state: &AppState,
+    range: DashboardDateRange,
+    error_context: &str,
+) -> Result<Option<serde_json::Value>, Response<Body>> {
+    if range.tz_offset_minutes != 0 {
+        return dashboard_admin_hourly_stats_aggregate_payload(state, range, error_context).await;
+    }
+    let Some(pool) = state.postgres_pool() else {
+        return Ok(None);
+    };
+    let cutoff_date = match read_stats_daily_cutoff_date(&pool).await {
+        Ok(value) => value,
+        Err(err) => {
+            return Err(build_auth_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{error_context}: {err:?}"),
+                false,
+            ))
+        }
+    };
+    let Some(cutoff_date) = cutoff_date else {
+        return Ok(None);
+    };
+
+    let Some(range_end_exclusive) = range.end_date.checked_add_signed(chrono::Duration::days(1))
+    else {
+        return Ok(None);
+    };
+    let aggregate_end_exclusive = range_end_exclusive.min(cutoff_date.date_naive());
+    if range.start_date >= aggregate_end_exclusive {
+        return Ok(None);
+    }
+
+    let aggregate_start_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        range
+            .start_date
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be valid"),
+        chrono::Utc,
+    );
+    let aggregate_end_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        aggregate_end_exclusive
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be valid"),
+        chrono::Utc,
+    );
+
+    let daily_totals =
+        list_admin_dashboard_daily_totals_aggregates(&pool, aggregate_start_utc, aggregate_end_utc)
+            .await
+            .map_err(|err| {
+                build_auth_error_response(
+                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{error_context}: {err:?}"),
+                    false,
+                )
+            })?;
+    let daily_models =
+        list_admin_dashboard_daily_model_aggregates(&pool, aggregate_start_utc, aggregate_end_utc)
+            .await
+            .map_err(|err| {
+                build_auth_error_response(
+                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{error_context}: {err:?}"),
+                    false,
+                )
+            })?;
+    let daily_providers = list_admin_dashboard_daily_provider_aggregates(
+        &pool,
+        aggregate_start_utc,
+        aggregate_end_utc,
+    )
+    .await
+    .map_err(|err| {
+        build_auth_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error_context}: {err:?}"),
+            false,
+        )
+    })?;
+
+    let mut by_date =
+        std::collections::BTreeMap::<chrono::NaiveDate, DashboardDailyAggregate>::new();
+    let mut model_summary = std::collections::BTreeMap::<String, DashboardModelAggregate>::new();
+    let mut provider_summary =
+        std::collections::BTreeMap::<String, DashboardProviderAggregate>::new();
+
+    for row in &daily_totals {
+        dashboard_record_daily_totals_aggregate(&mut by_date, row);
+    }
+    for row in &daily_models {
+        dashboard_record_daily_model_aggregate(&mut by_date, &mut model_summary, row);
+    }
+    for row in &daily_providers {
+        dashboard_record_daily_provider_aggregate(&mut by_date, &mut provider_summary, row);
+    }
+
+    if aggregate_end_exclusive <= range.end_date {
+        let raw_range = DashboardDateRange {
+            start_date: aggregate_end_exclusive,
+            end_date: range.end_date,
+            tz_offset_minutes: range.tz_offset_minutes,
+        };
+        let raw_rows =
+            dashboard_daily_breakdown_for_range(state, raw_range, None, error_context).await?;
+        dashboard_apply_daily_breakdown_rows(
+            &raw_rows,
+            &mut by_date,
+            &mut model_summary,
+            &mut provider_summary,
+        );
+    }
+
+    Ok(Some(dashboard_build_daily_stats_payload(
+        range,
+        true,
+        &by_date,
+        &model_summary,
+        &provider_summary,
+    )))
+}
+
+async fn dashboard_user_daily_stats_aggregate_payload(
+    state: &AppState,
+    range: DashboardDateRange,
+    user_id: &str,
+    error_context: &str,
+) -> Result<Option<serde_json::Value>, Response<Body>> {
+    if range.tz_offset_minutes != 0 {
+        return dashboard_user_hourly_stats_aggregate_payload(state, range, user_id, error_context)
+            .await;
+    }
+    let Some(pool) = state.postgres_pool() else {
+        return Ok(None);
+    };
+    let cutoff_date = match read_stats_daily_cutoff_date(&pool).await {
+        Ok(value) => value,
+        Err(err) => {
+            return Err(build_auth_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{error_context}: {err:?}"),
+                false,
+            ))
+        }
+    };
+    let Some(cutoff_date) = cutoff_date else {
+        return Ok(None);
+    };
+
+    let Some(range_end_exclusive) = range.end_date.checked_add_signed(chrono::Duration::days(1))
+    else {
+        return Ok(None);
+    };
+    let aggregate_end_exclusive = range_end_exclusive.min(cutoff_date.date_naive());
+    if range.start_date >= aggregate_end_exclusive {
+        return Ok(None);
+    }
+
+    let aggregate_start_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        range
+            .start_date
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be valid"),
+        chrono::Utc,
+    );
+    let aggregate_end_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+        aggregate_end_exclusive
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be valid"),
+        chrono::Utc,
+    );
+
+    let daily_totals = list_user_dashboard_daily_totals_aggregates(
+        &pool,
+        aggregate_start_utc,
+        aggregate_end_utc,
+        user_id,
+    )
+    .await
+    .map_err(|err| {
+        build_auth_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error_context}: {err:?}"),
+            false,
+        )
+    })?;
+    let daily_models = list_user_dashboard_daily_model_aggregates(
+        &pool,
+        aggregate_start_utc,
+        aggregate_end_utc,
+        user_id,
+    )
+    .await
+    .map_err(|err| {
+        build_auth_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{error_context}: {err:?}"),
+            false,
+        )
+    })?;
+
+    let mut by_date =
+        std::collections::BTreeMap::<chrono::NaiveDate, DashboardDailyAggregate>::new();
+    let mut model_summary = std::collections::BTreeMap::<String, DashboardModelAggregate>::new();
+    let mut provider_summary =
+        std::collections::BTreeMap::<String, DashboardProviderAggregate>::new();
+
+    for row in &daily_totals {
+        dashboard_record_daily_totals_aggregate(&mut by_date, row);
+    }
+    for row in &daily_models {
+        dashboard_record_daily_model_aggregate(&mut by_date, &mut model_summary, row);
+    }
+
+    if aggregate_end_exclusive <= range.end_date {
+        let raw_range = DashboardDateRange {
+            start_date: aggregate_end_exclusive,
+            end_date: range.end_date,
+            tz_offset_minutes: range.tz_offset_minutes,
+        };
+        let raw_rows =
+            dashboard_daily_breakdown_for_range(state, raw_range, Some(user_id), error_context)
+                .await?;
+        dashboard_apply_daily_breakdown_rows(
+            &raw_rows,
+            &mut by_date,
+            &mut model_summary,
+            &mut provider_summary,
+        );
+    }
+
+    Ok(Some(dashboard_build_daily_stats_payload(
+        range,
+        false,
+        &by_date,
+        &model_summary,
+        &provider_summary,
+    )))
 }
 
 fn dashboard_usage_totals_from_summary(
@@ -883,6 +1833,37 @@ pub(super) async fn handle_dashboard_daily_stats_get(
         Err(detail) => return dashboard_bad_request_response(detail),
     };
     let user_filter = (!is_admin).then_some(auth.user.id.as_str());
+    if is_admin {
+        match dashboard_admin_daily_stats_aggregate_payload(
+            state,
+            range,
+            "dashboard daily stats lookup failed",
+        )
+        .await
+        {
+            Ok(Some(payload)) => {
+                return dashboard_cached_json_response(state, cache_key, cache_ttl, &payload)
+            }
+            Ok(None) => {}
+            Err(response) => return response,
+        }
+    } else {
+        match dashboard_user_daily_stats_aggregate_payload(
+            state,
+            range,
+            auth.user.id.as_str(),
+            "dashboard daily stats lookup failed",
+        )
+        .await
+        {
+            Ok(Some(payload)) => {
+                return dashboard_cached_json_response(state, cache_key, cache_ttl, &payload)
+            }
+            Ok(None) => {}
+            Err(response) => return response,
+        }
+    }
+
     let usage = match dashboard_daily_breakdown_for_range(
         state,
         range,
@@ -900,169 +1881,20 @@ pub(super) async fn handle_dashboard_daily_stats_get(
     let mut model_summary = std::collections::BTreeMap::<String, DashboardModelAggregate>::new();
     let mut provider_summary =
         std::collections::BTreeMap::<String, DashboardProviderAggregate>::new();
+    dashboard_apply_daily_breakdown_rows(
+        &usage,
+        &mut by_date,
+        &mut model_summary,
+        &mut provider_summary,
+    );
 
-    for row in &usage {
-        let Ok(date) = chrono::NaiveDate::parse_from_str(&row.date, "%Y-%m-%d") else {
-            continue;
-        };
-        let aggregate = by_date.entry(date).or_default();
-        dashboard_daily_aggregate_record(aggregate, row);
-
-        let model = model_summary.entry(row.model.clone()).or_default();
-        model.requests = model.requests.saturating_add(row.requests);
-        model.tokens = model.tokens.saturating_add(row.total_tokens);
-        model.cost += row.total_cost_usd;
-        model.response_time_sum_ms += row.response_time_sum_ms;
-        model.response_time_samples = model
-            .response_time_samples
-            .saturating_add(row.response_time_samples);
-
-        let provider = provider_summary.entry(row.provider.clone()).or_default();
-        provider.requests = provider.requests.saturating_add(row.requests);
-        provider.tokens = provider.tokens.saturating_add(row.total_tokens);
-        provider.cost += row.total_cost_usd;
-    }
-
-    let mut daily_stats = Vec::new();
-    let mut cursor = range.start_date;
-    while cursor <= range.end_date {
-        let payload = if let Some(aggregate) = by_date.get(&cursor) {
-            let mut model_breakdown = aggregate
-                .models
-                .iter()
-                .map(|(model, value)| {
-                    json!({
-                        "model": model,
-                        "requests": value.requests,
-                        "tokens": value.tokens,
-                        "cost": dashboard_round_f64(value.cost, 4),
-                    })
-                })
-                .collect::<Vec<_>>();
-            model_breakdown.sort_by(|left, right| {
-                right["cost"]
-                    .as_f64()
-                    .unwrap_or_default()
-                    .partial_cmp(&left["cost"].as_f64().unwrap_or_default())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| {
-                        left["model"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .cmp(right["model"].as_str().unwrap_or_default())
-                    })
-            });
-
-            let mut item = json!({
-                "date": cursor.to_string(),
-                "requests": aggregate.totals.requests,
-                "tokens": aggregate.totals.total_tokens,
-                "cost": dashboard_round_f64(aggregate.totals.total_cost_usd, 4),
-                "avg_response_time": aggregate.totals.avg_response_time_seconds(),
-                "unique_models": aggregate.models.len(),
-                "model_breakdown": model_breakdown,
-            });
-            if is_admin {
-                item["unique_providers"] = json!(aggregate.providers.len());
-            }
-            item
-        } else {
-            let mut item = json!({
-                "date": cursor.to_string(),
-                "requests": 0,
-                "tokens": 0,
-                "cost": 0.0,
-                "avg_response_time": 0.0,
-                "unique_models": 0,
-                "model_breakdown": [],
-            });
-            if is_admin {
-                item["unique_providers"] = json!(0);
-            }
-            item
-        };
-        daily_stats.push(payload);
-        cursor = cursor
-            .checked_add_signed(chrono::Duration::days(1))
-            .unwrap_or(cursor + chrono::Duration::days(1));
-    }
-
-    let mut model_summary_payload = model_summary
-        .iter()
-        .map(|(model, value)| {
-            let avg_response_time = if value.response_time_samples == 0 {
-                0.0
-            } else {
-                dashboard_round_f64(
-                    (value.response_time_sum_ms / value.response_time_samples as f64) / 1000.0,
-                    4,
-                )
-            };
-            let cost_per_request = if value.requests == 0 {
-                0.0
-            } else {
-                dashboard_round_f64(value.cost / value.requests as f64, 4)
-            };
-            let tokens_per_request = if value.requests == 0 {
-                0.0
-            } else {
-                dashboard_round_f64(value.tokens as f64 / value.requests as f64, 4)
-            };
-            json!({
-                "model": model,
-                "requests": value.requests,
-                "tokens": value.tokens,
-                "cost": dashboard_round_f64(value.cost, 4),
-                "avg_response_time": avg_response_time,
-                "cost_per_request": cost_per_request,
-                "tokens_per_request": tokens_per_request,
-            })
-        })
-        .collect::<Vec<_>>();
-    model_summary_payload.sort_by(|left, right| {
-        right["cost"]
-            .as_f64()
-            .unwrap_or_default()
-            .partial_cmp(&left["cost"].as_f64().unwrap_or_default())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let provider_summary_payload = if is_admin {
-        let mut items = provider_summary
-            .iter()
-            .map(|(provider, value)| {
-                json!({
-                    "provider": provider,
-                    "requests": value.requests,
-                    "tokens": value.tokens,
-                    "cost": dashboard_round_f64(value.cost, 4),
-                })
-            })
-            .collect::<Vec<_>>();
-        items.sort_by(|left, right| {
-            right["cost"]
-                .as_f64()
-                .unwrap_or_default()
-                .partial_cmp(&left["cost"].as_f64().unwrap_or_default())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        Some(items)
-    } else {
-        None
-    };
-
-    let mut payload = json!({
-        "daily_stats": daily_stats,
-        "model_summary": model_summary_payload,
-        "period": {
-            "start_date": range.start_date.to_string(),
-            "end_date": range.end_date.to_string(),
-            "days": (range.end_date - range.start_date).num_days() + 1,
-        },
-    });
-    if let Some(provider_summary_payload) = provider_summary_payload {
-        payload["provider_summary"] = json!(provider_summary_payload);
-    }
+    let payload = dashboard_build_daily_stats_payload(
+        range,
+        is_admin,
+        &by_date,
+        &model_summary,
+        &provider_summary,
+    );
     dashboard_cached_json_response(state, cache_key, cache_ttl, &payload)
 }
 

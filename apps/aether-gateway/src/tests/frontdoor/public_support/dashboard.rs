@@ -101,6 +101,7 @@ async fn gateway_handles_dashboard_stats_locally_without_proxying_upstream() {
                 None,
                 false,
                 5,
+                0,
                 1.5,
                 false,
             )
@@ -121,6 +122,7 @@ async fn gateway_handles_dashboard_stats_locally_without_proxying_upstream() {
                 None,
                 false,
                 1,
+                0,
                 0.5,
                 false,
             )
@@ -326,6 +328,7 @@ async fn gateway_handles_admin_dashboard_stats_locally_without_proxying_upstream
                 None,
                 false,
                 5,
+                0,
                 1.5,
                 false,
             )
@@ -346,6 +349,7 @@ async fn gateway_handles_admin_dashboard_stats_locally_without_proxying_upstream
                 None,
                 false,
                 1,
+                0,
                 0.5,
                 false,
             )
@@ -366,6 +370,7 @@ async fn gateway_handles_admin_dashboard_stats_locally_without_proxying_upstream
                 None,
                 false,
                 3,
+                0,
                 0.75,
                 true,
             )
@@ -558,6 +563,118 @@ async fn gateway_handles_dashboard_daily_stats_locally_without_proxying_upstream
     assert_eq!(provider_summary[0]["requests"], 2);
     assert_eq!(provider_summary[1]["provider"], "claude");
     assert_eq!(provider_summary[1]["requests"], 1);
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_handles_user_dashboard_daily_stats_locally_without_proxying_upstream() {
+    let now = stable_dashboard_now();
+    let user = sample_auth_user(now);
+    let access_token = build_test_auth_token(
+        "access",
+        serde_json::Map::from_iter([
+            ("user_id".to_string(), json!(user.id)),
+            ("role".to_string(), json!(user.role)),
+            (
+                "created_at".to_string(),
+                json!(user.created_at.map(|value| value.to_rfc3339())),
+            ),
+            (
+                "session_id".to_string(),
+                json!("session-dashboard-daily-stats-user"),
+            ),
+        ]),
+        chrono::Utc::now() + chrono::Duration::hours(1),
+    );
+    let session = sample_auth_session(
+        "user-auth-1",
+        "session-dashboard-daily-stats-user",
+        "device-dashboard-daily-stats-user",
+        "refresh-dashboard-daily-stats-user",
+        now,
+    );
+    let usage_repository = Arc::new(InMemoryUsageReadRepository::seed(vec![
+        sample_user_usage_audit(
+            "usage-dashboard-user-daily-1",
+            "req-dashboard-user-daily-1",
+            "user-auth-1",
+            "gpt-5",
+            "openai",
+            "completed",
+            now - chrono::Duration::hours(1),
+        ),
+        sample_user_usage_audit(
+            "usage-dashboard-user-daily-2",
+            "req-dashboard-user-daily-2",
+            "user-auth-1",
+            "gpt-4.1",
+            "openai",
+            "completed",
+            now - chrono::Duration::days(1) - chrono::Duration::hours(2),
+        ),
+        sample_user_usage_audit(
+            "usage-dashboard-user-daily-3",
+            "req-dashboard-user-daily-3",
+            "user-auth-2",
+            "claude-3-7",
+            "claude",
+            "completed",
+            now - chrono::Duration::hours(2),
+        ),
+    ]));
+
+    let (gateway_url, upstream_hits, gateway_handle, upstream_handle) =
+        start_auth_gateway_with_builder(|| {
+            let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![
+                user.clone()
+            ]));
+            let wallet_repository =
+                Arc::new(InMemoryWalletRepository::seed(vec![sample_auth_wallet(
+                    "user-auth-1",
+                    now,
+                )]));
+            let data_state = GatewayDataState::with_user_wallet_and_usage_for_tests(
+                user_repository,
+                wallet_repository,
+                usage_repository,
+            );
+            AppState::new()
+                .expect("gateway should build")
+                .with_data_state_for_tests(data_state)
+                .with_auth_sessions_for_tests([session])
+        })
+        .await;
+
+    let response = reqwest::Client::new()
+        .get(format!("{gateway_url}/api/dashboard/daily-stats?days=2"))
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("x-client-device-id", "device-dashboard-daily-stats-user")
+        .header("user-agent", "AetherTest/1.0")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    let daily_stats = payload["daily_stats"]
+        .as_array()
+        .expect("daily stats should be array");
+    assert_eq!(daily_stats.len(), 2);
+    assert_eq!(daily_stats[0]["requests"], 1);
+    assert_eq!(daily_stats[1]["requests"], 1);
+    assert_eq!(
+        daily_stats[1]["model_breakdown"].as_array().map(Vec::len),
+        Some(1)
+    );
+
+    let model_summary = payload["model_summary"]
+        .as_array()
+        .expect("model summary should exist");
+    assert_eq!(model_summary.len(), 2);
+    assert_eq!(payload.get("provider_summary"), None);
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();

@@ -297,6 +297,7 @@ impl<'a> AdminAppState<'a> {
                 json!(key.auto_delete_on_expiry),
             ),
             ("total_requests".to_string(), json!(key.total_requests)),
+            ("total_tokens".to_string(), json!(key.total_tokens)),
             ("total_cost_usd".to_string(), json!(key.total_cost_usd)),
             (
                 "wallet".to_string(),

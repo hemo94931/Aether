@@ -4,9 +4,10 @@ use aether_billing::{
     normalize_input_tokens_for_billing, normalize_total_input_context_for_cache_hit_rate,
 };
 use aether_data_contracts::repository::usage::{
-    StoredRequestUsageAudit, StoredUsageBreakdownSummaryRow, UsageAuditKeywordSearchQuery,
-    UsageAuditListQuery, UsageBreakdownGroupBy, UsageBreakdownSummaryQuery,
-    UsageCacheAffinityIntervalGroupBy, UsageCacheAffinityIntervalQuery, UsageDashboardSummaryQuery,
+    StoredRequestUsageAudit, StoredUsageBreakdownSummaryRow, StoredUsageDailySummary,
+    UsageAuditKeywordSearchQuery, UsageAuditListQuery, UsageBreakdownGroupBy,
+    UsageBreakdownSummaryQuery, UsageCacheAffinityIntervalGroupBy, UsageCacheAffinityIntervalQuery,
+    UsageDashboardSummaryQuery,
 };
 use axum::{
     body::Body,
@@ -17,6 +18,9 @@ use axum::{
 use chrono::Utc;
 use serde_json::json;
 
+use crate::query::usage_heatmap::{
+    list_usage_heatmap_aggregate_rows, read_stats_daily_cutoff_date,
+};
 use crate::GatewayError;
 
 use super::{
@@ -957,15 +961,14 @@ pub(super) async fn handle_users_me_usage_heatmap_get(
     )
     .unwrap_or_default();
 
-    let summaries = match state
-        .summarize_usage_daily_heatmap(
-            &aether_data_contracts::repository::usage::UsageDailyHeatmapQuery {
-                created_from_unix_secs,
-                user_id: Some(auth.user.id.clone()),
-                admin_mode: false,
-            },
-        )
-        .await
+    let summaries = match build_usage_heatmap_summaries(
+        state,
+        created_from_unix_secs,
+        start_date,
+        today,
+        Some(auth.user.id.as_str()),
+    )
+    .await
     {
         Ok(value) => value,
         Err(err) => {
@@ -982,6 +985,7 @@ pub(super) async fn handle_users_me_usage_heatmap_get(
         summaries.into_iter().map(|s| (s.date.clone(), s)).collect();
 
     let mut max_requests = 0_u64;
+    let mut active_days = 0_u64;
     let mut cursor = start_date;
     let mut days = Vec::new();
     while cursor <= today {
@@ -998,6 +1002,9 @@ pub(super) async fn handle_users_me_usage_heatmap_get(
                 (0, 0, 0.0, 0.0)
             };
         max_requests = max_requests.max(requests);
+        if requests > 0 {
+            active_days = active_days.saturating_add(1);
+        }
         let mut day = json!({
             "date": date_str,
             "requests": requests,
@@ -1017,10 +1024,64 @@ pub(super) async fn handle_users_me_usage_heatmap_get(
         "start_date": start_date.to_string(),
         "end_date": today.to_string(),
         "total_days": days.len(),
+        "active_days": active_days,
         "max_requests": max_requests,
         "days": days,
     }))
     .into_response()
+}
+
+async fn build_usage_heatmap_summaries(
+    state: &AppState,
+    created_from_unix_secs: u64,
+    start_date: chrono::NaiveDate,
+    today: chrono::NaiveDate,
+    user_id: Option<&str>,
+) -> Result<Vec<StoredUsageDailySummary>, GatewayError> {
+    let query = aether_data_contracts::repository::usage::UsageDailyHeatmapQuery {
+        created_from_unix_secs,
+        user_id: user_id.map(ToOwned::to_owned),
+        admin_mode: user_id.is_none(),
+    };
+    let Some(pool) = state.postgres_pool() else {
+        return state.summarize_usage_daily_heatmap(&query).await;
+    };
+
+    let Some(cutoff_date) = read_stats_daily_cutoff_date(&pool).await? else {
+        return state.summarize_usage_daily_heatmap(&query).await;
+    };
+
+    let cutoff_day = cutoff_date.date_naive().min(today);
+    let mut summaries =
+        list_usage_heatmap_aggregate_rows(&pool, start_date, cutoff_day, user_id).await?;
+    let raw_start_date = start_date.max(cutoff_day);
+    if raw_start_date <= today {
+        let raw_start_of_day = raw_start_date
+            .and_hms_opt(0, 0, 0)
+            .expect("heatmap day start should be valid");
+        let raw_created_from_unix_secs = u64::try_from(
+            chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                raw_start_of_day,
+                chrono::Utc,
+            )
+            .timestamp(),
+        )
+        .unwrap_or_default();
+        summaries.extend(
+            state
+                .summarize_usage_daily_heatmap(
+                    &aether_data_contracts::repository::usage::UsageDailyHeatmapQuery {
+                        created_from_unix_secs: raw_created_from_unix_secs,
+                        user_id: user_id.map(ToOwned::to_owned),
+                        admin_mode: user_id.is_none(),
+                    },
+                )
+                .await?,
+        );
+    }
+
+    summaries.sort_by(|left, right| left.date.cmp(&right.date));
+    Ok(summaries)
 }
 
 #[cfg(test)]

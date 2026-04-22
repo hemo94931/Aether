@@ -635,6 +635,7 @@ async fn gateway_handles_admin_system_users_export_locally_with_trusted_admin_pr
                 Some(1_900_000_000),
                 false,
                 42,
+                420,
                 12.34,
                 false,
             )
@@ -661,6 +662,7 @@ async fn gateway_handles_admin_system_users_export_locally_with_trusted_admin_pr
                 None,
                 false,
                 7,
+                84,
                 3.21,
                 true,
             )
@@ -750,9 +752,14 @@ async fn gateway_handles_admin_system_users_export_locally_with_trusted_admin_pr
         json!(false)
     );
     assert_eq!(
+        payload["users"][0]["api_keys"][0]["total_tokens"],
+        json!(420)
+    );
+    assert_eq!(
         payload["standalone_keys"][0]["key"],
         json!("ak-standalone-live-1")
     );
+    assert_eq!(payload["standalone_keys"][0]["total_tokens"], json!(84));
     assert_eq!(
         payload["standalone_keys"][0]["wallet"]["unlimited"],
         json!(true)

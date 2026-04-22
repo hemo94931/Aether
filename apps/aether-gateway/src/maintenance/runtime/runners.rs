@@ -165,9 +165,9 @@ pub(super) async fn run_wallet_daily_usage_aggregation_once(
 
 pub(super) async fn run_stats_aggregation_once(
     data: &GatewayDataState,
-) -> Result<(), DataLayerError> {
+) -> Result<bool, DataLayerError> {
     let Some(summary) = perform_stats_aggregation_once(data).await? else {
-        return Ok(());
+        return Ok(false);
     };
 
     info!(
@@ -183,7 +183,7 @@ pub(super) async fn run_stats_aggregation_once(
         user_rows = summary.user_rows,
         "gateway aggregated daily stats tables"
     );
-    Ok(())
+    Ok(true)
 }
 
 pub(super) async fn run_usage_cleanup_once(data: &GatewayDataState) -> Result<(), DataLayerError> {
@@ -248,9 +248,9 @@ pub(super) async fn run_pending_cleanup_once(
 
 pub(super) async fn run_stats_hourly_aggregation_once(
     data: &GatewayDataState,
-) -> Result<(), DataLayerError> {
+) -> Result<bool, DataLayerError> {
     let Some(summary) = perform_stats_hourly_aggregation_once(data).await? else {
-        return Ok(());
+        return Ok(false);
     };
 
     info!(
@@ -260,11 +260,12 @@ pub(super) async fn run_stats_hourly_aggregation_once(
         hour_utc = %summary.hour_utc,
         total_requests = summary.total_requests,
         user_rows = summary.user_rows,
+        user_model_rows = summary.user_model_rows,
         model_rows = summary.model_rows,
         provider_rows = summary.provider_rows,
         "gateway aggregated stats hourly tables"
     );
-    Ok(())
+    Ok(true)
 }
 
 pub(super) async fn run_provider_checkin_once(state: &AppState) -> Result<(), GatewayError> {

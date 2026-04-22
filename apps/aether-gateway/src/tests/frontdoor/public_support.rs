@@ -5833,6 +5833,7 @@ async fn gateway_handles_users_me_api_keys_locally_without_proxying_upstream() {
             Some(300),
             false,
             9,
+            0,
             1.5,
             false,
         )
@@ -6143,6 +6144,7 @@ async fn gateway_handles_users_me_api_key_writes_locally_without_proxying_upstre
             Some(300),
             false,
             3,
+            0,
             0.5,
             false,
         )
@@ -6411,6 +6413,7 @@ async fn gateway_returns_service_unavailable_for_users_me_api_key_writes_without
             Some(300),
             false,
             3,
+            0,
             0.5,
             false,
         )

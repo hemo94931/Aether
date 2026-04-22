@@ -65,6 +65,7 @@ impl InMemoryAuthApiKeySnapshotRepository {
                         .map(|value| value as i64),
                     false,
                     0,
+                    0,
                     0.0,
                     snapshot.api_key_is_standalone,
                 )
@@ -487,6 +488,7 @@ impl AuthApiKeyWriteRepository for InMemoryAuthApiKeySnapshotRepository {
             record.expires_at_unix_secs.map(|value| value as i64),
             record.auto_delete_on_expiry,
             record.total_requests as i64,
+            record.total_tokens as i64,
             record.total_cost_usd,
             false,
         )?;
@@ -607,6 +609,7 @@ impl AuthApiKeyWriteRepository for InMemoryAuthApiKeySnapshotRepository {
             record.expires_at_unix_secs.map(|value| value as i64),
             record.auto_delete_on_expiry,
             record.total_requests as i64,
+            record.total_tokens as i64,
             record.total_cost_usd,
             true,
         )?;
@@ -1018,6 +1021,7 @@ mod tests {
                 Some(200),
                 false,
                 14,
+                1_400,
                 1.5,
                 false,
             )
@@ -1038,6 +1042,7 @@ mod tests {
                 None,
                 true,
                 2,
+                25,
                 0.25,
                 true,
             )

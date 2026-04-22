@@ -51,7 +51,10 @@ docker compose pull && docker compose up -d
 # 4. 如果后续版本包含 schema 变更，再显式执行数据库迁移
 docker compose run --rm app --migrate
 
-# 5. 升级前备份 (可选)
+# 5. 数据回填
+docker compose run --rm app --apply-backfills
+
+# 6. 升级前备份 (可选)
 docker compose exec postgres pg_dump -U postgres aether | gzip > backup_$(date +%Y%m%d_%H%M%S).sql.gz
 ```
 
@@ -79,6 +82,9 @@ docker compose -f docker-compose.build.yml up -d postgres redis
 
 # 数据库迁移（仅在已有数据库引入新 migration 时需要）
 ./dev.sh --migrate
+
+# 数据回填
+./dev.sh --apply-backfills
 
 # 后端
 ./dev.sh

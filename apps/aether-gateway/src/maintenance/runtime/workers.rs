@@ -21,6 +21,9 @@ use super::{
     WALLET_DAILY_USAGE_AGGREGATION_HOUR, WALLET_DAILY_USAGE_AGGREGATION_MINUTE,
 };
 
+const STATS_DAILY_CATCH_UP_BURST_LIMIT: usize = 14;
+const STATS_HOURLY_CATCH_UP_BURST_LIMIT: usize = 72;
+
 fn log_maintenance_worker_failure(
     worker: &'static str,
     phase: &'static str,
@@ -110,10 +113,23 @@ pub(crate) fn spawn_stats_aggregation_worker(
 
     Some(tokio::spawn(async move {
         loop {
-            tokio::time::sleep(duration_until_next_stats_aggregation_run(Utc::now())).await;
-            if let Err(err) = run_stats_aggregation_once(&data).await {
-                log_maintenance_worker_failure("stats_daily_aggregation", "tick", &err);
+            let mut processed = 0_usize;
+            while processed < STATS_DAILY_CATCH_UP_BURST_LIMIT {
+                match run_stats_aggregation_once(&data).await {
+                    Ok(true) => processed += 1,
+                    Ok(false) => break,
+                    Err(err) => {
+                        log_maintenance_worker_failure("stats_daily_aggregation", "tick", &err);
+                        break;
+                    }
+                }
             }
+
+            if processed >= STATS_DAILY_CATCH_UP_BURST_LIMIT {
+                continue;
+            }
+
+            tokio::time::sleep(duration_until_next_stats_aggregation_run(Utc::now())).await;
         }
     }))
 }
@@ -304,10 +320,23 @@ pub(crate) fn spawn_stats_hourly_aggregation_worker(
 
     Some(tokio::spawn(async move {
         loop {
-            tokio::time::sleep(duration_until_next_stats_hourly_aggregation_run(Utc::now())).await;
-            if let Err(err) = run_stats_hourly_aggregation_once(&data).await {
-                log_maintenance_worker_failure("stats_hourly_aggregation", "tick", &err);
+            let mut processed = 0_usize;
+            while processed < STATS_HOURLY_CATCH_UP_BURST_LIMIT {
+                match run_stats_hourly_aggregation_once(&data).await {
+                    Ok(true) => processed += 1,
+                    Ok(false) => break,
+                    Err(err) => {
+                        log_maintenance_worker_failure("stats_hourly_aggregation", "tick", &err);
+                        break;
+                    }
+                }
             }
+
+            if processed >= STATS_HOURLY_CATCH_UP_BURST_LIMIT {
+                continue;
+            }
+
+            tokio::time::sleep(duration_until_next_stats_hourly_aggregation_run(Utc::now())).await;
         }
     }))
 }

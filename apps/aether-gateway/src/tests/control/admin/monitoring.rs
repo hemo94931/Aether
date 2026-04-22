@@ -414,6 +414,7 @@ fn sample_monitoring_export_api_key(
         None,
         false,
         0,
+        0,
         0.0,
         false,
     )

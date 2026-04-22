@@ -9,12 +9,22 @@ use super::{
     postgres_error, stats_aggregation_target_day, system_config_bool, PercentileSummary,
     StatsAggregationSummary, DELETE_STATS_DAILY_ERRORS_FOR_DATE_SQL, INSERT_STATS_DAILY_ERROR_SQL,
     INSERT_STATS_SUMMARY_SQL, SELECT_EXISTING_STATS_SUMMARY_ID_SQL,
+    SELECT_LATEST_STATS_DAILY_DATE_SQL, SELECT_NEXT_STATS_DAILY_BUCKET_SQL,
     SELECT_STATS_DAILY_AGGREGATE_SQL, SELECT_STATS_DAILY_FALLBACK_COUNT_SQL,
     SELECT_STATS_DAILY_FIRST_BYTE_PERCENTILES_SQL,
     SELECT_STATS_DAILY_RESPONSE_TIME_PERCENTILES_SQL, SELECT_STATS_SUMMARY_ENTITY_COUNTS_SQL,
     SELECT_STATS_SUMMARY_TOTALS_SQL, UPDATE_STATS_SUMMARY_SQL, UPSERT_STATS_DAILY_API_KEY_SQL,
-    UPSERT_STATS_DAILY_MODEL_SQL, UPSERT_STATS_DAILY_PROVIDER_SQL, UPSERT_STATS_DAILY_SQL,
-    UPSERT_STATS_USER_DAILY_SQL,
+    UPSERT_STATS_DAILY_COST_SAVINGS_MODEL_PROVIDER_SQL, UPSERT_STATS_DAILY_COST_SAVINGS_MODEL_SQL,
+    UPSERT_STATS_DAILY_COST_SAVINGS_PROVIDER_SQL, UPSERT_STATS_DAILY_COST_SAVINGS_SQL,
+    UPSERT_STATS_DAILY_MODEL_PROVIDER_SQL, UPSERT_STATS_DAILY_MODEL_SQL,
+    UPSERT_STATS_DAILY_PROVIDER_SQL, UPSERT_STATS_DAILY_SQL,
+    UPSERT_STATS_USER_DAILY_API_FORMAT_SQL,
+    UPSERT_STATS_USER_DAILY_COST_SAVINGS_MODEL_PROVIDER_SQL,
+    UPSERT_STATS_USER_DAILY_COST_SAVINGS_MODEL_SQL,
+    UPSERT_STATS_USER_DAILY_COST_SAVINGS_PROVIDER_SQL, UPSERT_STATS_USER_DAILY_COST_SAVINGS_SQL,
+    UPSERT_STATS_USER_DAILY_MODEL_PROVIDER_SQL, UPSERT_STATS_USER_DAILY_MODEL_SQL,
+    UPSERT_STATS_USER_DAILY_PROVIDER_SQL, UPSERT_STATS_USER_DAILY_SQL,
+    UPSERT_STATS_USER_SUMMARY_SQL,
 };
 
 pub(super) async fn perform_stats_aggregation_once(
@@ -28,109 +38,125 @@ pub(super) async fn perform_stats_aggregation_once(
     }
 
     let now_utc = Utc::now();
-    let day_start_utc = stats_aggregation_target_day(now_utc);
+    let target_day_utc = stats_aggregation_target_day(now_utc);
+    let Some(day_start_utc) = next_stats_aggregation_day(&pool, target_day_utc)
+        .await
+        .map_err(postgres_error)?
+    else {
+        return Ok(None);
+    };
+
+    perform_stats_aggregation_for_day(&pool, day_start_utc, now_utc)
+        .await
+        .map(Some)
+        .map_err(postgres_error)
+}
+
+async fn next_stats_aggregation_day(
+    pool: &aether_data::postgres::PostgresPool,
+    target_day_utc: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+    let latest_row = sqlx::query(SELECT_LATEST_STATS_DAILY_DATE_SQL)
+        .fetch_one(pool)
+        .await?;
+    let latest_day = latest_row.try_get::<Option<DateTime<Utc>>, _>("latest_date")?;
+    let search_from = latest_day
+        .map(|value| value + chrono::Duration::days(1))
+        .unwrap_or_else(|| {
+            DateTime::<Utc>::from_timestamp(0, 0).expect("unix epoch should be valid")
+        });
+    let search_until = target_day_utc + chrono::Duration::days(1);
+    if search_from >= search_until {
+        return Ok(None);
+    }
+
+    let next_row = sqlx::query(SELECT_NEXT_STATS_DAILY_BUCKET_SQL)
+        .bind(search_from)
+        .bind(search_until)
+        .fetch_one(pool)
+        .await?;
+    let next_bucket = next_row.try_get::<Option<DateTime<Utc>>, _>("next_bucket")?;
+    Ok(next_bucket.filter(|value| *value <= target_day_utc))
+}
+
+async fn perform_stats_aggregation_for_day(
+    pool: &aether_data::postgres::PostgresPool,
+    day_start_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<StatsAggregationSummary, sqlx::Error> {
     let day_end_utc = day_start_utc + chrono::Duration::days(1);
-    let mut tx = pool.begin().await.map_err(postgres_error)?;
+    let mut tx = pool.begin().await?;
     let aggregate_row = sqlx::query(SELECT_STATS_DAILY_AGGREGATE_SQL)
         .bind(day_start_utc)
         .bind(day_end_utc)
         .fetch_one(&mut *tx)
-        .await
-        .map_err(postgres_error)?;
-    let total_requests = aggregate_row
-        .try_get::<i64, _>("total_requests")
-        .map_err(postgres_error)?;
-    let error_requests = aggregate_row
-        .try_get::<i64, _>("error_requests")
-        .map_err(postgres_error)?;
+        .await?;
+    let total_requests = aggregate_row.try_get::<i64, _>("total_requests")?;
+    let error_requests = aggregate_row.try_get::<i64, _>("error_requests")?;
     let success_requests = total_requests.saturating_sub(error_requests);
     let fallback_count = sqlx::query(SELECT_STATS_DAILY_FALLBACK_COUNT_SQL)
         .bind(day_start_utc)
         .bind(day_end_utc)
         .bind(vec!["success", "failed"])
         .fetch_one(&mut *tx)
-        .await
-        .map_err(postgres_error)?
-        .try_get::<i64, _>("fallback_count")
-        .map_err(postgres_error)?;
+        .await?
+        .try_get::<i64, _>("fallback_count")?;
     let response_percentiles = fetch_stats_daily_percentiles(
         &mut tx,
         SELECT_STATS_DAILY_RESPONSE_TIME_PERCENTILES_SQL,
         day_start_utc,
         day_end_utc,
     )
-    .await
-    .map_err(postgres_error)?;
+    .await?;
     let first_byte_percentiles = fetch_stats_daily_percentiles(
         &mut tx,
         SELECT_STATS_DAILY_FIRST_BYTE_PERCENTILES_SQL,
         day_start_utc,
         day_end_utc,
     )
-    .await
-    .map_err(postgres_error)?;
+    .await?;
 
     sqlx::query(UPSERT_STATS_DAILY_SQL)
         .bind(Uuid::new_v4().to_string())
         .bind(day_start_utc)
         .bind(total_requests)
+        .bind(aggregate_row.try_get::<i64, _>("cache_hit_total_requests")?)
+        .bind(aggregate_row.try_get::<i64, _>("cache_hit_requests")?)
+        .bind(aggregate_row.try_get::<i64, _>("completed_total_requests")?)
+        .bind(aggregate_row.try_get::<i64, _>("completed_cache_hit_requests")?)
+        .bind(aggregate_row.try_get::<i64, _>("completed_input_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("completed_cache_creation_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("completed_cache_read_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("completed_total_input_context")?)
+        .bind(aggregate_row.try_get::<f64, _>("completed_cache_creation_cost")?)
+        .bind(aggregate_row.try_get::<f64, _>("completed_cache_read_cost")?)
+        .bind(aggregate_row.try_get::<f64, _>("settled_total_cost")?)
+        .bind(aggregate_row.try_get::<i64, _>("settled_total_requests")?)
+        .bind(aggregate_row.try_get::<i64, _>("settled_input_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("settled_output_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("settled_cache_creation_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("settled_cache_read_tokens")?)
+        .bind(aggregate_row.try_get::<Option<i64>, _>("settled_first_finalized_at_unix_secs")?)
+        .bind(aggregate_row.try_get::<Option<i64>, _>("settled_last_finalized_at_unix_secs")?)
         .bind(success_requests)
         .bind(error_requests)
-        .bind(
-            aggregate_row
-                .try_get::<i64, _>("input_tokens")
-                .map_err(postgres_error)?,
-        )
-        .bind(
-            aggregate_row
-                .try_get::<i64, _>("output_tokens")
-                .map_err(postgres_error)?,
-        )
-        .bind(
-            aggregate_row
-                .try_get::<i64, _>("cache_creation_tokens")
-                .map_err(postgres_error)?,
-        )
-        .bind(
-            aggregate_row
-                .try_get::<i64, _>("cache_read_tokens")
-                .map_err(postgres_error)?,
-        )
-        .bind(
-            aggregate_row
-                .try_get::<f64, _>("total_cost")
-                .map_err(postgres_error)?,
-        )
-        .bind(
-            aggregate_row
-                .try_get::<f64, _>("actual_total_cost")
-                .map_err(postgres_error)?,
-        )
-        .bind(
-            aggregate_row
-                .try_get::<f64, _>("input_cost")
-                .map_err(postgres_error)?,
-        )
-        .bind(
-            aggregate_row
-                .try_get::<f64, _>("output_cost")
-                .map_err(postgres_error)?,
-        )
-        .bind(
-            aggregate_row
-                .try_get::<f64, _>("cache_creation_cost")
-                .map_err(postgres_error)?,
-        )
-        .bind(
-            aggregate_row
-                .try_get::<f64, _>("cache_read_cost")
-                .map_err(postgres_error)?,
-        )
-        .bind(
-            aggregate_row
-                .try_get::<f64, _>("avg_response_time_ms")
-                .map_err(postgres_error)?,
-        )
+        .bind(aggregate_row.try_get::<i64, _>("input_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("effective_input_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("output_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("cache_creation_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("cache_creation_ephemeral_5m_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("cache_creation_ephemeral_1h_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("cache_read_tokens")?)
+        .bind(aggregate_row.try_get::<i64, _>("total_input_context")?)
+        .bind(aggregate_row.try_get::<f64, _>("total_cost")?)
+        .bind(aggregate_row.try_get::<f64, _>("actual_total_cost")?)
+        .bind(aggregate_row.try_get::<f64, _>("input_cost")?)
+        .bind(aggregate_row.try_get::<f64, _>("output_cost")?)
+        .bind(aggregate_row.try_get::<f64, _>("cache_creation_cost")?)
+        .bind(aggregate_row.try_get::<f64, _>("cache_read_cost")?)
+        .bind(aggregate_row.try_get::<f64, _>("response_time_sum_ms")?)
+        .bind(aggregate_row.try_get::<i64, _>("response_time_samples")?)
+        .bind(aggregate_row.try_get::<f64, _>("avg_response_time_ms")?)
         .bind(response_percentiles.p50)
         .bind(response_percentiles.p90)
         .bind(response_percentiles.p99)
@@ -138,47 +164,65 @@ pub(super) async fn perform_stats_aggregation_once(
         .bind(first_byte_percentiles.p90)
         .bind(first_byte_percentiles.p99)
         .bind(fallback_count)
-        .bind(
-            aggregate_row
-                .try_get::<i64, _>("unique_models")
-                .map_err(postgres_error)?,
-        )
-        .bind(
-            aggregate_row
-                .try_get::<i64, _>("unique_providers")
-                .map_err(postgres_error)?,
-        )
+        .bind(aggregate_row.try_get::<i64, _>("unique_models")?)
+        .bind(aggregate_row.try_get::<i64, _>("unique_providers")?)
         .bind(true)
         .bind(now_utc)
         .bind(now_utc)
         .bind(now_utc)
         .execute(&mut *tx)
-        .await
-        .map_err(postgres_error)?;
+        .await?;
 
-    let model_rows = upsert_stats_daily_model_rows(&mut tx, day_start_utc, day_end_utc, now_utc)
-        .await
-        .map_err(postgres_error)?;
+    let model_rows =
+        upsert_stats_daily_model_rows(&mut tx, day_start_utc, day_end_utc, now_utc).await?;
     let provider_rows =
-        upsert_stats_daily_provider_rows(&mut tx, day_start_utc, day_end_utc, now_utc)
-            .await
-            .map_err(postgres_error)?;
+        upsert_stats_daily_provider_rows(&mut tx, day_start_utc, day_end_utc, now_utc).await?;
+    upsert_stats_daily_model_provider_rows(&mut tx, day_start_utc, day_end_utc, now_utc).await?;
+    upsert_stats_daily_cost_savings_rows(&mut tx, day_start_utc, day_end_utc, now_utc).await?;
+    upsert_stats_daily_cost_savings_provider_rows(&mut tx, day_start_utc, day_end_utc, now_utc)
+        .await?;
+    upsert_stats_daily_cost_savings_model_rows(&mut tx, day_start_utc, day_end_utc, now_utc)
+        .await?;
+    upsert_stats_daily_cost_savings_model_provider_rows(
+        &mut tx,
+        day_start_utc,
+        day_end_utc,
+        now_utc,
+    )
+    .await?;
     let api_key_rows =
-        upsert_stats_daily_api_key_rows(&mut tx, day_start_utc, day_end_utc, now_utc)
-            .await
-            .map_err(postgres_error)?;
-    let error_rows = refresh_stats_daily_error_rows(&mut tx, day_start_utc, day_end_utc, now_utc)
-        .await
-        .map_err(postgres_error)?;
-    let user_rows = upsert_stats_user_daily_rows(&mut tx, day_start_utc, day_end_utc, now_utc)
-        .await
-        .map_err(postgres_error)?;
-    refresh_stats_summary_row(&mut tx, day_end_utc, now_utc)
-        .await
-        .map_err(postgres_error)?;
-    tx.commit().await.map_err(postgres_error)?;
+        upsert_stats_daily_api_key_rows(&mut tx, day_start_utc, day_end_utc, now_utc).await?;
+    let error_rows =
+        refresh_stats_daily_error_rows(&mut tx, day_start_utc, day_end_utc, now_utc).await?;
+    let user_rows =
+        upsert_stats_user_daily_rows(&mut tx, day_start_utc, day_end_utc, now_utc).await?;
+    upsert_stats_user_daily_model_rows(&mut tx, day_start_utc, day_end_utc, now_utc).await?;
+    upsert_stats_user_daily_model_provider_rows(&mut tx, day_start_utc, day_end_utc, now_utc)
+        .await?;
+    upsert_stats_user_daily_provider_rows(&mut tx, day_start_utc, day_end_utc, now_utc).await?;
+    upsert_stats_user_daily_cost_savings_rows(&mut tx, day_start_utc, day_end_utc, now_utc).await?;
+    upsert_stats_user_daily_cost_savings_provider_rows(
+        &mut tx,
+        day_start_utc,
+        day_end_utc,
+        now_utc,
+    )
+    .await?;
+    upsert_stats_user_daily_cost_savings_model_rows(&mut tx, day_start_utc, day_end_utc, now_utc)
+        .await?;
+    upsert_stats_user_daily_cost_savings_model_provider_rows(
+        &mut tx,
+        day_start_utc,
+        day_end_utc,
+        now_utc,
+    )
+    .await?;
+    upsert_stats_user_daily_api_format_rows(&mut tx, day_start_utc, day_end_utc, now_utc).await?;
+    refresh_stats_summary_row(&mut tx, day_end_utc, now_utc).await?;
+    refresh_stats_user_summary_rows(&mut tx, day_end_utc, now_utc).await?;
+    tx.commit().await?;
 
-    Ok(Some(StatsAggregationSummary {
+    Ok(StatsAggregationSummary {
         day_start_utc,
         total_requests,
         model_rows,
@@ -186,7 +230,7 @@ pub(super) async fn perform_stats_aggregation_once(
         api_key_rows,
         error_rows,
         user_rows,
-    }))
+    })
 }
 
 async fn fetch_stats_daily_percentiles(
@@ -250,6 +294,91 @@ async fn upsert_stats_daily_provider_rows(
     Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
 }
 
+async fn upsert_stats_daily_model_provider_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_DAILY_MODEL_PROVIDER_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_daily_cost_savings_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_DAILY_COST_SAVINGS_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_daily_cost_savings_provider_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_DAILY_COST_SAVINGS_PROVIDER_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_daily_cost_savings_model_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_DAILY_COST_SAVINGS_MODEL_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_daily_cost_savings_model_provider_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_DAILY_COST_SAVINGS_MODEL_PROVIDER_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
 async fn upsert_stats_daily_api_key_rows(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     day_start_utc: DateTime<Utc>,
@@ -295,6 +424,142 @@ async fn upsert_stats_user_daily_rows(
     now_utc: DateTime<Utc>,
 ) -> Result<usize, sqlx::Error> {
     let rows_affected = sqlx::query(UPSERT_STATS_USER_DAILY_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_user_daily_model_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_USER_DAILY_MODEL_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_user_daily_model_provider_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_USER_DAILY_MODEL_PROVIDER_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_user_daily_provider_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_USER_DAILY_PROVIDER_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_user_daily_cost_savings_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_USER_DAILY_COST_SAVINGS_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_user_daily_cost_savings_provider_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_USER_DAILY_COST_SAVINGS_PROVIDER_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_user_daily_cost_savings_model_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_USER_DAILY_COST_SAVINGS_MODEL_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_user_daily_cost_savings_model_provider_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_USER_DAILY_COST_SAVINGS_MODEL_PROVIDER_SQL)
+        .bind(day_start_utc)
+        .bind(day_end_utc)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+
+    Ok(usize::try_from(rows_affected).unwrap_or(usize::MAX))
+}
+
+async fn upsert_stats_user_daily_api_format_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day_start_utc: DateTime<Utc>,
+    day_end_utc: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    let rows_affected = sqlx::query(UPSERT_STATS_USER_DAILY_API_FORMAT_SQL)
         .bind(day_start_utc)
         .bind(day_end_utc)
         .bind(now_utc)
@@ -378,6 +643,20 @@ async fn refresh_stats_summary_row(
             .execute(&mut **tx)
             .await?;
     }
+
+    Ok(())
+}
+
+async fn refresh_stats_user_summary_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    cutoff_date: DateTime<Utc>,
+    now_utc: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(UPSERT_STATS_USER_SUMMARY_SQL)
+        .bind(cutoff_date)
+        .bind(now_utc)
+        .execute(&mut **tx)
+        .await?;
 
     Ok(())
 }

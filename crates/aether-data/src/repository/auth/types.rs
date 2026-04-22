@@ -266,6 +266,7 @@ pub struct StoredAuthApiKeyExportRecord {
     pub expires_at_unix_secs: Option<u64>,
     pub auto_delete_on_expiry: bool,
     pub total_requests: u64,
+    pub total_tokens: u64,
     pub total_cost_usd: f64,
     pub is_standalone: bool,
 }
@@ -288,6 +289,7 @@ impl StoredAuthApiKeyExportRecord {
         expires_at_unix_secs: Option<i64>,
         auto_delete_on_expiry: bool,
         total_requests: i64,
+        total_tokens: i64,
         total_cost_usd: f64,
         is_standalone: bool,
     ) -> Result<Self, crate::DataLayerError> {
@@ -333,6 +335,7 @@ impl StoredAuthApiKeyExportRecord {
                 .transpose()?,
             auto_delete_on_expiry,
             total_requests: parse_u64_i64(total_requests, "api_keys.total_requests")?,
+            total_tokens: parse_u64_i64(total_tokens, "api_keys.total_tokens")?,
             total_cost_usd,
             is_standalone,
         })
@@ -369,6 +372,7 @@ pub struct CreateUserApiKeyRecord {
     pub expires_at_unix_secs: Option<u64>,
     pub auto_delete_on_expiry: bool,
     pub total_requests: u64,
+    pub total_tokens: u64,
     pub total_cost_usd: f64,
 }
 
@@ -398,6 +402,7 @@ pub struct CreateStandaloneApiKeyRecord {
     pub expires_at_unix_secs: Option<u64>,
     pub auto_delete_on_expiry: bool,
     pub total_requests: u64,
+    pub total_tokens: u64,
     pub total_cost_usd: f64,
 }
 
@@ -833,6 +838,7 @@ mod tests {
             None,
             false,
             -1,
+            0,
             0.0,
             false,
         )
@@ -857,6 +863,7 @@ mod tests {
             Some(200),
             false,
             12,
+            480,
             1.25,
             false,
         )

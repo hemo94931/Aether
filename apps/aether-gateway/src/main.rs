@@ -532,6 +532,9 @@ struct Args {
     #[arg(long, default_value_t = false)]
     migrate: bool,
 
+    #[arg(long, default_value_t = false)]
+    apply_backfills: bool,
+
     /// Path to frontend static files directory (SPA). When set, the gateway
     /// serves the frontend directly without nginx.
     #[arg(long, env = "AETHER_GATEWAY_STATIC_DIR")]
@@ -613,7 +616,7 @@ struct Args {
 
 impl Args {
     fn runtime_config(&self) -> Result<ServiceRuntimeConfig, std::io::Error> {
-        let default_log_filter = if self.migrate {
+        let default_log_filter = if self.migrate || self.apply_backfills {
             "aether_gateway=info,aether_data=info"
         } else {
             "aether_gateway=info"
@@ -764,6 +767,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if args.migrate {
         init_service_runtime(args.runtime_config()?)?;
         return run_explicit_migrations(&args).await;
+    }
+    if args.apply_backfills {
+        init_service_runtime(args.runtime_config()?)?;
+        return run_explicit_backfills(&args).await;
     }
     let app_port = validate_app_port(args.app_port)?;
     let bind_addr = gateway_bind_addr(app_port)?;
@@ -921,6 +928,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "aether-gateway data layer configured"
     );
     ensure_postgres_schema_is_current(&state).await?;
+    ensure_postgres_backfills_are_current(&state).await?;
     let reset_stale_proxy_nodes = state.reset_stale_proxy_node_tunnel_statuses().await?;
     if reset_stale_proxy_nodes > 0 {
         info!(
@@ -1026,12 +1034,74 @@ async fn run_explicit_migrations(args: &Args) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+async fn run_explicit_backfills(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    args.data.effective_postgres_url().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AETHER_GATEWAY_DATA_POSTGRES_URL or DATABASE_URL is required when running --apply-backfills",
+        )
+    })?;
+    let state = AppState::new()?.with_data_config(args.data.to_config())?;
+    ensure_postgres_schema_is_current(&state).await?;
+
+    let pending = state
+        .pending_postgres_backfills()
+        .await?
+        .unwrap_or_default();
+    if pending.is_empty() {
+        info!(
+            pending_backfills = 0,
+            "database backfills already up to date"
+        );
+        return Ok(());
+    }
+
+    let next = pending
+        .first()
+        .expect("pending backfills should have a first element");
+    info!(
+        pending_backfills = pending.len(),
+        next_version = next.version,
+        next_description = %next.description,
+        pending_versions = %format_pending_backfills(&pending),
+        "running database backfills by explicit request..."
+    );
+    if state.run_postgres_backfills().await? {
+        info!("database backfills complete");
+    }
+    Ok(())
+}
+
 fn format_pending_migrations(pending: &[aether_data::migrate::PendingMigrationInfo]) -> String {
     pending
         .iter()
         .map(|migration| format!("{} ({})", migration.version, migration.description))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn format_pending_backfills(pending: &[aether_data::backfill::PendingBackfillInfo]) -> String {
+    pending
+        .iter()
+        .map(|backfill| format!("{} ({})", backfill.version, backfill.description))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+async fn ensure_postgres_backfills_are_current(
+    state: &AppState,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(pending) = state.pending_postgres_backfills().await? else {
+        return Ok(());
+    };
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let next = pending
+        .first()
+        .expect("pending backfills should have a first element");
+    Err(pending_backfills_error(pending.len(), next.version, &next.description).into())
 }
 
 async fn ensure_postgres_schema_is_current(
@@ -1063,10 +1133,24 @@ fn pending_schema_error(
     ))
 }
 
+fn pending_backfills_error(
+    pending_count: usize,
+    next_version: i64,
+    next_description: &str,
+) -> std::io::Error {
+    std::io::Error::other(format!(
+        "database backfills are behind by {} backfill(s); next pending backfill is {} ({})\nrun `aether-gateway --apply-backfills` before starting the service",
+        pending_count,
+        next_version,
+        next_description
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_postgres_schema_is_current, pending_schema_error, resolve_healthcheck_url, Args,
+        ensure_postgres_backfills_are_current, ensure_postgres_schema_is_current,
+        pending_backfills_error, pending_schema_error, resolve_healthcheck_url, Args,
         DeploymentTopologyArg, GatewayDataArgs, GatewayFrontdoorArgs, GatewayLogDestinationArg,
         GatewayLogFormatArg, GatewayLogRotationArg, GatewayLoggingArgs, GatewayRateLimitArgs,
         GatewayUsageArgs, NodeRoleArg, VideoTaskTruthSourceArg,
@@ -1081,6 +1165,7 @@ mod tests {
             deployment_topology: DeploymentTopologyArg::SingleNode,
             node_role: NodeRoleArg::All,
             migrate: false,
+            apply_backfills: false,
             static_dir: None,
             video_task_truth_source_mode: VideoTaskTruthSourceArg::PythonSyncReport,
             video_task_poller_interval_ms: 5_000,
@@ -1172,6 +1257,17 @@ mod tests {
     }
 
     #[test]
+    fn apply_backfills_runtime_config_enables_data_logs() {
+        let mut args = test_args();
+        args.apply_backfills = true;
+        let config = args.runtime_config().expect("runtime config should build");
+        assert_eq!(
+            config.default_log_filter,
+            "aether_gateway=info,aether_data=info"
+        );
+    }
+
+    #[test]
     fn pending_schema_error_mentions_explicit_migrate_command() {
         let error = pending_schema_error(2, 20260413020000, "squash usage schema split");
         let message = error.to_string();
@@ -1181,10 +1277,33 @@ mod tests {
         assert!(message.contains("aether-gateway --migrate"));
     }
 
+    #[test]
+    fn pending_backfills_error_mentions_explicit_apply_backfills_command() {
+        let message = pending_backfills_error(
+            1,
+            20260422110000,
+            "backfill stats aggregate read path support",
+        )
+        .to_string();
+        assert!(message.contains("database backfills are behind by 1 backfill(s)"));
+        assert!(message.contains("20260422110000"));
+        assert!(message.contains("backfill stats aggregate read path support"));
+        assert!(message.contains("aether-gateway --apply-backfills"));
+        assert!(message.contains("before starting the service"));
+    }
+
     #[tokio::test]
     async fn ensure_postgres_schema_is_current_is_noop_without_postgres_pool() {
         let state = AppState::new().expect("state should build");
         ensure_postgres_schema_is_current(&state)
+            .await
+            .expect("disabled data backend should not block startup");
+    }
+
+    #[tokio::test]
+    async fn ensure_postgres_backfills_are_current_is_noop_without_postgres_pool() {
+        let state = AppState::new().expect("state should build");
+        ensure_postgres_backfills_are_current(&state)
             .await
             .expect("disabled data backend should not block startup");
     }
@@ -1211,5 +1330,16 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("AETHER_GATEWAY_DATA_POSTGRES_URL or DATABASE_URL"));
         assert!(!message.contains("APP_PORT"));
+    }
+
+    #[tokio::test]
+    async fn explicit_backfills_require_postgres_url() {
+        let args = test_args();
+        let error = super::run_explicit_backfills(&args)
+            .await
+            .expect_err("missing postgres URL should fail");
+        let message = error.to_string();
+        assert!(message.contains("AETHER_GATEWAY_DATA_POSTGRES_URL or DATABASE_URL"));
+        assert!(message.contains("--apply-backfills"));
     }
 }

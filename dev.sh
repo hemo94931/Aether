@@ -8,16 +8,23 @@ usage() {
 用法:
   ./dev.sh              启动本地 aether-gateway
   ./dev.sh --migrate    执行数据库迁移后退出
+  ./dev.sh --apply-backfills
+                       执行数据库回填后退出
   ./dev.sh --help       显示帮助
 EOF
 }
 
 RUN_MIGRATE_ONLY=false
+RUN_APPLY_BACKFILLS_ONLY=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --migrate)
             RUN_MIGRATE_ONLY=true
+            shift
+            ;;
+        --apply-backfills)
+            RUN_APPLY_BACKFILLS_ONLY=true
             shift
             ;;
         --help|-h)
@@ -145,6 +152,7 @@ export HTTP_MAX_CONNECTIONS=${HTTP_MAX_CONNECTIONS:-20}
 export HTTP_KEEPALIVE_CONNECTIONS=${HTTP_KEEPALIVE_CONNECTIONS:-5}
 
 GATEWAY_PID=""
+GATEWAY_LOG_FILE=""
 STARTUP_WAIT_EARLY_EXIT=false
 
 cleanup() {
@@ -154,9 +162,30 @@ cleanup() {
         kill "${GATEWAY_PID}" >/dev/null 2>&1 || true
         wait "${GATEWAY_PID}" >/dev/null 2>&1 || true
     fi
+    if [ -n "${GATEWAY_LOG_FILE}" ] && [ -f "${GATEWAY_LOG_FILE}" ]; then
+        rm -f "${GATEWAY_LOG_FILE}"
+    fi
 }
 
 trap cleanup EXIT
+
+print_startup_failure_hint() {
+    local log_file="$1"
+
+    if [ -n "${log_file}" ] && [ -f "${log_file}" ]; then
+        if rg --text -q "database schema is behind|run \`aether-gateway --migrate\` before starting the service" "${log_file}"; then
+            echo "=> 检测到数据库 schema 落后，请先执行: ./dev.sh --migrate"
+            return
+        fi
+
+        if rg --text -q "database backfills are behind|run \`aether-gateway --apply-backfills\` before starting the service" "${log_file}"; then
+            echo "=> 检测到待执行 backfills，请执行: ./dev.sh --apply-backfills"
+            return
+        fi
+    fi
+
+    echo "=> 未识别到明确的修复动作，请根据上面的日志继续排查。"
+}
 
 wait_for_startup() {
     local pid="$1"
@@ -179,7 +208,7 @@ wait_for_startup() {
         if ! kill -0 "${pid}" >/dev/null 2>&1; then
             STARTUP_WAIT_EARLY_EXIT=true
             echo "=> ${service_name} 启动进程已提前退出，请检查上面的日志。"
-            echo "=> 如果日志提示数据库 schema 落后，请先执行: ./dev.sh --migrate"
+            print_startup_failure_hint "${GATEWAY_LOG_FILE}"
             return 1
         fi
 
@@ -193,7 +222,7 @@ wait_for_startup() {
     if ! kill -0 "${pid}" >/dev/null 2>&1; then
         STARTUP_WAIT_EARLY_EXIT=true
         echo "=> ${service_name} 启动进程已提前退出，请检查上面的日志。"
-        echo "=> 如果日志提示数据库 schema 落后，请先执行: ./dev.sh --migrate"
+        print_startup_failure_hint "${GATEWAY_LOG_FILE}"
         return 1
     fi
 
@@ -217,6 +246,18 @@ fi
 
 export AETHER_GATEWAY_VIDEO_TASK_TRUTH_SOURCE_MODE=${AETHER_GATEWAY_VIDEO_TASK_TRUTH_SOURCE_MODE:-rust-authoritative}
 
+if [ "${RUN_MIGRATE_ONLY}" = "true" ] && [ "${RUN_APPLY_BACKFILLS_ONLY}" = "true" ]; then
+    if ! preflight_postgres_only; then
+        exit 1
+    fi
+
+    echo "=> 执行 aether-gateway 数据库迁移..."
+    cargo run -q -p aether-gateway -- --migrate
+    echo "=> 执行 aether-gateway 数据库回填..."
+    cargo run -q -p aether-gateway -- --apply-backfills
+    exit 0
+fi
+
 if [ "${RUN_MIGRATE_ONLY}" = "true" ]; then
     if ! preflight_postgres_only; then
         exit 1
@@ -227,14 +268,33 @@ if [ "${RUN_MIGRATE_ONLY}" = "true" ]; then
     exit 0
 fi
 
+if [ "${RUN_APPLY_BACKFILLS_ONLY}" = "true" ]; then
+    if ! preflight_postgres_only; then
+        exit 1
+    fi
+
+    echo "=> 执行 aether-gateway 数据库回填..."
+    cargo run -q -p aether-gateway -- --apply-backfills
+    exit 0
+fi
+
 if ! preflight_dev_infra; then
     exit 1
 fi
 
 GATEWAY_ARGS=(--app-port "${APP_PORT}")
+GATEWAY_LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/aether-dev-startup.XXXXXX.log")"
 echo "=> 启动 aether-gateway (Rust frontdoor: 0.0.0.0:${APP_PORT})..."
 echo "=> 日志过滤: ${RUST_LOG} (需要更详细日志可用: RUST_LOG=aether_gateway=debug ./dev.sh)"
-cargo run -q -p aether-gateway -- "${GATEWAY_ARGS[@]}" &
+if command -v script >/dev/null 2>&1; then
+    script -q /dev/null cargo run -q -p aether-gateway -- "${GATEWAY_ARGS[@]}" \
+        > >(tee -a "${GATEWAY_LOG_FILE}") \
+        2> >(tee -a "${GATEWAY_LOG_FILE}" >&2) &
+else
+    cargo run -q -p aether-gateway -- "${GATEWAY_ARGS[@]}" \
+        > >(tee -a "${GATEWAY_LOG_FILE}") \
+        2> >(tee -a "${GATEWAY_LOG_FILE}" >&2) &
+fi
 GATEWAY_PID=$!
 
 if ! wait_for_startup "${GATEWAY_PID}" "${GATEWAY_STARTUP_TIMEOUT_SECONDS}" "aether-gateway" curl -sf "http://127.0.0.1:${APP_PORT}/_gateway/health"; then

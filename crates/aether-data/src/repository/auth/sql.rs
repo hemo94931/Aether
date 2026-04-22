@@ -150,6 +150,7 @@ SELECT
   CAST(EXTRACT(EPOCH FROM api_keys.expires_at) AS BIGINT) AS expires_at_unix_secs,
   api_keys.auto_delete_on_expiry,
   api_keys.total_requests,
+  COALESCE(api_keys.total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(api_keys.total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   api_keys.is_standalone
 FROM api_keys
@@ -175,6 +176,7 @@ SELECT
   CAST(EXTRACT(EPOCH FROM api_keys.expires_at) AS BIGINT) AS expires_at_unix_secs,
   api_keys.auto_delete_on_expiry,
   api_keys.total_requests,
+  COALESCE(api_keys.total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(api_keys.total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   api_keys.is_standalone
 FROM api_keys
@@ -199,6 +201,7 @@ SELECT
   CAST(EXTRACT(EPOCH FROM api_keys.expires_at) AS BIGINT) AS expires_at_unix_secs,
   api_keys.auto_delete_on_expiry,
   api_keys.total_requests,
+  COALESCE(api_keys.total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(api_keys.total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   api_keys.is_standalone
 FROM api_keys
@@ -223,6 +226,7 @@ SELECT
   CAST(EXTRACT(EPOCH FROM api_keys.expires_at) AS BIGINT) AS expires_at_unix_secs,
   api_keys.auto_delete_on_expiry,
   api_keys.total_requests,
+  COALESCE(api_keys.total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(api_keys.total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   api_keys.is_standalone
 FROM api_keys
@@ -247,6 +251,7 @@ SELECT
   CAST(EXTRACT(EPOCH FROM api_keys.expires_at) AS BIGINT) AS expires_at_unix_secs,
   api_keys.auto_delete_on_expiry,
   api_keys.total_requests,
+  COALESCE(api_keys.total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(api_keys.total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   api_keys.is_standalone
 FROM api_keys
@@ -315,6 +320,7 @@ SELECT
   CAST(EXTRACT(EPOCH FROM api_keys.expires_at) AS BIGINT) AS expires_at_unix_secs,
   api_keys.auto_delete_on_expiry,
   api_keys.total_requests,
+  COALESCE(api_keys.total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(api_keys.total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   api_keys.is_standalone
 FROM api_keys
@@ -348,6 +354,7 @@ INSERT INTO api_keys (
   is_standalone,
   auto_delete_on_expiry,
   total_requests,
+  total_tokens,
   total_cost_usd,
   created_at,
   updated_at
@@ -371,6 +378,7 @@ VALUES (
   $14,
   $15,
   $16,
+  $17,
   NOW(),
   NOW()
 )
@@ -390,6 +398,7 @@ RETURNING
   CAST(EXTRACT(EPOCH FROM expires_at) AS BIGINT) AS expires_at_unix_secs,
   auto_delete_on_expiry,
   total_requests,
+  COALESCE(total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   is_standalone
 "#;
@@ -413,6 +422,7 @@ INSERT INTO api_keys (
   is_standalone,
   auto_delete_on_expiry,
   total_requests,
+  total_tokens,
   total_cost_usd,
   created_at,
   updated_at
@@ -436,6 +446,7 @@ VALUES (
   $14,
   $15,
   $16,
+  $17,
   NOW(),
   NOW()
 )
@@ -455,6 +466,7 @@ RETURNING
   CAST(EXTRACT(EPOCH FROM expires_at) AS BIGINT) AS expires_at_unix_secs,
   auto_delete_on_expiry,
   total_requests,
+  COALESCE(total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   is_standalone
 "#;
@@ -485,6 +497,7 @@ RETURNING
   CAST(EXTRACT(EPOCH FROM expires_at) AS BIGINT) AS expires_at_unix_secs,
   auto_delete_on_expiry,
   total_requests,
+  COALESCE(total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   is_standalone
 "#;
@@ -519,6 +532,7 @@ RETURNING
   CAST(EXTRACT(EPOCH FROM expires_at) AS BIGINT) AS expires_at_unix_secs,
   auto_delete_on_expiry,
   total_requests,
+  COALESCE(total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   is_standalone
 "#;
@@ -547,6 +561,7 @@ RETURNING
   CAST(EXTRACT(EPOCH FROM expires_at) AS BIGINT) AS expires_at_unix_secs,
   auto_delete_on_expiry,
   total_requests,
+  COALESCE(total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   is_standalone
 "#;
@@ -574,6 +589,7 @@ RETURNING
   CAST(EXTRACT(EPOCH FROM expires_at) AS BIGINT) AS expires_at_unix_secs,
   auto_delete_on_expiry,
   total_requests,
+  COALESCE(total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   is_standalone
 "#;
@@ -612,6 +628,7 @@ RETURNING
   CAST(EXTRACT(EPOCH FROM expires_at) AS BIGINT) AS expires_at_unix_secs,
   auto_delete_on_expiry,
   total_requests,
+  COALESCE(total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   is_standalone
 "#;
@@ -640,6 +657,7 @@ RETURNING
   CAST(EXTRACT(EPOCH FROM expires_at) AS BIGINT) AS expires_at_unix_secs,
   auto_delete_on_expiry,
   total_requests,
+  COALESCE(total_tokens, 0)::BIGINT AS total_tokens,
   COALESCE(CAST(total_cost_usd AS DOUBLE PRECISION), 0) AS total_cost_usd,
   is_standalone
 "#;
@@ -1049,6 +1067,7 @@ impl AuthApiKeyWriteRepository for SqlxAuthApiKeySnapshotReadRepository {
             .bind(expires_at)
             .bind(record.auto_delete_on_expiry)
             .bind(record.total_requests as i64)
+            .bind(record.total_tokens as i64)
             .bind(record.total_cost_usd)
             .fetch_optional(&self.pool)
             .await
@@ -1099,6 +1118,7 @@ impl AuthApiKeyWriteRepository for SqlxAuthApiKeySnapshotReadRepository {
             .bind(expires_at)
             .bind(record.auto_delete_on_expiry)
             .bind(record.total_requests as i64)
+            .bind(record.total_tokens as i64)
             .bind(record.total_cost_usd)
             .fetch_optional(&self.pool)
             .await
@@ -1373,6 +1393,7 @@ fn map_auth_api_key_export_row(
         row_get(row, "expires_at_unix_secs")?,
         row_get(row, "auto_delete_on_expiry")?,
         row_get::<i32>(row, "total_requests")?.into(),
+        row_get::<i64>(row, "total_tokens")?,
         row_get(row, "total_cost_usd")?,
         row_get(row, "is_standalone")?,
     )

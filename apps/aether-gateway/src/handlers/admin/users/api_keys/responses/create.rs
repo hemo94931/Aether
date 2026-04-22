@@ -142,6 +142,7 @@ pub(crate) async fn build_admin_create_user_api_key_response(
             expires_at_unix_secs: None,
             auto_delete_on_expiry: false,
             total_requests: 0,
+            total_tokens: 0,
             total_cost_usd: 0.0,
         })
         .await?

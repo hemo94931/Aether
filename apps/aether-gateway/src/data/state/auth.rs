@@ -2765,6 +2765,7 @@ mod tests {
                     Some(200),
                     false,
                     9,
+                    0,
                     1.75,
                     false,
                 )
@@ -2785,6 +2786,7 @@ mod tests {
                     None,
                     true,
                     2,
+                    0,
                     0.5,
                     true,
                 )

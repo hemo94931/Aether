@@ -1982,6 +1982,11 @@ impl<'a> AdminAppState<'a> {
                     "total_requests"
                 ))
                 .unwrap_or(0);
+                let total_tokens = invalid_value!(imported_optional_u64(
+                    key.get("total_tokens"),
+                    "total_tokens"
+                ))
+                .unwrap_or(0);
                 let total_cost_usd = invalid_value!(imported_optional_f64(
                     key.get("total_cost_usd"),
                     "total_cost_usd"
@@ -2047,6 +2052,7 @@ impl<'a> AdminAppState<'a> {
                                 || key.contains_key("expires_at")
                                 || key.contains_key("auto_delete_on_expiry")
                                 || key.contains_key("total_requests")
+                                || key.contains_key("total_tokens")
                                 || key.contains_key("total_cost_usd")
                             {
                                 stats.errors.push(format!(
@@ -2077,6 +2083,7 @@ impl<'a> AdminAppState<'a> {
                         expires_at_unix_secs,
                         auto_delete_on_expiry,
                         total_requests,
+                        total_tokens,
                         total_cost_usd,
                     })
                     .await?;
@@ -2169,6 +2176,11 @@ impl<'a> AdminAppState<'a> {
                 "total_requests"
             ))
             .unwrap_or(0);
+            let total_tokens = invalid_value!(imported_optional_u64(
+                key.get("total_tokens"),
+                "total_tokens"
+            ))
+            .unwrap_or(0);
             let total_cost_usd = invalid_value!(imported_optional_f64(
                 key.get("total_cost_usd"),
                 "total_cost_usd"
@@ -2225,6 +2237,7 @@ impl<'a> AdminAppState<'a> {
                             || key.contains_key("auto_delete_on_expiry")
                             || key.contains_key("force_capabilities")
                             || key.contains_key("total_requests")
+                            || key.contains_key("total_tokens")
                             || key.contains_key("total_cost_usd")
                         {
                             stats.errors.push(
@@ -2263,6 +2276,7 @@ impl<'a> AdminAppState<'a> {
                         expires_at_unix_secs,
                         auto_delete_on_expiry,
                         total_requests,
+                        total_tokens,
                         total_cost_usd,
                     },
                 )
