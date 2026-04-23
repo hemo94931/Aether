@@ -11,6 +11,11 @@ use crate::conversion::response::{
     convert_openai_chat_response_to_openai_cli, convert_openai_cli_response_to_openai_chat,
 };
 use crate::conversion::{sync_chat_response_conversion_kind, sync_cli_response_conversion_kind};
+use crate::finalize::standard::gemini::stream::GeminiProviderState;
+use crate::finalize::standard::stream_core::common::{
+    map_openai_finish_reason_to_gemini, parse_json_arguments_value, CanonicalContentPart,
+    CanonicalStreamEvent, CanonicalUsage,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StandardCrossFormatSyncProduct {
@@ -682,6 +687,7 @@ struct OpenAIChatToolCallState {
 struct ClaudeContentBlockState {
     object: Map<String, Value>,
     text: String,
+    signature: Option<String>,
     partial_json: String,
 }
 
@@ -1528,6 +1534,14 @@ fn materialize_openai_cli_tool_item(output_index: usize, state: OpenAICliSyncToo
     Value::Object(item)
 }
 
+#[derive(Default)]
+struct GeminiSyncToolState {
+    call_id: String,
+    name: String,
+    arguments: String,
+    part_index: Option<usize>,
+}
+
 pub fn aggregate_claude_stream_sync_response(body: &[u8]) -> Option<Value> {
     let events = parse_stream_json_events(body)?;
     if events.is_empty() {
@@ -1599,6 +1613,22 @@ pub fn aggregate_claude_stream_sync_response(body: &[u8]) -> Option<Value> {
                             state.partial_json.push_str(partial_json);
                         }
                     }
+                    "thinking_delta" => {
+                        if let Some(thinking) = delta
+                            .get("thinking")
+                            .and_then(Value::as_str)
+                            .or_else(|| delta.get("text").and_then(Value::as_str))
+                        {
+                            state.text.push_str(thinking);
+                        }
+                    }
+                    "signature_delta" => {
+                        if let Some(signature) = delta.get("signature").and_then(Value::as_str) {
+                            if !signature.is_empty() {
+                                state.signature = Some(signature.to_string());
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1650,6 +1680,23 @@ pub fn aggregate_claude_stream_sync_response(body: &[u8]) -> Option<Value> {
                     }),
                 );
             }
+            "thinking" => {
+                block.insert(
+                    "thinking".to_string(),
+                    Value::String(if state.text.is_empty() {
+                        block
+                            .get("thinking")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string()
+                    } else {
+                        state.text
+                    }),
+                );
+                if let Some(signature) = state.signature {
+                    block.insert("signature".to_string(), Value::String(signature));
+                }
+            }
             "tool_use" => {
                 if !state.partial_json.is_empty() {
                     let input = serde_json::from_str::<Value>(&state.partial_json)
@@ -1660,6 +1707,9 @@ pub fn aggregate_claude_stream_sync_response(body: &[u8]) -> Option<Value> {
             _ => {
                 if !state.text.is_empty() {
                     block.insert("text".to_string(), Value::String(state.text));
+                }
+                if let Some(signature) = state.signature {
+                    block.insert("signature".to_string(), Value::String(signature));
                 }
             }
         }
@@ -1679,15 +1729,22 @@ pub fn aggregate_gemini_stream_sync_response(body: &[u8]) -> Option<Value> {
         return None;
     }
 
-    let mut candidates: BTreeMap<usize, Value> = BTreeMap::new();
+    let report_context = Value::Object(Map::new());
+    let mut provider = GeminiProviderState::default();
     let mut response_id: Option<Value> = None;
     let mut private_response_id: Option<Value> = None;
     let mut model_version: Option<Value> = None;
     let mut usage_metadata: Option<Value> = None;
     let mut prompt_feedback: Option<Value> = None;
+    let mut candidate: Map<String, Value> = Map::new();
+    let mut role: Option<Value> = None;
     let mut saw_candidate = false;
+    let mut parts: Vec<Value> = Vec::new();
+    let mut tool_states: BTreeMap<usize, GeminiSyncToolState> = BTreeMap::new();
+    let mut finish_reason: Option<String> = None;
+    let mut usage_from_frames: Option<CanonicalUsage> = None;
 
-    for event in events {
+    for event in &events {
         let raw_event_object = event.as_object()?;
         if let Some(id) = raw_event_object.get("responseId") {
             response_id = Some(id.clone());
@@ -1723,22 +1780,140 @@ pub fn aggregate_gemini_stream_sync_response(body: &[u8]) -> Option<Value> {
         else {
             continue;
         };
-        for candidate in event_candidates {
-            let Some(candidate_object) = candidate.as_object() else {
+        for event_candidate in event_candidates {
+            let Some(candidate_object) = event_candidate.as_object() else {
                 continue;
             };
-            let index = candidate_object
-                .get("index")
-                .and_then(Value::as_u64)
-                .map(|value| value as usize)
-                .unwrap_or(0);
-            candidates.insert(index, Value::Object(candidate_object.clone()));
+            for (key, value) in candidate_object {
+                if key != "content" {
+                    candidate.insert(key.clone(), value.clone());
+                }
+            }
+            if let Some(content) = candidate_object.get("content").and_then(Value::as_object) {
+                if let Some(content_role) = content.get("role") {
+                    role = Some(content_role.clone());
+                }
+            }
             saw_candidate = true;
+        }
+
+        let line = format!("data: {event}\n").into_bytes();
+        let frames = provider.push_line(&report_context, line).ok()?;
+        for frame in frames {
+            if response_id.is_none() && !frame.id.is_empty() {
+                response_id = Some(Value::String(frame.id.clone()));
+            }
+            if model_version.is_none() && !frame.model.is_empty() {
+                model_version = Some(Value::String(frame.model.clone()));
+            }
+            match frame.event {
+                CanonicalStreamEvent::Start => {}
+                CanonicalStreamEvent::TextDelta(text) => {
+                    append_gemini_text_part(&mut parts, text, false);
+                }
+                CanonicalStreamEvent::ReasoningDelta(text) => {
+                    append_gemini_text_part(&mut parts, text, true);
+                }
+                CanonicalStreamEvent::ReasoningSignature(signature) => {
+                    attach_gemini_reasoning_signature(&mut parts, signature);
+                }
+                CanonicalStreamEvent::ContentPart(part) => {
+                    parts.push(gemini_sync_part_from_canonical_content_part(part));
+                }
+                CanonicalStreamEvent::ToolCallStart {
+                    index,
+                    call_id,
+                    name,
+                } => {
+                    let generated_call_id = if call_id.trim().is_empty() {
+                        format!("call_auto_{index}")
+                    } else {
+                        call_id
+                    };
+                    let generated_name = if name.trim().is_empty() {
+                        "unknown".to_string()
+                    } else {
+                        name
+                    };
+                    let state = tool_states.entry(index).or_default();
+                    state.call_id = generated_call_id;
+                    state.name = generated_name;
+                    if state.part_index.is_none() {
+                        let part_index = parts.len();
+                        parts.push(sync_gemini_function_call_part(state));
+                        state.part_index = Some(part_index);
+                    } else if let Some(part_index) = state.part_index {
+                        parts[part_index] = sync_gemini_function_call_part(state);
+                    }
+                }
+                CanonicalStreamEvent::ToolCallArgumentsDelta { index, arguments } => {
+                    let state = tool_states.entry(index).or_default();
+                    state.arguments.push_str(&arguments);
+                    let part_index = if let Some(part_index) = state.part_index {
+                        part_index
+                    } else {
+                        let part_index = parts.len();
+                        parts.push(sync_gemini_function_call_part(state));
+                        state.part_index = Some(part_index);
+                        part_index
+                    };
+                    parts[part_index] = sync_gemini_function_call_part(state);
+                }
+                CanonicalStreamEvent::Finish {
+                    finish_reason: frame_finish_reason,
+                    usage,
+                } => {
+                    finish_reason = frame_finish_reason
+                        .map(|value| {
+                            map_openai_finish_reason_to_gemini(Some(value.as_str())).to_string()
+                        })
+                        .or(finish_reason);
+                    if usage.is_some() {
+                        usage_from_frames = usage;
+                    }
+                }
+            }
+        }
+    }
+
+    let frames = provider.finish(&report_context).ok()?;
+    for frame in frames {
+        if response_id.is_none() && !frame.id.is_empty() {
+            response_id = Some(Value::String(frame.id.clone()));
+        }
+        if model_version.is_none() && !frame.model.is_empty() {
+            model_version = Some(Value::String(frame.model.clone()));
+        }
+        if let CanonicalStreamEvent::Finish {
+            finish_reason: frame_finish_reason,
+            usage,
+        } = frame.event
+        {
+            finish_reason = frame_finish_reason
+                .map(|value| map_openai_finish_reason_to_gemini(Some(value.as_str())).to_string())
+                .or(finish_reason);
+            if usage.is_some() {
+                usage_from_frames = usage;
+            }
         }
     }
 
     if !saw_candidate {
         return None;
+    }
+
+    candidate.insert(
+        "content".to_string(),
+        json!({
+            "role": role.unwrap_or_else(|| Value::String("model".to_string())),
+            "parts": parts,
+        }),
+    );
+    candidate
+        .entry("index".to_string())
+        .or_insert_with(|| Value::from(0_u64));
+    if let Some(finish_reason) = finish_reason {
+        candidate.insert("finishReason".to_string(), Value::String(finish_reason));
     }
 
     let mut response = Map::new();
@@ -1750,10 +1925,13 @@ pub fn aggregate_gemini_stream_sync_response(body: &[u8]) -> Option<Value> {
     }
     response.insert(
         "candidates".to_string(),
-        Value::Array(candidates.into_values().collect()),
+        Value::Array(vec![Value::Object(candidate)]),
     );
     if let Some(version) = model_version {
         response.insert("modelVersion".to_string(), version);
+    }
+    if usage_metadata.is_none() {
+        usage_metadata = usage_from_frames.map(gemini_usage_metadata_from_canonical);
     }
     if let Some(usage) = usage_metadata {
         response.insert("usageMetadata".to_string(), usage);
@@ -1764,9 +1942,204 @@ pub fn aggregate_gemini_stream_sync_response(body: &[u8]) -> Option<Value> {
     Some(Value::Object(response))
 }
 
+fn append_gemini_text_part(parts: &mut Vec<Value>, text: String, thought: bool) {
+    if text.is_empty() {
+        return;
+    }
+    let Some(existing) = parts
+        .last_mut()
+        .and_then(Value::as_object_mut)
+        .filter(|part| is_mergeable_gemini_text_part(part, thought))
+    else {
+        let mut part = Map::new();
+        part.insert("text".to_string(), Value::String(text));
+        if thought {
+            part.insert("thought".to_string(), Value::Bool(true));
+        }
+        parts.push(Value::Object(part));
+        return;
+    };
+    let current = existing
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    existing.insert(
+        "text".to_string(),
+        Value::String(format!("{current}{text}")),
+    );
+}
+
+fn attach_gemini_reasoning_signature(parts: &mut Vec<Value>, signature: String) {
+    if signature.is_empty() {
+        return;
+    }
+    for part in parts.iter_mut().rev() {
+        let Some(part_object) = part.as_object_mut() else {
+            continue;
+        };
+        if is_mergeable_gemini_text_part(part_object, true) {
+            part_object.insert(
+                "thoughtSignature".to_string(),
+                Value::String(signature.clone()),
+            );
+            return;
+        }
+    }
+    parts.push(json!({
+        "text": "",
+        "thought": true,
+        "thoughtSignature": signature,
+    }));
+}
+
+fn is_mergeable_gemini_text_part(part: &Map<String, Value>, thought: bool) -> bool {
+    if !part.contains_key("text") {
+        return false;
+    }
+    if part
+        .get("thought")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        != thought
+    {
+        return false;
+    }
+    part.keys().all(|key| {
+        matches!(
+            key.as_str(),
+            "text" | "thought" | "thoughtSignature" | "thought_signature"
+        )
+    })
+}
+
+fn sync_gemini_function_call_part(state: &GeminiSyncToolState) -> Value {
+    json!({
+        "functionCall": {
+            "id": if state.call_id.trim().is_empty() {
+                "call_auto_0".to_string()
+            } else {
+                state.call_id.clone()
+            },
+            "name": if state.name.trim().is_empty() {
+                "unknown".to_string()
+            } else {
+                state.name.clone()
+            },
+            "args": sync_gemini_function_args_value(&state.arguments),
+        }
+    })
+}
+
+fn sync_gemini_function_args_value(arguments: &str) -> Value {
+    match parse_json_arguments_value(arguments) {
+        Some(Value::Object(map)) => Value::Object(map),
+        Some(value) => json!({ "raw": value }),
+        None if arguments.trim().is_empty() => Value::Object(Map::new()),
+        None => json!({ "raw": arguments }),
+    }
+}
+
+fn gemini_sync_part_from_canonical_content_part(part: CanonicalContentPart) -> Value {
+    match part {
+        CanonicalContentPart::ImageUrl(url) => {
+            if let Some((mime_type, data)) = parse_data_url(url.as_str()) {
+                json!({
+                    "inlineData": {
+                        "mimeType": mime_type,
+                        "data": data,
+                    }
+                })
+            } else {
+                json!({
+                    "fileData": {
+                        "fileUri": url.clone(),
+                        "mimeType": guess_media_type_from_reference(url.as_str(), "image/jpeg"),
+                    }
+                })
+            }
+        }
+        CanonicalContentPart::File {
+            file_data,
+            reference,
+            mime_type,
+            ..
+        } => {
+            if let Some(file_data) = file_data {
+                if let Some((mime_type, data)) = parse_data_url(file_data.as_str()) {
+                    json!({
+                        "inlineData": {
+                            "mimeType": mime_type,
+                            "data": data,
+                        }
+                    })
+                } else {
+                    json!({ "text": "[File]" })
+                }
+            } else if let Some(reference) = reference {
+                json!({
+                    "fileData": {
+                        "fileUri": reference.clone(),
+                        "mimeType": mime_type.unwrap_or_else(|| {
+                            guess_media_type_from_reference(reference.as_str(), "application/octet-stream")
+                        }),
+                    }
+                })
+            } else {
+                json!({ "text": "[File]" })
+            }
+        }
+        CanonicalContentPart::Audio { data, format } => json!({
+            "inlineData": {
+                "mimeType": format!("audio/{format}"),
+                "data": data,
+            }
+        }),
+    }
+}
+
+fn gemini_usage_metadata_from_canonical(usage: CanonicalUsage) -> Value {
+    json!({
+        "promptTokenCount": usage.input_tokens,
+        "candidatesTokenCount": usage.output_tokens,
+        "totalTokenCount": usage.total_tokens,
+    })
+}
+
+fn parse_data_url(value: &str) -> Option<(String, String)> {
+    let rest = value.strip_prefix("data:")?;
+    let (meta, data) = rest.split_once(',')?;
+    let mime_type = meta.strip_suffix(";base64")?;
+    if mime_type.trim().is_empty() || data.trim().is_empty() {
+        return None;
+    }
+    Some((mime_type.to_string(), data.to_string()))
+}
+
+fn guess_media_type_from_reference(reference: &str, default_mime: &str) -> String {
+    let normalized = reference
+        .split('?')
+        .next()
+        .unwrap_or(reference)
+        .to_ascii_lowercase();
+    if normalized.ends_with(".png") {
+        "image/png".to_string()
+    } else if normalized.ends_with(".gif") {
+        "image/gif".to_string()
+    } else if normalized.ends_with(".webp") {
+        "image/webp".to_string()
+    } else if normalized.ends_with(".jpg") || normalized.ends_with(".jpeg") {
+        "image/jpeg".to_string()
+    } else if normalized.ends_with(".pdf") {
+        "application/pdf".to_string()
+    } else {
+        default_mime.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
+        aggregate_claude_stream_sync_response, aggregate_gemini_stream_sync_response,
         maybe_build_openai_chat_cross_format_sync_product_from_normalized_payload,
         maybe_build_openai_cli_cross_format_sync_product_from_normalized_payload,
         maybe_build_openai_cli_same_family_sync_body_from_normalized_payload,
@@ -1777,6 +2150,104 @@ mod tests {
     };
     use base64::Engine as _;
     use serde_json::json;
+
+    #[test]
+    fn aggregates_claude_stream_thinking_signatures_into_sync_body() {
+        let body = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_123\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"step by step\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig_123\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        let aggregated =
+            aggregate_claude_stream_sync_response(body.as_bytes()).expect("body should aggregate");
+
+        assert_eq!(aggregated["content"][0]["type"], "thinking");
+        assert_eq!(aggregated["content"][0]["thinking"], "step by step");
+        assert_eq!(aggregated["content"][0]["signature"], "sig_123");
+        assert_eq!(aggregated["usage"]["output_tokens"], 2);
+    }
+
+    #[test]
+    fn aggregates_gemini_stream_deltas_media_and_signatures_into_sync_body() {
+        let body = concat!(
+            "data: {\"responseId\":\"resp_gem_stream_123\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"rea\",\"thought\":true}]}}]}\n\n",
+            "data: {\"responseId\":\"resp_gem_stream_123\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"son\",\"thought\":true}]}}]}\n\n",
+            "data: {\"responseId\":\"resp_gem_stream_123\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"\",\"thought\":true,\"thoughtSignature\":\"sig_123\"}]}}]}\n\n",
+            "data: {\"responseId\":\"resp_gem_stream_123\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"inlineData\":{\"mimeType\":\"image/png\",\"data\":\"iVBORw0KGgo=\"}}]}}]}\n\n",
+            "data: {\"responseId\":\"resp_gem_stream_123\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":3,\"totalTokenCount\":5}}\n\n",
+        );
+
+        let aggregated =
+            aggregate_gemini_stream_sync_response(body.as_bytes()).expect("body should aggregate");
+
+        assert_eq!(aggregated["responseId"], "resp_gem_stream_123");
+        assert_eq!(
+            aggregated["candidates"][0]["content"]["parts"][0]["text"],
+            "reason"
+        );
+        assert_eq!(
+            aggregated["candidates"][0]["content"]["parts"][0]["thoughtSignature"],
+            "sig_123"
+        );
+        assert_eq!(
+            aggregated["candidates"][0]["content"]["parts"][1]["inlineData"]["mimeType"],
+            "image/png"
+        );
+        assert_eq!(aggregated["candidates"][0]["finishReason"], "STOP");
+        assert_eq!(aggregated["usageMetadata"]["totalTokenCount"], 5);
+    }
+
+    #[test]
+    fn builds_openai_chat_cross_format_sync_product_from_gemini_stream_with_media_and_signature() {
+        let body = concat!(
+            "data: {\"responseId\":\"resp_gem_stream_456\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"thinking\",\"thought\":true}]}}]}\n\n",
+            "data: {\"responseId\":\"resp_gem_stream_456\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"\",\"thought\":true,\"thoughtSignature\":\"sig_456\"}]}}]}\n\n",
+            "data: {\"responseId\":\"resp_gem_stream_456\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"inlineData\":{\"mimeType\":\"image/png\",\"data\":\"iVBORw0KGgo=\"}}]}}]}\n\n",
+            "data: {\"responseId\":\"resp_gem_stream_456\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":4,\"candidatesTokenCount\":2,\"totalTokenCount\":6}}\n\n",
+        );
+        let report_context = json!({
+            "provider_api_format": "gemini:chat",
+            "client_api_format": "openai:chat",
+            "mapped_model": "gemini-2.5-pro",
+        });
+
+        let product = maybe_build_standard_cross_format_sync_product_from_normalized_payload(
+            "openai_chat_sync_finalize",
+            200,
+            Some(&report_context),
+            None,
+            Some(&base64::engine::general_purpose::STANDARD.encode(body)),
+        )
+        .expect("product build should succeed")
+        .expect("product should exist");
+
+        assert_eq!(
+            product.provider_body_json["candidates"][0]["content"]["parts"][0]["thoughtSignature"],
+            "sig_456"
+        );
+        assert_eq!(
+            product.client_body_json["choices"][0]["message"]["reasoning_parts"][0]["signature"],
+            "sig_456"
+        );
+        assert_eq!(
+            product.client_body_json["choices"][0]["message"]["content"][0]["type"],
+            "image_url"
+        );
+        assert_eq!(
+            product.client_body_json["choices"][0]["message"]["content"][0]["image_url"]["url"],
+            "data:image/png;base64,iVBORw0KGgo="
+        );
+    }
 
     #[test]
     fn builds_standard_cross_format_sync_product_from_normalized_stream_payload() {

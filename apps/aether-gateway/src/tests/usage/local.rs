@@ -36,7 +36,7 @@ where
     let mut stored = None;
     // Usage terminal events are written on a shared background runtime; under full-suite parallel
     // load they can lag noticeably behind the request/response assertion path.
-    let timeout = std::time::Duration::from_secs(30);
+    let timeout = std::time::Duration::from_secs(60);
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         stored = repository

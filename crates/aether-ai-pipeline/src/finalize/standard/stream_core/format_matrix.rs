@@ -697,6 +697,63 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_gemini_inline_image_streams_to_claude_image_blocks() {
+        let report_context = report_context("gemini:chat", "claude:chat");
+        let mut matrix = StreamingStandardFormatMatrix::default();
+        let output = matrix
+            .transform_line(
+                &report_context,
+                data_line(json!({
+                    "responseId": "resp_media_123",
+                    "modelVersion": "gemini-2.5-pro",
+                    "candidates": [{
+                        "index": 0,
+                        "content": {
+                            "parts": [
+                                { "inlineData": { "mimeType": "image/png", "data": "iVBORw0KGgo=" } }
+                            ]
+                        }
+                    }]
+                })),
+            )
+            .expect("image chunk should rewrite");
+        let sse = String::from_utf8(output).expect("sse should be utf8");
+
+        assert!(sse.contains("event: message_start"));
+        assert!(sse.contains("\"type\":\"image\""));
+        assert!(sse.contains("\"media_type\":\"image/png\""));
+        assert!(sse.contains("\"data\":\"iVBORw0KGgo=\""));
+    }
+
+    #[test]
+    fn rewrites_claude_image_blocks_to_gemini_inline_image_streams() {
+        let report_context = report_context("claude:chat", "gemini:chat");
+        let mut matrix = StreamingStandardFormatMatrix::default();
+        let output = matrix
+            .transform_line(
+                &report_context,
+                data_line(json!({
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "iVBORw0KGgo="
+                        }
+                    }
+                })),
+            )
+            .expect("image chunk should rewrite");
+        let sse = String::from_utf8(output).expect("sse should be utf8");
+
+        assert!(
+            sse.contains("\"inlineData\":{\"mimeType\":\"image/png\",\"data\":\"iVBORw0KGgo=\"}")
+        );
+    }
+
+    #[test]
     fn terminal_observer_preserves_claude_cache_usage() {
         let report_context = report_context("claude:chat", "openai:chat");
         let mut observer = StreamingStandardTerminalObserver::default();

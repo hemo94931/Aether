@@ -11,11 +11,28 @@ pub struct CanonicalUsage {
     pub cache_read_tokens: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CanonicalContentPart {
+    ImageUrl(String),
+    File {
+        file_data: Option<String>,
+        reference: Option<String>,
+        mime_type: Option<String>,
+        filename: Option<String>,
+    },
+    Audio {
+        data: String,
+        format: String,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub enum CanonicalStreamEvent {
     Start,
     TextDelta(String),
     ReasoningDelta(String),
+    ReasoningSignature(String),
+    ContentPart(CanonicalContentPart),
     ToolCallStart {
         index: usize,
         call_id: String,

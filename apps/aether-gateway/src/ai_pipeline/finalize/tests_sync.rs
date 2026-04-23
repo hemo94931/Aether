@@ -888,6 +888,7 @@ fn converts_claude_cli_tool_use_to_openai_cli_function_call() {
                 },
                 {
                     "type": "function_call",
+                    "id": "tool_123",
                     "call_id": "tool_123",
                     "name": "read_file",
                     "arguments": "{\"path\":\"/tmp/test.txt\"}"
@@ -952,7 +953,10 @@ fn converts_gemini_cli_response_to_openai_cli_response() {
             "usage": {
                 "input_tokens": 3,
                 "output_tokens": 7,
-                "total_tokens": 10
+                "total_tokens": 10,
+                "output_tokens_details": {
+                    "reasoning_tokens": 2
+                }
             }
         })
     );
@@ -1011,6 +1015,7 @@ fn converts_gemini_cli_function_call_to_openai_cli_function_call() {
                 },
                 {
                     "type": "function_call",
+                    "id": "call_auto_1",
                     "call_id": "call_auto_1",
                     "name": "get_weather",
                     "arguments": "{\"location\":\"Tokyo\"}"
@@ -1019,7 +1024,10 @@ fn converts_gemini_cli_function_call_to_openai_cli_function_call() {
             "usage": {
                 "input_tokens": 3,
                 "output_tokens": 7,
-                "total_tokens": 10
+                "total_tokens": 10,
+                "output_tokens_details": {
+                    "reasoning_tokens": 2
+                }
             }
         })
     );

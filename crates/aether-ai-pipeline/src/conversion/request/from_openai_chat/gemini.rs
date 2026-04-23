@@ -39,7 +39,7 @@ pub fn convert_openai_chat_request_to_gemini_request(
                 "user" => {
                     let parts = convert_openai_content_to_gemini_parts(
                         message_object.get("content"),
-                        true,
+                        OpenAiToGeminiRole::User,
                     )?;
                     if !parts.is_empty() {
                         contents.push(json!({
@@ -51,8 +51,12 @@ pub fn convert_openai_chat_request_to_gemini_request(
                 "assistant" => {
                     let mut parts = convert_openai_content_to_gemini_parts(
                         message_object.get("content"),
-                        false,
+                        OpenAiToGeminiRole::Assistant,
                     )?;
+                    let reasoning_parts = extract_openai_reasoning_to_gemini_parts(message_object);
+                    if !reasoning_parts.is_empty() {
+                        parts.splice(0..0, reasoning_parts);
+                    }
                     if let Some(tool_calls) =
                         message_object.get("tool_calls").and_then(Value::as_array)
                     {
@@ -249,14 +253,105 @@ pub fn convert_openai_chat_request_to_gemini_request(
                     .or_insert(thinking_config);
             }
         }
+        if let Some(gemini) = extra_body.get("gemini").and_then(Value::as_object) {
+            let existing = output
+                .entry("generationConfig".to_string())
+                .or_insert_with(|| Value::Object(Map::new()))
+                .as_object_mut()?;
+            if let Some(extra_config) = gemini
+                .get("generation_config_extra")
+                .or_else(|| gemini.get("generationConfigExtra"))
+                .and_then(Value::as_object)
+            {
+                for (key, value) in extra_config {
+                    existing.entry(key.clone()).or_insert_with(|| value.clone());
+                }
+            }
+            if let Some(safety_settings) = gemini
+                .get("safety_settings")
+                .or_else(|| gemini.get("safetySettings"))
+                .cloned()
+            {
+                output.insert("safetySettings".to_string(), safety_settings);
+            }
+            if let Some(cached_content) = gemini
+                .get("cached_content")
+                .or_else(|| gemini.get("cachedContent"))
+                .cloned()
+            {
+                output.insert("cachedContent".to_string(), cached_content);
+            }
+        }
     }
 
     Some(Value::Object(output))
 }
 
+fn extract_openai_reasoning_to_gemini_parts(message: &Map<String, Value>) -> Vec<Value> {
+    let mut parts = Vec::new();
+    if let Some(reasoning_parts) = message.get("reasoning_parts").and_then(Value::as_array) {
+        for reasoning_part in reasoning_parts {
+            let Some(reasoning_object) = reasoning_part.as_object() else {
+                continue;
+            };
+            if reasoning_object
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value != "thinking")
+            {
+                continue;
+            }
+            let thinking = reasoning_object
+                .get("thinking")
+                .or_else(|| reasoning_object.get("text"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default();
+            if thinking.is_empty() {
+                continue;
+            }
+            let mut part = Map::new();
+            part.insert("text".to_string(), Value::String(thinking.to_string()));
+            part.insert("thought".to_string(), Value::Bool(true));
+            if let Some(signature) = reasoning_object
+                .get("signature")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+            {
+                part.insert(
+                    "thoughtSignature".to_string(),
+                    Value::String(signature.to_string()),
+                );
+            }
+            parts.push(Value::Object(part));
+        }
+    }
+    if !parts.is_empty() {
+        return parts;
+    }
+    if let Some(reasoning_content) = message
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(json!({
+            "text": reasoning_content,
+            "thought": true,
+        }));
+    }
+    parts
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenAiToGeminiRole {
+    User,
+    Assistant,
+}
+
 fn convert_openai_content_to_gemini_parts(
     content: Option<&Value>,
-    allow_images: bool,
+    _role: OpenAiToGeminiRole,
 ) -> Option<Vec<Value>> {
     match content {
         None | Some(Value::Null) => Some(Vec::new()),
@@ -277,14 +372,14 @@ fn convert_openai_content_to_gemini_parts(
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 match part_type {
-                    "text" | "input_text" => {
+                    "text" | "input_text" | "output_text" => {
                         if let Some(text) = part_object.get("text").and_then(Value::as_str) {
                             if !text.trim().is_empty() {
                                 converted.push(json!({ "text": text }));
                             }
                         }
                     }
-                    "image_url" | "input_image" if allow_images => {
+                    "image_url" | "input_image" | "output_image" => {
                         let image = part_object
                             .get("image_url")
                             .and_then(|value| {
@@ -334,6 +429,39 @@ fn convert_openai_content_to_gemini_parts(
                                     }
                                 }));
                             }
+                        } else if let Some(file_id) = file_object
+                            .get("file_id")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                        {
+                            converted.push(json!({
+                                "text": format!("[File: {file_id}]"),
+                            }));
+                        }
+                    }
+                    "input_audio" => {
+                        let audio_object = part_object
+                            .get("input_audio")
+                            .and_then(Value::as_object)
+                            .unwrap_or(part_object);
+                        let data = audio_object
+                            .get("data")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty());
+                        let format = audio_object
+                            .get("format")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty());
+                        if let (Some(data), Some(format)) = (data, format) {
+                            converted.push(json!({
+                                "inlineData": {
+                                    "mimeType": format!("audio/{format}"),
+                                    "data": data,
+                                }
+                            }));
                         }
                     }
                     _ => {}
@@ -1136,5 +1264,144 @@ mod tests {
             .expect("tools should be array");
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0], json!({ "googleSearch": {} }));
+    }
+
+    #[test]
+    fn converts_openai_reasoning_multimodal_and_passthrough_to_gemini_request() {
+        let request = json!({
+            "model": "gpt-5.4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "Read this" },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/png;base64,iVBORw0KGgo="
+                            }
+                        },
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_data": "data:application/pdf;base64,JVBERi0x"
+                            }
+                        },
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": "SUQz",
+                                "format": "mp3"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "role": "assistant",
+                    "reasoning_content": "step by step",
+                    "reasoning_parts": [
+                        {
+                            "type": "thinking",
+                            "thinking": "step by step",
+                            "signature": "sig_123"
+                        }
+                    ],
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/cat.png"
+                            }
+                        },
+                        {
+                            "type": "file",
+                            "file": { "file_id": "file_123" }
+                        },
+                        { "type": "text", "text": "done" }
+                    ],
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "arguments": "\"tokyo\""
+                        }
+                    }]
+                }
+            ],
+            "reasoning_effort": "high",
+            "extra_body": {
+                "google": {
+                    "response_modalities": ["TEXT", "IMAGE"],
+                    "thinking_config": {
+                        "includeThoughts": true,
+                        "thinkingBudget": 2048
+                    }
+                },
+                "gemini": {
+                    "generation_config_extra": {
+                        "presencePenalty": 0.5
+                    },
+                    "safety_settings": [
+                        { "category": "HARM_CATEGORY_HATE_SPEECH" }
+                    ],
+                    "cached_content": "cached/abc"
+                }
+            }
+        });
+
+        let converted =
+            convert_openai_chat_request_to_gemini_request(&request, "gemini-2.5-pro", false)
+                .expect("request should convert");
+
+        assert_eq!(
+            converted["contents"][0],
+            json!({
+                "role": "user",
+                "parts": [
+                    { "text": "Read this" },
+                    { "inlineData": { "mimeType": "image/png", "data": "iVBORw0KGgo=" } },
+                    { "inlineData": { "mimeType": "application/pdf", "data": "JVBERi0x" } },
+                    { "inlineData": { "mimeType": "audio/mp3", "data": "SUQz" } }
+                ]
+            })
+        );
+        assert_eq!(converted["contents"][1]["role"], "model");
+        assert_eq!(converted["contents"][1]["parts"][0]["thought"], true);
+        assert_eq!(
+            converted["contents"][1]["parts"][0]["thoughtSignature"],
+            "sig_123"
+        );
+        assert_eq!(
+            converted["contents"][1]["parts"][1],
+            json!({
+                "fileData": {
+                    "fileUri": "https://example.com/cat.png",
+                    "mimeType": "image/png"
+                }
+            })
+        );
+        assert_eq!(
+            converted["contents"][1]["parts"][2]["text"],
+            "[File: file_123]"
+        );
+        assert_eq!(
+            converted["contents"][1]["parts"][4]["functionCall"]["args"],
+            json!({ "raw": "tokyo" })
+        );
+        assert_eq!(
+            converted["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            4096
+        );
+        assert_eq!(
+            converted["generationConfig"]["responseModalities"],
+            json!(["TEXT", "IMAGE"])
+        );
+        assert_eq!(converted["generationConfig"]["presencePenalty"], 0.5);
+        assert_eq!(
+            converted["safetySettings"],
+            json!([{ "category": "HARM_CATEGORY_HATE_SPEECH" }])
+        );
+        assert_eq!(converted["cachedContent"], "cached/abc");
     }
 }
