@@ -693,11 +693,23 @@ pub fn build_terminal_usage_context_seed(
 pub fn build_sync_terminal_usage_payload_seed(
     payload: &GatewaySyncReportRequest,
 ) -> SyncTerminalUsagePayloadSeed {
-    let provider_response_full = payload
-        .body_json
+    let upstream_is_stream = payload
+        .report_context
         .as_ref()
-        .cloned()
-        .or_else(|| decode_body_for_storage(payload.body_base64.as_deref()));
+        .and_then(Value::as_object)
+        .and_then(|context| context.get("upstream_is_stream"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let provider_response_full = if upstream_is_stream && payload.body_base64.is_some() {
+        decode_body_for_storage(payload.body_base64.as_deref())
+            .or_else(|| payload.body_json.as_ref().cloned())
+    } else {
+        payload
+            .body_json
+            .as_ref()
+            .cloned()
+            .or_else(|| decode_body_for_storage(payload.body_base64.as_deref()))
+    };
     let has_provider_response = provider_response_full.is_some();
     let client_response = payload.client_body_json.as_ref().cloned();
     let has_client_response = client_response.is_some();
@@ -1506,6 +1518,18 @@ fn build_runtime_request_metadata_seed_from_parts(
     let mut metadata = Map::new();
     if let Some(trace_id) = context_string(context, "trace_id") {
         metadata.insert("trace_id".to_string(), Value::String(trace_id));
+    }
+    if let Some(client_requested_stream) = context_bool(context, "client_requested_stream") {
+        metadata.insert(
+            "client_requested_stream".to_string(),
+            Value::Bool(client_requested_stream),
+        );
+    }
+    if let Some(upstream_is_stream) = context_bool(context, "upstream_is_stream") {
+        metadata.insert(
+            "upstream_is_stream".to_string(),
+            Value::Bool(upstream_is_stream),
+        );
     }
     let provider_source_bytes = provider_request_body_base64.and_then(decoded_base64_len_hint);
     append_runtime_body_capture_metadata(
@@ -2956,6 +2980,123 @@ mod tests {
                 "id": "chatcmpl_456",
                 "object": "chat.completion"
             }))
+        );
+    }
+
+    #[test]
+    fn sync_terminal_usage_prefers_upstream_stream_body_over_aggregated_sync_body() {
+        let sse_body = concat!(
+            "event: response.created\n",
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_sync_stream_123\",\"object\":\"response\",\"model\":\"gpt-5.4\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello from upstream stream\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_sync_stream_123\",\"object\":\"response\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":5,\"total_tokens\":8}}}\n\n",
+            "data: [DONE]\n",
+        );
+        let plan = ExecutionPlan {
+            request_id: "req-sync-upstream-stream-1".to_string(),
+            candidate_id: Some("cand-sync-upstream-stream-1".to_string()),
+            provider_name: Some("OpenAI".to_string()),
+            provider_id: "provider-1".to_string(),
+            endpoint_id: "endpoint-1".to_string(),
+            key_id: "key-1".to_string(),
+            method: "POST".to_string(),
+            url: "https://example.com/v1/responses".to_string(),
+            headers: BTreeMap::new(),
+            content_type: None,
+            content_encoding: None,
+            body: RequestBody {
+                json_body: None,
+                body_bytes_b64: None,
+                body_ref: None,
+            },
+            stream: false,
+            client_api_format: "openai:cli".to_string(),
+            provider_api_format: "openai:cli".to_string(),
+            model_name: Some("gpt-5.4".to_string()),
+            proxy: None,
+            tls_profile: None,
+            timeouts: None,
+        };
+        let payload = GatewaySyncReportRequest {
+            trace_id: "trace-sync-upstream-stream-1".to_string(),
+            report_kind: "openai_cli_sync_success".to_string(),
+            report_context: Some(json!({
+                "client_api_format": "openai:cli",
+                "provider_api_format": "openai:cli",
+                "upstream_is_stream": true
+            })),
+            status_code: 200,
+            headers: BTreeMap::from([(
+                "content-type".to_string(),
+                "text/event-stream".to_string(),
+            )]),
+            body_json: Some(json!({
+                "id": "resp_sync_stream_123",
+                "object": "response",
+                "status": "completed",
+                "output": [],
+                "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 1,
+                    "total_tokens": 2
+                }
+            })),
+            client_body_json: Some(json!({
+                "id": "resp_sync_stream_123",
+                "object": "response",
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "Hello from upstream stream"
+                    }]
+                }],
+                "usage": {
+                    "input_tokens": 3,
+                    "output_tokens": 5,
+                    "total_tokens": 8
+                }
+            })),
+            body_base64: Some(base64::engine::general_purpose::STANDARD.encode(sse_body)),
+            telemetry: None,
+        };
+
+        let event =
+            build_sync_terminal_usage_event(&plan, payload.report_context.as_ref(), &payload)
+                .expect("usage event should build");
+
+        assert_eq!(event.data.input_tokens, Some(3));
+        assert_eq!(event.data.output_tokens, Some(5));
+        assert_eq!(event.data.total_tokens, Some(8));
+        assert_eq!(
+            event
+                .data
+                .response_body
+                .as_ref()
+                .and_then(|value| value.get("chunks"))
+                .and_then(Value::as_array)
+                .and_then(|chunks| chunks.get(1))
+                .and_then(|chunk| chunk.get("type"))
+                .and_then(Value::as_str),
+            Some("response.output_text.delta")
+        );
+        assert_eq!(
+            event.data.client_response_body.as_ref().and_then(|value| {
+                value
+                    .get("output")
+                    .and_then(Value::as_array)
+                    .and_then(|output| output.first())
+                    .and_then(|item| item.get("content"))
+                    .and_then(Value::as_array)
+                    .and_then(|content| content.first())
+                    .and_then(|part| part.get("text"))
+                    .and_then(Value::as_str)
+            }),
+            Some("Hello from upstream stream")
         );
     }
 

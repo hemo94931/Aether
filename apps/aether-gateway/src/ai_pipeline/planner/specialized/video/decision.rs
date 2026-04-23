@@ -70,6 +70,7 @@ pub(super) async fn maybe_build_local_video_create_decision_payload_for_candidat
         original_request_body_json: Some(body_json),
         original_request_body_base64: None,
         client_requested_stream: false,
+        upstream_is_stream: false,
         has_envelope: false,
         needs_conversion: false,
         extra_fields,

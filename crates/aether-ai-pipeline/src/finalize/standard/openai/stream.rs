@@ -568,7 +568,7 @@ impl OpenAICliProviderState {
             "response.created" | "response.in_progress" => {
                 self.ensure_started(report_context, &mut out);
             }
-            "response.output_text.delta" => {
+            "response.output_text.delta" | "response.outtext.delta" => {
                 let piece = match value.get("delta") {
                     Some(Value::String(text)) => text.clone(),
                     Some(Value::Object(delta)) => delta
@@ -1906,6 +1906,48 @@ mod tests {
                     ..
                 }),
             } if reason == "tool_calls"
+        )));
+    }
+
+    #[test]
+    fn openai_cli_provider_state_accepts_legacy_outtext_delta_alias() {
+        let mut state = OpenAICliProviderState::default();
+        let report_context = json!({});
+        let mut frames = Vec::new();
+
+        frames.extend(
+            state
+                .push_line(
+                    &report_context,
+                    data_line(json!({
+                        "type": "response.created",
+                        "response": {
+                            "id": "resp_legacy_123",
+                            "model": "gpt-5.4",
+                        }
+                    })),
+                )
+                .expect("created should parse"),
+        );
+        frames.extend(
+            state
+                .push_line(
+                    &report_context,
+                    data_line(json!({
+                        "type": "response.outtext.delta",
+                        "response_id": "resp_legacy_123",
+                        "output_index": 0,
+                        "item_id": "resp_legacy_123_msg",
+                        "content_index": 0,
+                        "delta": "Hello from legacy alias",
+                    })),
+                )
+                .expect("legacy text delta should parse"),
+        );
+
+        assert!(frames.iter().any(|frame| matches!(
+            frame.event,
+            CanonicalStreamEvent::TextDelta(ref text) if text == "Hello from legacy alias"
         )));
     }
 

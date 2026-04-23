@@ -79,6 +79,7 @@ pub(super) async fn maybe_build_local_openai_image_decision_payload_for_candidat
         original_request_body_json: Some(body_json),
         original_request_body_base64: body_base64,
         client_requested_stream: spec_metadata.require_streaming,
+        upstream_is_stream: spec_metadata.require_streaming,
         has_envelope: false,
         needs_conversion: false,
         extra_fields,

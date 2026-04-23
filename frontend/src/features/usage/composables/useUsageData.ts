@@ -384,6 +384,42 @@ export function useUsageData(options: UseUsageDataOptions) {
 
       // 如果需要保护状态，说明本地数据比后端更新，应该保留本地的所有实时更新字段
       if (protectStatus) {
+        const recordUpstreamIsStream = typeof record.upstream_is_stream === 'boolean'
+          ? record.upstream_is_stream
+          : typeof record.is_stream === 'boolean'
+            ? record.is_stream
+            : undefined
+        const existingUpstreamIsStream = typeof existing.upstream_is_stream === 'boolean'
+          ? existing.upstream_is_stream
+          : typeof existing.is_stream === 'boolean'
+            ? existing.is_stream
+            : undefined
+        const upstreamIsStream = recordUpstreamIsStream ?? existingUpstreamIsStream ?? false
+
+        const recordClientRequestedStream = typeof record.client_requested_stream === 'boolean'
+          ? record.client_requested_stream
+          : typeof record.client_is_stream === 'boolean'
+            ? record.client_is_stream
+            : undefined
+        const existingClientRequestedStream = typeof existing.client_requested_stream === 'boolean'
+          ? existing.client_requested_stream
+          : typeof existing.client_is_stream === 'boolean'
+            ? existing.client_is_stream
+            : undefined
+        const clientRequestedStream = recordClientRequestedStream ?? existingClientRequestedStream
+
+        const recordClientIsStream = typeof record.client_is_stream === 'boolean'
+          ? record.client_is_stream
+          : typeof record.client_requested_stream === 'boolean'
+            ? record.client_requested_stream
+            : undefined
+        const existingClientIsStream = typeof existing.client_is_stream === 'boolean'
+          ? existing.client_is_stream
+          : typeof existing.client_requested_stream === 'boolean'
+            ? existing.client_requested_stream
+            : undefined
+        const clientIsStream = recordClientIsStream ?? existingClientIsStream ?? clientRequestedStream
+
         return {
           ...record,
           // 保留本地的状态和所有通过轮询更新的字段
@@ -404,6 +440,10 @@ export function useUsageData(options: UseUsageDataOptions) {
           actual_cost: existing.actual_cost ?? record.actual_cost,
           response_time_ms: existing.response_time_ms ?? record.response_time_ms,
           first_byte_time_ms: existing.first_byte_time_ms ?? record.first_byte_time_ms,
+          is_stream: upstreamIsStream,
+          upstream_is_stream: upstreamIsStream,
+          client_requested_stream: clientRequestedStream,
+          client_is_stream: clientIsStream,
           api_format: existing.api_format || record.api_format,
           endpoint_api_format: existing.endpoint_api_format || record.endpoint_api_format,
           has_format_conversion: existing.has_format_conversion ?? record.has_format_conversion,

@@ -19,8 +19,9 @@ pub(crate) use self::adaptation::{
 };
 pub(crate) use self::finalize::common::LocalCoreSyncFinalizeOutcome;
 pub(crate) use self::finalize::internal::{
-    maybe_build_stream_response_rewriter, maybe_build_sync_finalize_outcome,
-    maybe_compile_sync_finalize_response,
+    maybe_bridge_standard_sync_json_to_stream, maybe_build_stream_response_rewriter,
+    maybe_build_sync_finalize_outcome, maybe_compile_sync_finalize_response,
+    SyncToStreamBridgeOutcome,
 };
 pub(crate) use self::planner::{
     build_gemini_stream_plan_from_decision, build_gemini_sync_plan_from_decision,

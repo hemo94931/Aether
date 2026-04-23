@@ -449,12 +449,14 @@ async function pollActiveRequests() {
           record.is_stream = update.upstream_is_stream
         } else if (typeof update.is_stream === 'boolean') {
           record.is_stream = update.is_stream
+          record.upstream_is_stream = update.is_stream
         }
         if (typeof update.client_is_stream === 'boolean') {
           record.client_is_stream = update.client_is_stream
           record.client_requested_stream = update.client_is_stream
         } else if (typeof update.client_requested_stream === 'boolean') {
           record.client_requested_stream = update.client_requested_stream
+          record.client_is_stream = update.client_requested_stream
         }
         // API 格式/格式转换：streaming 时已可确定，轮询时同步更新
         if (update.api_format != null) record.api_format = update.api_format

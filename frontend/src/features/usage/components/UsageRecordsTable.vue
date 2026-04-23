@@ -233,6 +233,17 @@
               取消
             </Badge>
             <Badge
+              v-else-if="getStreamModeSegments(record).hasConversion"
+              :variant="getStreamModeSegments(record).client === '流式' ? 'secondary' : 'outline'"
+              :class="getStreamModeSegments(record).client === '流式'
+                ? 'whitespace-nowrap text-[10px] px-1.5 h-4 leading-4 inline-flex items-center gap-0.5'
+                : 'whitespace-nowrap border-border/60 text-muted-foreground text-[10px] px-1.5 h-4 leading-4 inline-flex items-center gap-0.5'"
+            >
+              <span>{{ getStreamModeSegments(record).client }}</span>
+              <span class="opacity-60">→</span>
+              <span>{{ getStreamModeSegments(record).upstream }}</span>
+            </Badge>
+            <Badge
               v-else
               :variant="getUpstreamStream(record) ? 'secondary' : 'outline'"
               :class="getUpstreamStream(record)
@@ -530,6 +541,17 @@
               已取消
             </Badge>
             <Badge
+              v-else-if="getStreamModeSegments(record).hasConversion"
+              :variant="getStreamModeSegments(record).client === '流式' ? 'secondary' : 'outline'"
+              :class="getStreamModeSegments(record).client === '流式'
+                ? 'whitespace-nowrap inline-flex items-center gap-1'
+                : 'whitespace-nowrap border-border/60 text-muted-foreground inline-flex items-center gap-1'"
+            >
+              <span>{{ getStreamModeSegments(record).client }}</span>
+              <span class="opacity-60">→</span>
+              <span>{{ getStreamModeSegments(record).upstream }}</span>
+            </Badge>
+            <Badge
               v-else
               :variant="getUpstreamStream(record) ? 'secondary' : 'outline'"
               :class="getUpstreamStream(record)
@@ -672,7 +694,8 @@ import {
   formatUsageStreamLabel,
   isUsageRecordFailed,
   isUsageUpstreamStream,
-  resolveDisplayRequestStatus
+  resolveDisplayRequestStatus,
+  resolveUsageStreamLabelSegments
 } from '../utils/status'
 import { useRowClick } from '@/composables/useRowClick'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
@@ -761,6 +784,10 @@ function getDisplayStatus(record: UsageRecord) {
 
 function getStreamModeLabel(record: UsageRecord): string {
   return formatUsageStreamLabel(record)
+}
+
+function getStreamModeSegments(record: UsageRecord) {
+  return resolveUsageStreamLabelSegments(record)
 }
 
 function getUpstreamStream(record: UsageRecord): boolean {

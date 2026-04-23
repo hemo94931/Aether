@@ -20,9 +20,9 @@ pub(crate) use crate::ai_pipeline::{
     set_local_openai_chat_execution_exhausted_diagnostic,
 };
 pub(crate) use crate::ai_pipeline::{
-    maybe_build_provider_private_stream_normalizer, maybe_build_stream_response_rewriter,
-    maybe_build_sync_finalize_outcome, maybe_compile_sync_finalize_response,
-    LocalCoreSyncFinalizeOutcome,
+    maybe_bridge_standard_sync_json_to_stream, maybe_build_provider_private_stream_normalizer,
+    maybe_build_stream_response_rewriter, maybe_build_sync_finalize_outcome,
+    maybe_compile_sync_finalize_response, LocalCoreSyncFinalizeOutcome,
 };
 pub(crate) use aether_ai_pipeline::api::{
     build_core_error_body_for_client_format, core_error_background_report_kind,
@@ -96,4 +96,20 @@ pub(crate) fn supports_sync_scheduler_decision_kind(plan_kind: &str) -> bool {
 
 pub(crate) fn supports_stream_scheduler_decision_kind(plan_kind: &str) -> bool {
     aether_ai_pipeline::api::supports_stream_scheduler_decision_kind(plan_kind)
+}
+
+pub(crate) fn aggregate_openai_chat_stream_sync_response(body: &[u8]) -> Option<serde_json::Value> {
+    aether_ai_pipeline::api::aggregate_openai_chat_stream_sync_response(body)
+}
+
+pub(crate) fn aggregate_openai_cli_stream_sync_response(body: &[u8]) -> Option<serde_json::Value> {
+    aether_ai_pipeline::api::aggregate_openai_cli_stream_sync_response(body)
+}
+
+pub(crate) fn aggregate_claude_stream_sync_response(body: &[u8]) -> Option<serde_json::Value> {
+    aether_ai_pipeline::api::aggregate_claude_stream_sync_response(body)
+}
+
+pub(crate) fn aggregate_gemini_stream_sync_response(body: &[u8]) -> Option<serde_json::Value> {
+    aether_ai_pipeline::api::aggregate_gemini_stream_sync_response(body)
 }

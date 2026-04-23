@@ -178,7 +178,57 @@ fn aggregates_openai_cli_stream_completed_event_to_final_response() {
             "object": "response",
             "model": "gpt-5",
             "status": "completed",
-            "output": [],
+            "output": [{
+                "type": "message",
+                "id": "resp_123_msg",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{
+                    "type": "output_text",
+                    "text": "Hello",
+                    "annotations": []
+                }]
+            }],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "total_tokens": 3,
+            },
+        })
+    );
+}
+
+#[test]
+fn aggregates_openai_cli_stream_tool_call_events_to_final_response() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_tool_123\",\"object\":\"response\",\"model\":\"gpt-5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"call_123\",\"call_id\":\"call_123\",\"name\":\"get_weather\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\n",
+        "event: response.function_call_arguments.delta\n",
+        "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"item_id\":\"call_123\",\"call_id\":\"call_123\",\"delta\":\"{\\\"city\\\":\\\"SF\\\"}\"}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tool_123\",\"object\":\"response\",\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n",
+    );
+
+    let result =
+        aggregate_openai_cli_stream_sync_response(body.as_bytes()).expect("result should exist");
+
+    assert_eq!(
+        result,
+        json!({
+            "id": "resp_tool_123",
+            "object": "response",
+            "model": "gpt-5",
+            "status": "completed",
+            "output": [{
+                "type": "function_call",
+                "id": "call_123",
+                "call_id": "call_123",
+                "name": "get_weather",
+                "arguments": "{\"city\":\"SF\"}",
+                "status": "in_progress",
+            }],
             "usage": {
                 "input_tokens": 1,
                 "output_tokens": 2,
@@ -1326,6 +1376,56 @@ fn local_finalize_handles_openai_compact_openai_family_stream_response_even_when
     let provider_body = report.body_json.expect("provider body should exist");
     assert_eq!(provider_body["object"], "response");
     assert_eq!(provider_body["status"], "completed");
+}
+
+#[test]
+fn local_finalize_preserves_provider_stream_body_for_same_format_stream_aggregated_to_sync() {
+    let body = concat!(
+        "event: response.output_text.delta\n",
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello sync\"}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cli_samefmt_stream_123\",\"object\":\"response\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_123\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello sync\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n",
+    );
+    let payload = GatewaySyncReportRequest {
+        trace_id: "trace-openai-cli-samefmt-stream-123".to_string(),
+        report_kind: "openai_cli_sync_finalize".to_string(),
+        report_context: Some(json!({
+            "client_api_format": "openai:cli",
+            "provider_api_format": "openai:cli",
+            "model": "gpt-5.4",
+            "mapped_model": "gpt-5.4",
+            "needs_conversion": false,
+            "has_envelope": false,
+            "upstream_is_stream": true,
+        })),
+        status_code: 200,
+        headers: BTreeMap::from([("content-type".to_string(), "text/event-stream".to_string())]),
+        body_json: None,
+        client_body_json: None,
+        body_base64: Some(base64::engine::general_purpose::STANDARD.encode(body.as_bytes())),
+        telemetry: None,
+    };
+
+    let outcome = maybe_build_local_core_sync_finalize_response(
+        "trace-openai-cli-samefmt-stream-123",
+        &test_decision(),
+        &payload,
+    )
+    .expect("local finalize should succeed")
+    .expect("local finalize should match");
+
+    let report = outcome
+        .background_report
+        .expect("same-format stream finalize should downgrade to success report");
+    let client_body = report.client_body_json.expect("client body should exist");
+    assert!(report.body_json.is_none());
+    assert_eq!(
+        report.body_base64,
+        Some(base64::engine::general_purpose::STANDARD.encode(body.as_bytes()))
+    );
+    assert_eq!(client_body["object"], "response");
+    assert_eq!(client_body["status"], "completed");
+    assert_eq!(client_body["output"][0]["content"][0]["text"], "Hello sync");
 }
 
 #[test]

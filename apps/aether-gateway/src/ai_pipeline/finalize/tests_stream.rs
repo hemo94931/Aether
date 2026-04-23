@@ -1,9 +1,110 @@
 use serde_json::json;
 
+use crate::ai_pipeline::maybe_bridge_standard_sync_json_to_stream;
+
 use super::maybe_build_local_stream_rewriter;
 
 fn utf8(bytes: Vec<u8>) -> String {
     String::from_utf8(bytes).expect("utf8 should decode")
+}
+
+#[test]
+fn standard_sync_bridge_converts_openai_chat_sync_json_to_openai_chat_sse() {
+    let outcome = maybe_bridge_standard_sync_json_to_stream(
+        &json!({
+            "id": "chatcmpl_sync_123",
+            "object": "chat.completion",
+            "model": "gpt-5.4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello from sync bridge"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 2,
+                "total_tokens": 3
+            }
+        }),
+        "openai:chat",
+        "openai:chat",
+        None,
+    )
+    .expect("bridge should succeed")
+    .expect("bridge should produce sse");
+
+    let output_text = utf8(outcome.sse_body);
+    assert!(output_text.contains("\"object\":\"chat.completion.chunk\""));
+    assert!(output_text.contains("\"role\":\"assistant\""));
+    assert!(output_text.contains("\"content\":\"Hello from sync bridge\""));
+    assert!(output_text.contains("\"finish_reason\":\"stop\""));
+    assert!(output_text.contains("data: [DONE]"));
+    let summary = outcome
+        .terminal_summary
+        .expect("terminal summary should exist");
+    assert_eq!(summary.response_id.as_deref(), Some("resp_sync_123"));
+    assert_eq!(summary.model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(summary.finish_reason.as_deref(), Some("stop"));
+    assert_eq!(
+        summary
+            .standardized_usage
+            .as_ref()
+            .and_then(|usage| usage.dimensions.get("total_tokens"))
+            .cloned(),
+        Some(json!(3))
+    );
+}
+
+#[test]
+fn standard_sync_bridge_converts_claude_sync_json_to_openai_cli_sse() {
+    let report_context = json!({
+        "mapped_model": "claude-sonnet-4-5",
+    });
+    let outcome = maybe_bridge_standard_sync_json_to_stream(
+        &json!({
+            "id": "msg_sync_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{
+                "type": "text",
+                "text": "Hello from Claude sync"
+            }],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 3
+            }
+        }),
+        "claude:chat",
+        "openai:cli",
+        Some(&report_context),
+    )
+    .expect("bridge should succeed")
+    .expect("bridge should produce sse");
+
+    let output_text = utf8(outcome.sse_body);
+    assert!(output_text.contains("event: response.created"));
+    assert!(output_text.contains("event: response.output_text.delta"));
+    assert!(output_text.contains("event: response.completed"));
+    assert!(output_text.contains("\"text\":\"Hello from Claude sync\""));
+    let summary = outcome
+        .terminal_summary
+        .expect("terminal summary should exist");
+    assert_eq!(summary.response_id.as_deref(), Some("msg_sync_123"));
+    assert_eq!(summary.model.as_deref(), Some("claude-sonnet-4-5"));
+    assert_eq!(summary.finish_reason.as_deref(), Some("stop"));
+    assert_eq!(
+        summary
+            .standardized_usage
+            .as_ref()
+            .and_then(|usage| usage.dimensions.get("total_tokens"))
+            .cloned(),
+        Some(json!(5))
+    );
 }
 
 #[test]

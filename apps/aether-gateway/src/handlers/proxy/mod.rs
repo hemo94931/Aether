@@ -5,10 +5,15 @@ use self::local::{
 };
 use super::internal::resolve_local_proxy_execution_path;
 pub(crate) use super::public::matches_model_mapping_for_models;
-use crate::ai_pipeline_api;
+use crate::ai_pipeline_api::{
+    aggregate_claude_stream_sync_response, aggregate_gemini_stream_sync_response,
+    aggregate_openai_chat_stream_sync_response, aggregate_openai_cli_stream_sync_response,
+    maybe_bridge_standard_sync_json_to_stream,
+};
 use crate::api::response::{
-    build_client_response, build_local_auth_rejection_response, build_local_http_error_response,
-    build_local_overloaded_response, build_local_user_rpm_limited_response,
+    build_client_response, build_client_response_from_parts, build_local_auth_rejection_response,
+    build_local_http_error_response, build_local_overloaded_response,
+    build_local_user_rpm_limited_response,
 };
 use crate::constants::{
     DEPENDENCY_REASON_HEADER, EXECUTION_PATH_CONTROL_EXECUTE_STREAM,
@@ -53,7 +58,7 @@ use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{self, header::HeaderName, header::HeaderValue, Response};
 use sha2::{Digest, Sha256};
-use std::time::Instant;
+use std::{collections::BTreeMap, time::Instant};
 use tracing::{debug, info, warn};
 
 const OPENAI_CHAT_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL: &str =
@@ -406,14 +411,232 @@ async fn maybe_forward_public_request_to_tunnel_owner(
             message: format!("owner gateway affinity forward failed: {err}"),
         })?;
 
-    let mut response =
-        build_client_response(upstream_response, &request_context.trace_id, Some(decision))?;
+    let mut response = build_sync_aware_affinity_forward_response(
+        request_context,
+        buffered_body,
+        decision,
+        upstream_response,
+    )
+    .await?;
     response.headers_mut().insert(
         HeaderName::from_static(TUNNEL_AFFINITY_OWNER_INSTANCE_HEADER),
         HeaderValue::from_str(owner.gateway_instance_id.as_str())
             .map_err(|err| GatewayError::Internal(err.to_string()))?,
     );
     Ok(Some(response))
+}
+
+fn upstream_response_is_sse(headers: &reqwest::header::HeaderMap) -> bool {
+    headers
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().contains("text/event-stream"))
+}
+
+fn collect_upstream_response_headers(
+    headers: &reqwest::header::HeaderMap,
+) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_string(),
+                value.to_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn aggregate_sync_sse_response_for_client(
+    decision: &GatewayControlDecision,
+    public_path: &str,
+    body: &[u8],
+) -> Option<serde_json::Value> {
+    let api_format = decision
+        .auth_endpoint_signature
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match api_format {
+        Some(value) if value.eq_ignore_ascii_case("openai:chat") => {
+            aggregate_openai_chat_stream_sync_response(body)
+        }
+        Some(value)
+            if value.eq_ignore_ascii_case("openai:cli")
+                || value.eq_ignore_ascii_case("openai:compact") =>
+        {
+            aggregate_openai_cli_stream_sync_response(body)
+        }
+        Some(value)
+            if value.eq_ignore_ascii_case("claude:chat")
+                || value.eq_ignore_ascii_case("claude:cli") =>
+        {
+            aggregate_claude_stream_sync_response(body)
+        }
+        Some(value)
+            if value.eq_ignore_ascii_case("gemini:chat")
+                || value.eq_ignore_ascii_case("gemini:cli") =>
+        {
+            aggregate_gemini_stream_sync_response(body)
+        }
+        _ if public_path == "/v1/chat/completions" => {
+            aggregate_openai_chat_stream_sync_response(body)
+        }
+        _ if public_path == "/v1/responses" || public_path == "/v1/responses/compact" => {
+            aggregate_openai_cli_stream_sync_response(body)
+        }
+        _ if public_path == "/v1/messages" => aggregate_claude_stream_sync_response(body),
+        _ if decision.route_family.as_deref() == Some("gemini")
+            && (public_path.contains(":generateContent")
+                || public_path.contains(":streamGenerateContent")) =>
+        {
+            aggregate_gemini_stream_sync_response(body)
+        }
+        _ => None,
+    }
+}
+
+fn build_sync_json_proxy_response(
+    status_code: u16,
+    upstream_headers: &BTreeMap<String, String>,
+    body_json: &serde_json::Value,
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+) -> Result<Response<Body>, GatewayError> {
+    let mut headers = upstream_headers.clone();
+    headers.remove("content-encoding");
+    headers.remove("content-length");
+    headers.insert("content-type".to_string(), "application/json".to_string());
+    let body_bytes =
+        serde_json::to_vec(body_json).map_err(|err| GatewayError::Internal(err.to_string()))?;
+    headers.insert("content-length".to_string(), body_bytes.len().to_string());
+    build_client_response_from_parts(
+        status_code,
+        &headers,
+        Body::from(body_bytes),
+        trace_id,
+        Some(decision),
+    )
+}
+
+fn resolve_affinity_forward_client_api_format(
+    decision: &GatewayControlDecision,
+    public_path: &str,
+) -> Option<&'static str> {
+    let api_format = decision
+        .auth_endpoint_signature
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match api_format {
+        Some(value) if value.eq_ignore_ascii_case("openai:chat") => Some("openai:chat"),
+        Some(value) if value.eq_ignore_ascii_case("openai:cli") => Some("openai:cli"),
+        Some(value) if value.eq_ignore_ascii_case("openai:compact") => Some("openai:compact"),
+        Some(value) if value.eq_ignore_ascii_case("claude:chat") => Some("claude:chat"),
+        Some(value) if value.eq_ignore_ascii_case("claude:cli") => Some("claude:cli"),
+        Some(value) if value.eq_ignore_ascii_case("gemini:chat") => Some("gemini:chat"),
+        Some(value) if value.eq_ignore_ascii_case("gemini:cli") => Some("gemini:cli"),
+        _ if public_path == "/v1/chat/completions" => Some("openai:chat"),
+        _ if public_path == "/v1/responses" => Some("openai:cli"),
+        _ if public_path == "/v1/responses/compact" => Some("openai:compact"),
+        _ if public_path == "/v1/messages" => Some("claude:chat"),
+        _ if decision.route_family.as_deref() == Some("gemini")
+            && (public_path.contains(":generateContent")
+                || public_path.contains(":streamGenerateContent")) =>
+        {
+            Some("gemini:chat")
+        }
+        _ => None,
+    }
+}
+
+fn build_stream_sse_proxy_response(
+    status_code: u16,
+    upstream_headers: &BTreeMap<String, String>,
+    sse_body: &[u8],
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+) -> Result<Response<Body>, GatewayError> {
+    let mut headers = upstream_headers.clone();
+    headers.remove("content-encoding");
+    headers.remove("content-length");
+    headers.insert("content-type".to_string(), "text/event-stream".to_string());
+    headers.insert("content-length".to_string(), sse_body.len().to_string());
+    build_client_response_from_parts(
+        status_code,
+        &headers,
+        Body::from(sse_body.to_vec()),
+        trace_id,
+        Some(decision),
+    )
+}
+
+async fn build_sync_aware_affinity_forward_response(
+    request_context: &GatewayPublicRequestContext,
+    buffered_body: Option<&Bytes>,
+    decision: &GatewayControlDecision,
+    upstream_response: reqwest::Response,
+) -> Result<Response<Body>, GatewayError> {
+    let Some(buffered_body) = buffered_body else {
+        return build_client_response(upstream_response, &request_context.trace_id, Some(decision));
+    };
+    let stream_request = request_wants_stream(request_context, buffered_body);
+    let upstream_is_sse = upstream_response_is_sse(upstream_response.headers());
+    if (!stream_request && !upstream_is_sse) || (stream_request && upstream_is_sse) {
+        return build_client_response(upstream_response, &request_context.trace_id, Some(decision));
+    }
+
+    let status_code = upstream_response.status().as_u16();
+    let headers = collect_upstream_response_headers(upstream_response.headers());
+    let body_bytes = upstream_response
+        .bytes()
+        .await
+        .map_err(|err| GatewayError::Internal(err.to_string()))?;
+    if stream_request {
+        if (200..300).contains(&status_code) {
+            if let Some(client_api_format) = resolve_affinity_forward_client_api_format(
+                decision,
+                request_context.request_path.as_str(),
+            ) {
+                if let Ok(body_json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                    if let Some(outcome) = maybe_bridge_standard_sync_json_to_stream(
+                        &body_json,
+                        client_api_format,
+                        client_api_format,
+                        None,
+                    )? {
+                        return build_stream_sse_proxy_response(
+                            status_code,
+                            &headers,
+                            &outcome.sse_body,
+                            &request_context.trace_id,
+                            decision,
+                        );
+                    }
+                }
+            }
+        }
+    } else if let Some(body_json) = aggregate_sync_sse_response_for_client(
+        decision,
+        request_context.request_path.as_str(),
+        &body_bytes,
+    ) {
+        return build_sync_json_proxy_response(
+            status_code,
+            &headers,
+            &body_json,
+            &request_context.trace_id,
+            decision,
+        );
+    }
+
+    build_client_response_from_parts(
+        status_code,
+        &headers,
+        Body::from(body_bytes),
+        &request_context.trace_id,
+        Some(decision),
+    )
 }
 
 pub(crate) async fn proxy_request(

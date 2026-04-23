@@ -1683,7 +1683,25 @@ SELECT
   NULL::json AS client_response_headers,
   NULL::json AS client_response_body,
   NULL::bytea AS client_response_body_compressed,
-  NULL::json AS request_metadata,
+  CASE
+    WHEN ("usage".request_metadata->>'client_requested_stream') IN ('true', 'false')
+      OR ("usage".request_metadata->>'upstream_is_stream') IN ('true', 'false')
+      THEN jsonb_build_object(
+        'client_requested_stream',
+        CASE
+          WHEN ("usage".request_metadata->>'client_requested_stream') IN ('true', 'false')
+            THEN ("usage".request_metadata->>'client_requested_stream')::boolean
+          ELSE NULL
+        END,
+        'upstream_is_stream',
+        CASE
+          WHEN ("usage".request_metadata->>'upstream_is_stream') IN ('true', 'false')
+            THEN ("usage".request_metadata->>'upstream_is_stream')::boolean
+          ELSE NULL
+        END
+      )::json
+    ELSE NULL::json
+  END AS request_metadata,
   NULL::varchar AS http_request_body_ref,
   NULL::varchar AS http_provider_request_body_ref,
   NULL::varchar AS http_response_body_ref,
@@ -1903,7 +1921,25 @@ SELECT
   NULL::json AS client_response_headers,
   NULL::json AS client_response_body,
   NULL::bytea AS client_response_body_compressed,
-  NULL::json AS request_metadata,
+  CASE
+    WHEN ("usage".request_metadata->>'client_requested_stream') IN ('true', 'false')
+      OR ("usage".request_metadata->>'upstream_is_stream') IN ('true', 'false')
+      THEN jsonb_build_object(
+        'client_requested_stream',
+        CASE
+          WHEN ("usage".request_metadata->>'client_requested_stream') IN ('true', 'false')
+            THEN ("usage".request_metadata->>'client_requested_stream')::boolean
+          ELSE NULL
+        END,
+        'upstream_is_stream',
+        CASE
+          WHEN ("usage".request_metadata->>'upstream_is_stream') IN ('true', 'false')
+            THEN ("usage".request_metadata->>'upstream_is_stream')::boolean
+          ELSE NULL
+        END
+      )::json
+    ELSE NULL::json
+  END AS request_metadata,
   NULL::varchar AS http_request_body_ref,
   NULL::varchar AS http_provider_request_body_ref,
   NULL::varchar AS http_response_body_ref,

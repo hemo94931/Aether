@@ -478,6 +478,70 @@ fn admin_usage_request_body_implies_default_non_stream(item: &StoredRequestUsage
     !body.contains_key("stream") && admin_usage_api_format_defaults_to_non_stream(item)
 }
 
+fn admin_usage_headers_stream_flag(headers: Option<&Value>) -> Option<bool> {
+    let object = headers.and_then(Value::as_object)?;
+    let raw = object
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("content-type"))
+        .and_then(|(_, value)| match value {
+            Value::String(text) => Some(text.as_str()),
+            Value::Array(values) => values.iter().find_map(Value::as_str),
+            _ => None,
+        })?
+        .trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let normalized = raw.to_ascii_lowercase();
+    Some(
+        normalized.contains("event-stream")
+            || normalized.contains("eventstream")
+            || normalized.contains("x-ndjson"),
+    )
+}
+
+fn admin_usage_body_is_sse_capture(value: Option<&Value>) -> bool {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return false;
+    };
+    object.get("chunks").and_then(Value::as_array).is_some()
+        && object
+            .get("metadata")
+            .and_then(Value::as_object)
+            .and_then(|metadata| metadata.get("stream"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
+fn admin_usage_infer_client_stream_from_captured_bodies(
+    item: &StoredRequestUsageAudit,
+) -> Option<bool> {
+    let provider_stream = admin_usage_body_is_sse_capture(item.response_body.as_ref());
+    let client_stream = admin_usage_body_is_sse_capture(item.client_response_body.as_ref());
+    if client_stream {
+        Some(true)
+    } else if provider_stream && item.client_response_body.is_some() {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn admin_usage_infer_upstream_stream_from_captured_bodies(
+    item: &StoredRequestUsageAudit,
+) -> Option<bool> {
+    let provider_stream = admin_usage_body_is_sse_capture(item.response_body.as_ref());
+    let client_stream = admin_usage_body_is_sse_capture(item.client_response_body.as_ref());
+    if provider_stream {
+        Some(true)
+    } else if client_stream && item.response_body.is_some() {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 pub fn admin_usage_client_is_stream(item: &StoredRequestUsageAudit) -> bool {
     item.request_metadata
         .as_ref()
@@ -485,7 +549,20 @@ pub fn admin_usage_client_is_stream(item: &StoredRequestUsageAudit) -> bool {
         .and_then(|metadata| metadata.get("client_requested_stream"))
         .and_then(Value::as_bool)
         .or_else(|| admin_usage_request_body_stream_flag(item))
+        .or_else(|| admin_usage_headers_stream_flag(item.client_response_headers.as_ref()))
         .or_else(|| admin_usage_request_body_implies_default_non_stream(item).then_some(false))
+        .or_else(|| admin_usage_infer_client_stream_from_captured_bodies(item))
+        .unwrap_or(item.is_stream)
+}
+
+fn admin_usage_upstream_is_stream(item: &StoredRequestUsageAudit) -> bool {
+    item.request_metadata
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get("upstream_is_stream"))
+        .and_then(Value::as_bool)
+        .or_else(|| admin_usage_headers_stream_flag(item.response_headers.as_ref()))
+        .or_else(|| admin_usage_infer_upstream_stream_from_captured_bodies(item))
         .unwrap_or(item.is_stream)
 }
 
@@ -496,6 +573,7 @@ fn admin_usage_active_request_json(
 ) -> Value {
     let cache_creation_input_tokens = admin_usage_cache_creation_tokens(item);
     let client_is_stream = admin_usage_client_is_stream(item);
+    let upstream_is_stream = admin_usage_upstream_is_stream(item);
     let mut value = json!({
         "id": item.id,
         "status": item.status,
@@ -514,7 +592,7 @@ fn admin_usage_active_request_json(
         "api_key_name": api_key_name,
         "provider_key_name": provider_key_name,
         "is_stream": item.is_stream,
-        "upstream_is_stream": item.is_stream,
+        "upstream_is_stream": upstream_is_stream,
         "client_requested_stream": client_is_stream,
         "client_is_stream": client_is_stream,
         "has_fallback": admin_usage_has_fallback(item),
@@ -558,6 +636,7 @@ pub fn admin_usage_record_json(
         .and_then(|value| value.email.clone())
         .unwrap_or_else(|| "已删除用户".to_string());
     let client_is_stream = admin_usage_client_is_stream(item);
+    let upstream_is_stream = admin_usage_upstream_is_stream(item);
 
     let mut payload = json!({
         "id": item.id,
@@ -608,7 +687,7 @@ pub fn admin_usage_record_json(
         .as_object_mut()
         .expect("admin usage record payload should be an object");
     object.insert("is_stream".to_string(), json!(item.is_stream));
-    object.insert("upstream_is_stream".to_string(), json!(item.is_stream));
+    object.insert("upstream_is_stream".to_string(), json!(upstream_is_stream));
     object.insert(
         "client_requested_stream".to_string(),
         json!(client_is_stream),
@@ -1747,7 +1826,8 @@ mod tests {
         admin_usage_active_request_json, admin_usage_client_is_stream, admin_usage_has_body_value,
         admin_usage_has_fallback, admin_usage_is_failed, admin_usage_matches_search,
         admin_usage_matches_status, admin_usage_matches_username, admin_usage_record_json,
-        admin_usage_resolve_request_capture_body, build_admin_usage_detail_payload,
+        admin_usage_resolve_request_capture_body, admin_usage_upstream_is_stream,
+        build_admin_usage_detail_payload,
     };
     use aether_data_contracts::repository::usage::{StoredRequestUsageAudit, UsageBodyField};
 
@@ -1869,6 +1949,106 @@ mod tests {
         };
 
         assert!(!admin_usage_client_is_stream(&item));
+
+        let record = admin_usage_record_json(
+            &item,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            false,
+            false,
+            None,
+        );
+        assert_eq!(record["is_stream"], true);
+        assert_eq!(record["upstream_is_stream"], true);
+        assert_eq!(record["client_requested_stream"], false);
+        assert_eq!(record["client_is_stream"], false);
+    }
+
+    #[test]
+    fn upstream_stream_prefers_request_metadata_flag() {
+        let item = StoredRequestUsageAudit {
+            is_stream: false,
+            request_metadata: Some(json!({
+                "client_requested_stream": false,
+                "upstream_is_stream": true
+            })),
+            ..sample_usage("completed", Some(200), None)
+        };
+
+        let record = admin_usage_record_json(
+            &item,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            false,
+            false,
+            None,
+        );
+        assert_eq!(record["is_stream"], false);
+        assert_eq!(record["upstream_is_stream"], true);
+        assert_eq!(record["client_requested_stream"], false);
+        assert_eq!(record["client_is_stream"], false);
+    }
+
+    #[test]
+    fn stream_modes_fall_back_to_captured_response_bodies_when_request_metadata_is_missing() {
+        let item = StoredRequestUsageAudit {
+            is_stream: true,
+            response_body: Some(json!({
+                "chunks": [
+                    {"type": "response.created"},
+                    {"type": "response.output_text.delta", "delta": "Hello"}
+                ],
+                "metadata": {
+                    "stream": true,
+                    "stored_chunks": 2,
+                    "total_chunks": 2
+                }
+            })),
+            client_response_body: Some(json!({
+                "id": "resp-1",
+                "object": "response",
+                "status": "completed",
+                "output": []
+            })),
+            ..sample_usage("completed", Some(200), None)
+        };
+
+        assert!(!admin_usage_client_is_stream(&item));
+        assert!(admin_usage_upstream_is_stream(&item));
+
+        let record = admin_usage_record_json(
+            &item,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            false,
+            false,
+            None,
+        );
+        assert_eq!(record["is_stream"], true);
+        assert_eq!(record["upstream_is_stream"], true);
+        assert_eq!(record["client_requested_stream"], false);
+        assert_eq!(record["client_is_stream"], false);
+    }
+
+    #[test]
+    fn stream_modes_fall_back_to_captured_response_headers_when_bodies_are_detached() {
+        let item = StoredRequestUsageAudit {
+            is_stream: true,
+            response_headers: Some(json!({
+                "content-type": "text/event-stream; charset=utf-8"
+            })),
+            client_response_headers: Some(json!({
+                "content-type": "application/json"
+            })),
+            response_body_ref: Some("usage://request/req-1/response_body".to_string()),
+            client_response_body_ref: Some(
+                "usage://request/req-1/client_response_body".to_string(),
+            ),
+            ..sample_usage("completed", Some(200), None)
+        };
+
+        assert!(!admin_usage_client_is_stream(&item));
+        assert!(admin_usage_upstream_is_stream(&item));
 
         let record = admin_usage_record_json(
             &item,

@@ -963,33 +963,569 @@ pub fn aggregate_openai_chat_stream_sync_response(body: &[u8]) -> Option<Value> 
 }
 
 pub fn aggregate_openai_cli_stream_sync_response(body: &[u8]) -> Option<Value> {
-    let text = std::str::from_utf8(body).ok()?;
+    let events = parse_stream_json_events(body)?;
+    if events.is_empty() {
+        return None;
+    }
 
-    for raw_line in text.lines() {
-        let line = raw_line.trim_matches('\r').trim();
-        if line.is_empty() || line.starts_with(':') || line.starts_with("event:") {
-            continue;
-        }
-        let Some(data_line) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let data_line = data_line.trim();
-        if data_line.is_empty() || data_line == "[DONE]" {
-            continue;
+    let mut response_object: Option<Map<String, Value>> = None;
+    let mut response_id: Option<String> = None;
+    let mut model: Option<String> = None;
+    let mut message_states: BTreeMap<usize, OpenAICliSyncMessageState> = BTreeMap::new();
+    let mut reasoning_states: BTreeMap<usize, OpenAICliSyncReasoningState> = BTreeMap::new();
+    let mut tool_states: BTreeMap<usize, OpenAICliSyncToolState> = BTreeMap::new();
+    let mut item_output_indexes = BTreeMap::<String, usize>::new();
+
+    for event in events {
+        let event_object = event.as_object()?;
+        if let Some(response) = event_object.get("response").and_then(Value::as_object) {
+            response_id = response_id.or_else(|| {
+                response
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            });
+            model = model.or_else(|| {
+                response
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            });
         }
 
-        let event: Value = serde_json::from_str(data_line).ok()?;
-        let event_type = event
+        match event_object
             .get("type")
             .and_then(Value::as_str)
-            .unwrap_or_default();
-        if event_type == "response.completed" {
-            let response = event.get("response")?.as_object()?.clone();
-            return Some(Value::Object(response));
+            .unwrap_or_default()
+        {
+            "response.created" | "response.in_progress" if response_object.is_none() => {
+                response_object = event_object
+                    .get("response")
+                    .and_then(Value::as_object)
+                    .cloned();
+            }
+            "response.output_text.delta" | "response.outtext.delta" => {
+                let output_index = openai_cli_event_output_index(event_object).unwrap_or(0);
+                let delta = match event_object.get("delta") {
+                    Some(Value::String(text)) => text.as_str(),
+                    Some(Value::Object(delta)) => delta
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    _ => "",
+                };
+                if delta.is_empty() {
+                    continue;
+                }
+                let state = message_states.entry(output_index).or_default();
+                state.text.push_str(delta);
+            }
+            "response.output_text.done" => {
+                let output_index = openai_cli_event_output_index(event_object).unwrap_or(0);
+                let text = event_object
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        event_object
+                            .get("part")
+                            .and_then(Value::as_object)
+                            .and_then(|part| part.get("text"))
+                            .and_then(Value::as_str)
+                    })
+                    .unwrap_or_default();
+                merge_openai_cli_message_text(
+                    message_states.entry(output_index).or_default(),
+                    text,
+                );
+            }
+            "response.content_part.added" | "response.content_part.done" => {
+                let Some(part) = event_object.get("part").and_then(Value::as_object) else {
+                    continue;
+                };
+                if part.get("type").and_then(Value::as_str) != Some("output_text") {
+                    continue;
+                }
+                let output_index = openai_cli_event_output_index(event_object).unwrap_or(0);
+                let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
+                merge_openai_cli_message_text(
+                    message_states.entry(output_index).or_default(),
+                    text,
+                );
+            }
+            "response.reasoning_summary_text.delta" => {
+                let output_index = openai_cli_event_output_index(event_object).unwrap_or(0);
+                let delta = event_object
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if delta.is_empty() {
+                    continue;
+                }
+                reasoning_states
+                    .entry(output_index)
+                    .or_default()
+                    .summary_text
+                    .push_str(delta);
+            }
+            "response.reasoning_summary_text.done" => {
+                let output_index = openai_cli_event_output_index(event_object).unwrap_or(0);
+                let text = event_object
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        event_object
+                            .get("part")
+                            .and_then(Value::as_object)
+                            .and_then(|part| part.get("text"))
+                            .and_then(Value::as_str)
+                    })
+                    .unwrap_or_default();
+                merge_openai_cli_reasoning_text(
+                    reasoning_states.entry(output_index).or_default(),
+                    text,
+                );
+            }
+            "response.reasoning_summary_part.added" | "response.reasoning_summary_part.done" => {
+                let Some(part) = event_object.get("part").and_then(Value::as_object) else {
+                    continue;
+                };
+                if part.get("type").and_then(Value::as_str) != Some("summary_text") {
+                    continue;
+                }
+                let output_index = openai_cli_event_output_index(event_object).unwrap_or(0);
+                let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
+                merge_openai_cli_reasoning_text(
+                    reasoning_states.entry(output_index).or_default(),
+                    text,
+                );
+            }
+            "response.output_item.added" | "response.output_item.done" => {
+                let Some(item) = event_object.get("item").and_then(Value::as_object) else {
+                    continue;
+                };
+                let output_index = openai_cli_event_output_index(event_object)
+                    .unwrap_or(item_output_indexes.len());
+                match item.get("type").and_then(Value::as_str).unwrap_or_default() {
+                    "message" => merge_openai_cli_message_item(
+                        message_states.entry(output_index).or_default(),
+                        item,
+                    ),
+                    "reasoning" => merge_openai_cli_reasoning_item(
+                        reasoning_states.entry(output_index).or_default(),
+                        item,
+                    ),
+                    "function_call" => {
+                        merge_openai_cli_tool_item(
+                            tool_states.entry(output_index).or_default(),
+                            item,
+                        );
+                        register_openai_cli_tool_aliases(
+                            &mut item_output_indexes,
+                            output_index,
+                            item,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            "response.function_call_arguments.delta" => {
+                let Some(output_index) =
+                    resolve_openai_cli_tool_output_index(event_object, &item_output_indexes)
+                else {
+                    continue;
+                };
+                let delta = event_object
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if delta.is_empty() {
+                    continue;
+                }
+                tool_states
+                    .entry(output_index)
+                    .or_default()
+                    .arguments
+                    .push_str(delta);
+                register_openai_cli_tool_event_aliases(
+                    &mut item_output_indexes,
+                    event_object,
+                    output_index,
+                );
+            }
+            "response.function_call_arguments.done" => {
+                let Some(output_index) =
+                    resolve_openai_cli_tool_output_index(event_object, &item_output_indexes)
+                else {
+                    continue;
+                };
+                let arguments = event_object
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        event_object
+                            .get("item")
+                            .and_then(Value::as_object)
+                            .and_then(|item| item.get("arguments"))
+                            .and_then(Value::as_str)
+                    })
+                    .unwrap_or_default();
+                merge_openai_cli_tool_arguments(
+                    tool_states.entry(output_index).or_default(),
+                    arguments,
+                );
+                register_openai_cli_tool_event_aliases(
+                    &mut item_output_indexes,
+                    event_object,
+                    output_index,
+                );
+            }
+            "response.completed" => {
+                response_object = event_object
+                    .get("response")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .or(response_object);
+                let Some(response) = event_object.get("response").and_then(Value::as_object) else {
+                    continue;
+                };
+                if let Some(output) = response.get("output").and_then(Value::as_array) {
+                    for (output_index, item) in output.iter().enumerate() {
+                        let Some(item) = item.as_object() else {
+                            continue;
+                        };
+                        match item.get("type").and_then(Value::as_str).unwrap_or_default() {
+                            "message" => merge_openai_cli_message_item(
+                                message_states.entry(output_index).or_default(),
+                                item,
+                            ),
+                            "reasoning" => merge_openai_cli_reasoning_item(
+                                reasoning_states.entry(output_index).or_default(),
+                                item,
+                            ),
+                            "function_call" => {
+                                merge_openai_cli_tool_item(
+                                    tool_states.entry(output_index).or_default(),
+                                    item,
+                                );
+                                register_openai_cli_tool_aliases(
+                                    &mut item_output_indexes,
+                                    output_index,
+                                    item,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
-    None
+    let mut response = response_object.unwrap_or_else(|| {
+        let mut response = Map::new();
+        if let Some(response_id) = response_id.as_ref() {
+            response.insert("id".to_string(), Value::String(response_id.clone()));
+        }
+        response.insert("object".to_string(), Value::String("response".to_string()));
+        response.insert("status".to_string(), Value::String("completed".to_string()));
+        if let Some(model) = model.as_ref() {
+            response.insert("model".to_string(), Value::String(model.clone()));
+        }
+        response
+    });
+
+    let response_id = response
+        .get("id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or(response_id)
+        .unwrap_or_else(|| "resp-local-stream".to_string());
+    let mut output_indexes = message_states
+        .keys()
+        .chain(reasoning_states.keys())
+        .chain(tool_states.keys())
+        .copied()
+        .collect::<Vec<_>>();
+    output_indexes.sort_unstable();
+    output_indexes.dedup();
+
+    if !output_indexes.is_empty() {
+        let mut output = Vec::with_capacity(output_indexes.len());
+        for output_index in output_indexes {
+            if let Some(state) = reasoning_states.remove(&output_index) {
+                output.push(materialize_openai_cli_reasoning_item(&response_id, state));
+            }
+            if let Some(state) = message_states.remove(&output_index) {
+                output.push(materialize_openai_cli_message_item(&response_id, state));
+            }
+            if let Some(state) = tool_states.remove(&output_index) {
+                output.push(materialize_openai_cli_tool_item(output_index, state));
+            }
+        }
+        response.insert("output".to_string(), Value::Array(output));
+    }
+
+    Some(Value::Object(response))
+}
+
+#[derive(Default)]
+struct OpenAICliSyncMessageState {
+    item: Map<String, Value>,
+    text: String,
+}
+
+#[derive(Default)]
+struct OpenAICliSyncReasoningState {
+    item: Map<String, Value>,
+    summary_text: String,
+}
+
+#[derive(Default)]
+struct OpenAICliSyncToolState {
+    item: Map<String, Value>,
+    arguments: String,
+}
+
+fn openai_cli_event_output_index(event: &Map<String, Value>) -> Option<usize> {
+    event
+        .get("output_index")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+}
+
+fn merge_openai_cli_message_text(state: &mut OpenAICliSyncMessageState, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if state.text.is_empty() || text.len() >= state.text.len() {
+        state.text = text.to_string();
+    }
+}
+
+fn merge_openai_cli_reasoning_text(state: &mut OpenAICliSyncReasoningState, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if state.summary_text.is_empty() || text.len() >= state.summary_text.len() {
+        state.summary_text = text.to_string();
+    }
+}
+
+fn merge_openai_cli_tool_arguments(state: &mut OpenAICliSyncToolState, arguments: &str) {
+    if arguments.is_empty() {
+        return;
+    }
+    if state.arguments.is_empty() || arguments.len() >= state.arguments.len() {
+        state.arguments = arguments.to_string();
+    }
+}
+
+fn extract_openai_cli_message_text(item: &Map<String, Value>) -> Option<String> {
+    item.get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|part| {
+            let part = part.as_object()?;
+            matches!(
+                part.get("type").and_then(Value::as_str),
+                Some("output_text" | "text")
+            )
+            .then(|| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+        })
+}
+
+fn extract_openai_cli_reasoning_text(item: &Map<String, Value>) -> Option<String> {
+    item.get("summary")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|part| {
+            let part = part.as_object()?;
+            (part.get("type").and_then(Value::as_str) == Some("summary_text")).then(|| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+        })
+}
+
+fn merge_openai_cli_message_item(state: &mut OpenAICliSyncMessageState, item: &Map<String, Value>) {
+    if let Some(text) = extract_openai_cli_message_text(item) {
+        merge_openai_cli_message_text(state, text.as_str());
+    }
+    state.item = item.clone();
+}
+
+fn merge_openai_cli_reasoning_item(
+    state: &mut OpenAICliSyncReasoningState,
+    item: &Map<String, Value>,
+) {
+    if let Some(text) = extract_openai_cli_reasoning_text(item) {
+        merge_openai_cli_reasoning_text(state, text.as_str());
+    }
+    state.item = item.clone();
+}
+
+fn merge_openai_cli_tool_item(state: &mut OpenAICliSyncToolState, item: &Map<String, Value>) {
+    if let Some(arguments) = item.get("arguments").and_then(Value::as_str) {
+        merge_openai_cli_tool_arguments(state, arguments);
+    }
+    state.item = item.clone();
+}
+
+fn register_openai_cli_tool_aliases(
+    aliases: &mut BTreeMap<String, usize>,
+    output_index: usize,
+    item: &Map<String, Value>,
+) {
+    if let Some(id) = item.get("id").and_then(Value::as_str).map(str::trim) {
+        if !id.is_empty() {
+            aliases.insert(id.to_string(), output_index);
+        }
+    }
+    if let Some(call_id) = item.get("call_id").and_then(Value::as_str).map(str::trim) {
+        if !call_id.is_empty() {
+            aliases.insert(call_id.to_string(), output_index);
+        }
+    }
+}
+
+fn register_openai_cli_tool_event_aliases(
+    aliases: &mut BTreeMap<String, usize>,
+    event: &Map<String, Value>,
+    output_index: usize,
+) {
+    for key in ["item_id", "call_id", "id"] {
+        if let Some(value) = event.get(key).and_then(Value::as_str).map(str::trim) {
+            if !value.is_empty() {
+                aliases.insert(value.to_string(), output_index);
+            }
+        }
+    }
+}
+
+fn resolve_openai_cli_tool_output_index(
+    event: &Map<String, Value>,
+    aliases: &BTreeMap<String, usize>,
+) -> Option<usize> {
+    openai_cli_event_output_index(event).or_else(|| {
+        ["item_id", "call_id", "id"]
+            .iter()
+            .find_map(|key| event.get(*key).and_then(Value::as_str))
+            .and_then(|value| aliases.get(value).copied())
+    })
+}
+
+fn materialize_openai_cli_message_item(
+    response_id: &str,
+    state: OpenAICliSyncMessageState,
+) -> Value {
+    let mut item = state.item;
+    item.entry("type".to_string())
+        .or_insert_with(|| Value::String("message".to_string()));
+    item.entry("id".to_string())
+        .or_insert_with(|| Value::String(format!("{response_id}_msg")));
+    item.entry("role".to_string())
+        .or_insert_with(|| Value::String("assistant".to_string()));
+    item.entry("status".to_string())
+        .or_insert_with(|| Value::String("completed".to_string()));
+
+    let mut content = match item.remove("content") {
+        Some(Value::Array(content)) => content,
+        _ => Vec::new(),
+    };
+    if !state.text.is_empty() {
+        if let Some(part) = content.iter_mut().find(|part| {
+            part.get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|value| matches!(value, "output_text" | "text"))
+        }) {
+            if let Some(object) = part.as_object_mut() {
+                object.insert("type".to_string(), Value::String("output_text".to_string()));
+                object.insert("text".to_string(), Value::String(state.text));
+                object
+                    .entry("annotations".to_string())
+                    .or_insert_with(|| Value::Array(Vec::new()));
+            }
+        } else {
+            content.push(json!({
+                "type": "output_text",
+                "text": state.text,
+                "annotations": [],
+            }));
+        }
+    }
+    item.insert("content".to_string(), Value::Array(content));
+    Value::Object(item)
+}
+
+fn materialize_openai_cli_reasoning_item(
+    response_id: &str,
+    state: OpenAICliSyncReasoningState,
+) -> Value {
+    let mut item = state.item;
+    item.entry("type".to_string())
+        .or_insert_with(|| Value::String("reasoning".to_string()));
+    item.entry("id".to_string())
+        .or_insert_with(|| Value::String(format!("{response_id}_rs_0")));
+    item.entry("status".to_string())
+        .or_insert_with(|| Value::String("completed".to_string()));
+    if !state.summary_text.is_empty() {
+        item.insert(
+            "summary".to_string(),
+            Value::Array(vec![json!({
+                "type": "summary_text",
+                "text": state.summary_text,
+            })]),
+        );
+    }
+    Value::Object(item)
+}
+
+fn materialize_openai_cli_tool_item(output_index: usize, state: OpenAICliSyncToolState) -> Value {
+    let mut item = state.item;
+    let generated_id = format!("call_auto_{output_index}");
+    let call_id = item
+        .get("call_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            item.get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or(generated_id.clone());
+
+    item.insert(
+        "type".to_string(),
+        Value::String("function_call".to_string()),
+    );
+    item.entry("id".to_string())
+        .or_insert_with(|| Value::String(call_id.clone()));
+    item.insert("call_id".to_string(), Value::String(call_id));
+    item.entry("name".to_string())
+        .or_insert_with(|| Value::String("unknown".to_string()));
+    item.entry("status".to_string())
+        .or_insert_with(|| Value::String("completed".to_string()));
+    if !state.arguments.is_empty() {
+        item.insert("arguments".to_string(), Value::String(state.arguments));
+    } else {
+        item.entry("arguments".to_string())
+            .or_insert_with(|| Value::String(String::new()));
+    }
+    Value::Object(item)
 }
 
 pub fn aggregate_claude_stream_sync_response(body: &[u8]) -> Option<Value> {
@@ -1474,6 +2010,8 @@ mod tests {
         let body = concat!(
             "event: response.created\n",
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_123\",\"object\":\"response\",\"model\":\"gpt-5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello\"}\n\n",
             "event: response.completed\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_123\",\"object\":\"response\",\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n",
         );
@@ -1495,6 +2033,40 @@ mod tests {
 
         assert_eq!(body_json.get("id"), Some(&json!("resp_123")));
         assert_eq!(body_json.get("status"), Some(&json!("completed")));
+        assert_eq!(body_json["output"][0]["content"][0]["text"], json!("Hello"));
+    }
+
+    #[test]
+    fn builds_openai_cli_same_family_body_from_legacy_outtext_delta_alias() {
+        let body = concat!(
+            "event: response.created\n",
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_legacy_123\",\"object\":\"response\",\"model\":\"gpt-5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+            "event: response.outtext.delta\n",
+            "data: {\"type\":\"response.outtext.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello from legacy alias\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_legacy_123\",\"object\":\"response\",\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":4,\"total_tokens\":5}}}\n\n",
+        );
+        let report_context = json!({
+            "provider_api_format": "openai:cli",
+            "client_api_format": "openai:cli",
+            "needs_conversion": false,
+        });
+
+        let body_json = maybe_build_openai_cli_same_family_sync_body_from_normalized_payload(
+            "openai_cli_sync_finalize",
+            200,
+            Some(&report_context),
+            None,
+            Some(&base64::engine::general_purpose::STANDARD.encode(body)),
+        )
+        .expect("openai-cli legacy alias aggregation should succeed")
+        .expect("body should exist");
+
+        assert_eq!(body_json["id"], "resp_legacy_123");
+        assert_eq!(
+            body_json["output"][0]["content"][0]["text"],
+            json!("Hello from legacy alias")
+        );
     }
 
     #[test]

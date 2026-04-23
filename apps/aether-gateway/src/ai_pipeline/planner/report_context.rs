@@ -27,6 +27,7 @@ pub(crate) struct LocalExecutionReportContextParts<'a> {
     pub(crate) original_request_body_json: Option<&'a Value>,
     pub(crate) original_request_body_base64: Option<&'a str>,
     pub(crate) client_requested_stream: bool,
+    pub(crate) upstream_is_stream: bool,
     pub(crate) has_envelope: bool,
     pub(crate) needs_conversion: bool,
     pub(crate) extra_fields: Map<String, Value>,
@@ -121,6 +122,10 @@ pub(crate) fn build_local_execution_report_context(
     object.insert(
         "client_requested_stream".to_string(),
         Value::Bool(parts.client_requested_stream),
+    );
+    object.insert(
+        "upstream_is_stream".to_string(),
+        Value::Bool(parts.upstream_is_stream),
     );
     object.insert("has_envelope".to_string(), Value::Bool(parts.has_envelope));
     object.insert(
