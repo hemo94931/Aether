@@ -1015,6 +1015,146 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn direct_execution_frame_stream_bridges_openai_image_sync_json_to_image_sse() {
+        let listener = crate::test_support::bind_loopback_listener()
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("local addr should resolve");
+        let server = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/responses",
+                post(|| async {
+                    let body = serde_json::json!({
+                        "created": 1776971267_u64,
+                        "data": [{
+                            "b64_json": "aGVsbG8="
+                        }],
+                        "usage": {
+                            "total_tokens": 100,
+                            "input_tokens": 50,
+                            "output_tokens": 50,
+                            "input_tokens_details": {
+                                "text_tokens": 10,
+                                "image_tokens": 40
+                            }
+                        }
+                    });
+                    let mut response = axum::http::Response::new(Body::from(
+                        serde_json::to_vec(&body).expect("json should encode"),
+                    ));
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/json"),
+                    );
+                    response
+                }),
+            );
+            axum::serve(listener, app)
+                .await
+                .expect("server should start");
+        });
+
+        let runtime = DirectSyncExecutionRuntime::new();
+        let execution = runtime
+            .execute_stream(&ExecutionPlan {
+                request_id: "req-image-sync-bridge".to_string(),
+                candidate_id: Some("cand-image-sync-bridge".to_string()),
+                provider_name: Some("OpenAI".to_string()),
+                provider_id: "provider-1".to_string(),
+                endpoint_id: "endpoint-1".to_string(),
+                key_id: "key-1".to_string(),
+                method: "POST".to_string(),
+                url: format!("http://{addr}/responses"),
+                headers: BTreeMap::new(),
+                content_type: None,
+                content_encoding: None,
+                body: RequestBody::from_json(serde_json::json!({
+                    "model": "gpt-image-1",
+                    "prompt": "poster",
+                    "stream": true
+                })),
+                stream: true,
+                client_api_format: "openai:image".to_string(),
+                provider_api_format: "openai:image".to_string(),
+                model_name: Some("gpt-image-1".into()),
+                proxy: None,
+                tls_profile: None,
+                timeouts: Some(ExecutionTimeouts {
+                    connect_ms: Some(5_000),
+                    total_ms: Some(5_000),
+                    ..ExecutionTimeouts::default()
+                }),
+            })
+            .await
+            .expect("stream execution should succeed");
+
+        let frames = build_direct_execution_frame_stream(execution)
+            .map(|item| item.expect("frame should encode"))
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|bytes| String::from_utf8(bytes.to_vec()).expect("frame should be utf8"))
+            .collect::<Vec<_>>();
+
+        server.abort();
+
+        let header_frame: Value =
+            serde_json::from_str(&frames[0]).expect("headers frame should parse");
+        assert_eq!(
+            header_frame
+                .get("payload")
+                .and_then(|payload| payload.get("headers"))
+                .and_then(|headers| headers.get("content-type"))
+                .and_then(Value::as_str),
+            Some("text/event-stream")
+        );
+
+        let data_frame = frames
+            .iter()
+            .map(|line| serde_json::from_str::<Value>(line).expect("frame should parse"))
+            .find(|frame| frame.get("type").and_then(Value::as_str) == Some("data"))
+            .expect("data frame should exist");
+        let bridged_body = base64::engine::general_purpose::STANDARD
+            .decode(
+                data_frame
+                    .get("payload")
+                    .and_then(|payload| payload.get("chunk_b64"))
+                    .and_then(Value::as_str)
+                    .expect("chunk_b64 should exist"),
+            )
+            .expect("data frame should decode");
+        let bridged_text = String::from_utf8(bridged_body).expect("bridged body should be utf8");
+        assert!(bridged_text.contains("event: image_generation.completed"));
+        assert!(bridged_text.contains("\"type\":\"image_generation.completed\""));
+        assert!(bridged_text.contains("\"b64_json\":\"aGVsbG8=\""));
+        assert!(bridged_text.contains("\"total_tokens\":100"));
+
+        let eof_frame = frames
+            .iter()
+            .map(|line| serde_json::from_str::<Value>(line).expect("frame should parse"))
+            .find(|frame| frame.get("type").and_then(Value::as_str) == Some("eof"))
+            .expect("eof frame should exist");
+        assert_eq!(
+            eof_frame
+                .get("payload")
+                .and_then(|payload| payload.get("summary"))
+                .and_then(|summary| summary.get("model"))
+                .and_then(Value::as_str),
+            Some("gpt-image-1")
+        );
+        assert_eq!(
+            eof_frame
+                .get("payload")
+                .and_then(|payload| payload.get("summary"))
+                .and_then(|summary| summary.get("standardized_usage"))
+                .and_then(|usage| usage.get("dimensions"))
+                .and_then(|dimensions| dimensions.get("total_tokens"))
+                .and_then(Value::as_i64),
+            Some(100)
+        );
+    }
+
+    #[tokio::test]
     async fn direct_execution_frame_stream_preserves_local_tunnel_stream_error_message() {
         let state = AppState::new().expect("app state should build");
         let tunnel_app = state.tunnel.app_state();

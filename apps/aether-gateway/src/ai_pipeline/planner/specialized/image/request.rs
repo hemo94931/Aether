@@ -118,10 +118,10 @@ pub(super) fn resolve_requested_image_model_for_request(
             .iter()
             .find(|field| field.name.trim() == "model")
             .map(|field| String::from_utf8_lossy(&field.data).trim().to_string());
-        normalize_requested_image_model(model.as_deref())?
+        normalize_requested_image_model(model.as_deref())
             .or_else(|| Some(default_model_for_operation(operation).to_string()))
     } else {
-        normalize_requested_image_model(body_json.get("model").and_then(Value::as_str))?
+        normalize_requested_image_model(body_json.get("model").and_then(Value::as_str))
             .or_else(|| Some(default_model_for_operation(operation).to_string()))
     }
 }
@@ -357,13 +357,7 @@ fn normalize_openai_image_json_request(
         return None;
     }
     let requested_model =
-        normalize_requested_image_model(object.get("model").and_then(Value::as_str))?;
-    if requested_model
-        .as_deref()
-        .is_some_and(|model| !image_model_supported_for_operation(operation, model))
-    {
-        return None;
-    }
+        normalize_requested_image_model(object.get("model").and_then(Value::as_str));
     let prompt = normalize_prompt(object.get("prompt"), operation)?;
     let response_format =
         normalize_image_response_format(object.get("response_format").and_then(Value::as_str))?;
@@ -425,13 +419,7 @@ fn normalize_openai_image_multipart_request(
     let multipart_fields = parse_multipart_fields_from_base64(parts, body_base64)?;
     let requested_model = normalize_requested_image_model(
         find_multipart_text_field(&multipart_fields, "model").as_deref(),
-    )?;
-    if requested_model
-        .as_deref()
-        .is_some_and(|model| !image_model_supported_for_operation(operation, model))
-    {
-        return None;
-    }
+    );
     if find_multipart_text_field(&multipart_fields, "style").is_some() {
         return None;
     }
@@ -528,11 +516,11 @@ fn normalize_openai_image_multipart_request(
     })
 }
 
-fn normalize_requested_image_model(value: Option<&str>) -> Option<Option<String>> {
-    let Some(model) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Some(None);
-    };
-    canonicalize_image_model(model).map(|canonical| Some(canonical.to_string()))
+fn normalize_requested_image_model(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn default_model_for_operation(operation: OpenAiImageOperation) -> &'static str {
@@ -541,27 +529,6 @@ fn default_model_for_operation(operation: OpenAiImageOperation) -> &'static str 
         OpenAiImageOperation::Generate | OpenAiImageOperation::Edit => {
             CODEX_OPENAI_IMAGE_DEFAULT_MODEL
         }
-    }
-}
-
-fn canonicalize_image_model(model: &str) -> Option<&'static str> {
-    match model.trim().to_ascii_lowercase().as_str() {
-        "gpt-image-1" => Some("gpt-image-1"),
-        "gpt-image-1.5" => Some("gpt-image-1.5"),
-        "gpt-image-1-mini" => Some("gpt-image-1-mini"),
-        "gpt-image-2" => Some("gpt-image-2"),
-        "chatgpt-image-latest" => Some("chatgpt-image-latest"),
-        "dall-e-2" => Some("dall-e-2"),
-        "dall-e-3" => Some("dall-e-3"),
-        _ => None,
-    }
-}
-
-fn image_model_supported_for_operation(operation: OpenAiImageOperation, model: &str) -> bool {
-    match operation {
-        OpenAiImageOperation::Generate => true,
-        OpenAiImageOperation::Edit => !matches!(model, "dall-e-3"),
-        OpenAiImageOperation::Variation => model == "dall-e-2",
     }
 }
 
@@ -696,9 +663,16 @@ fn build_tool_options(
         "type".to_string(),
         Value::String("image_generation".to_string()),
     );
-    if operation != OpenAiImageOperation::Generate {
-        tool.insert("action".to_string(), Value::String("edit".to_string()));
-    }
+    tool.insert(
+        "action".to_string(),
+        Value::String(
+            match operation {
+                OpenAiImageOperation::Generate => "generate",
+                OpenAiImageOperation::Edit | OpenAiImageOperation::Variation => "edit",
+            }
+            .to_string(),
+        ),
+    );
     for (key, value) in raw_values {
         let normalized = match key.as_str() {
             "size" | "background" | "moderation" | "input_fidelity" => {
@@ -1098,6 +1072,25 @@ mod tests {
     }
 
     #[test]
+    fn normalize_generate_json_request_accepts_custom_model_name() {
+        let parts = request_parts("/v1/images/generations", Some("application/json"));
+        let request = normalize_openai_image_request(
+            &parts,
+            &json!({
+                "model": " Custom/Image-Model:V1 ",
+                "prompt": "generate image"
+            }),
+            None,
+        )
+        .expect("custom image model request should normalize");
+
+        assert_eq!(
+            request.requested_model.as_deref(),
+            Some("Custom/Image-Model:V1")
+        );
+    }
+
+    #[test]
     fn build_generate_request_defaults_codex_image_tool_and_tool_choice() {
         let parts = request_parts("/v1/images/generations", Some("application/json"));
         let request = normalize_openai_image_request(
@@ -1114,6 +1107,10 @@ mod tests {
         assert!(request.tool.get("quality").is_none());
         assert!(request.tool.get("background").is_none());
         assert!(request.tool.get("output_format").is_none());
+        assert_eq!(
+            request.tool.get("action").and_then(|value| value.as_str()),
+            Some("generate")
+        );
 
         let mut provider_request_body = build_provider_request_body(&request);
         assert!(provider_request_body.get("model").is_none());
@@ -1134,6 +1131,14 @@ mod tests {
                 .and_then(|value| value.get("type"))
                 .and_then(|value| value.as_str()),
             Some("image_generation")
+        );
+        assert_eq!(
+            provider_request_body
+                .get("tools")
+                .and_then(|value| value.get(0))
+                .and_then(|value| value.get("action"))
+                .and_then(|value| value.as_str()),
+            Some("generate")
         );
         assert_eq!(
             provider_request_body

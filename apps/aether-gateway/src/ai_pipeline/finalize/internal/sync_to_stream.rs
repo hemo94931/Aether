@@ -1,6 +1,7 @@
 use aether_contracts::{ExecutionStreamTerminalSummary, StandardizedUsage};
 use serde_json::{json, Value};
 
+use crate::ai_pipeline::finalize::sse::encode_json_sse;
 use crate::ai_pipeline::{
     convert_claude_cli_response_to_openai_cli, convert_gemini_cli_response_to_openai_cli,
     convert_openai_chat_response_to_openai_cli, ClaudeClientEmitter, GeminiClientEmitter,
@@ -21,6 +22,9 @@ pub(crate) fn maybe_bridge_standard_sync_json_to_stream(
 ) -> Result<Option<SyncToStreamBridgeOutcome>, GatewayError> {
     let provider_api_format = normalize_api_format(provider_api_format);
     let client_api_format = normalize_api_format(client_api_format);
+    if provider_api_format == "openai:image" && client_api_format == "openai:image" {
+        return maybe_bridge_openai_image_sync_json_to_stream(provider_body_json, report_context);
+    }
     if !is_standard_api_format(provider_api_format.as_str())
         || !is_standard_api_format(client_api_format.as_str())
     {
@@ -51,6 +55,56 @@ pub(crate) fn maybe_bridge_standard_sync_json_to_stream(
     }))
 }
 
+fn maybe_bridge_openai_image_sync_json_to_stream(
+    provider_body_json: &Value,
+    report_context: Option<&Value>,
+) -> Result<Option<SyncToStreamBridgeOutcome>, GatewayError> {
+    let Some(response) = provider_body_json.as_object() else {
+        return Ok(None);
+    };
+    let Some(image) = response
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .find_map(extract_openai_image_sync_b64_json)
+    else {
+        return Ok(None);
+    };
+    let usage = response.get("usage").cloned().unwrap_or(Value::Null);
+    let event_name = openai_image_completed_event_name(report_context);
+    let sse_body = encode_json_sse(
+        Some(event_name),
+        &json!({
+            "type": event_name,
+            "b64_json": image,
+            "usage": usage,
+        }),
+    )?;
+
+    Ok(Some(SyncToStreamBridgeOutcome {
+        sse_body,
+        terminal_summary: Some(ExecutionStreamTerminalSummary {
+            standardized_usage: response
+                .get("usage")
+                .and_then(standardized_usage_from_openai_usage),
+            finish_reason: Some("stop".to_string()),
+            response_id: response
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            model: response
+                .get("model")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| image_bridge_model(report_context)),
+            observed_finish: true,
+            parser_error: None,
+        }),
+    }))
+}
+
 fn normalize_api_format(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
@@ -66,6 +120,57 @@ fn is_standard_api_format(value: &str) -> bool {
             | "gemini:chat"
             | "gemini:cli"
     )
+}
+
+fn extract_openai_image_sync_b64_json(item: &serde_json::Map<String, Value>) -> Option<String> {
+    item.get("b64_json")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            item.get("url")
+                .and_then(Value::as_str)
+                .and_then(extract_base64_from_data_url)
+        })
+}
+
+fn extract_base64_from_data_url(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let (metadata, payload) = trimmed.split_once(',')?;
+    if !metadata.starts_with("data:") || !metadata.ends_with(";base64") {
+        return None;
+    }
+    (!payload.trim().is_empty()).then(|| payload.trim().to_string())
+}
+
+fn openai_image_completed_event_name(report_context: Option<&Value>) -> &'static str {
+    if openai_image_request_operation(report_context) == Some("edit") {
+        "image_edit.completed"
+    } else {
+        "image_generation.completed"
+    }
+}
+
+fn openai_image_request_operation(report_context: Option<&Value>) -> Option<&str> {
+    report_context
+        .and_then(|value| value.get("image_request"))
+        .and_then(|value| value.get("operation"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn image_bridge_model(report_context: Option<&Value>) -> Option<String> {
+    report_context.and_then(|context| {
+        context
+            .get("mapped_model")
+            .or_else(|| context.get("model"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 fn build_bridge_report_context(
@@ -332,4 +437,104 @@ fn standardized_usage_from_openai_usage(value: &Value) -> Option<StandardizedUsa
         .dimensions
         .insert("total_tokens".to_string(), json!(total_tokens));
     Some(standardized_usage.normalize_cache_creation_breakdown())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::maybe_bridge_standard_sync_json_to_stream;
+
+    fn utf8(bytes: Vec<u8>) -> String {
+        String::from_utf8(bytes).expect("utf8 should decode")
+    }
+
+    #[test]
+    fn bridges_openai_image_sync_json_to_generation_completed_sse() {
+        let report_context = json!({
+            "provider_api_format": "openai:image",
+            "client_api_format": "openai:image",
+            "mapped_model": "gpt-image-1",
+            "image_request": {
+                "operation": "generate"
+            }
+        });
+        let outcome = maybe_bridge_standard_sync_json_to_stream(
+            &json!({
+                "created": 1776971267,
+                "data": [{
+                    "b64_json": "aGVsbG8="
+                }],
+                "usage": {
+                    "total_tokens": 100,
+                    "input_tokens": 50,
+                    "output_tokens": 50,
+                    "input_tokens_details": {
+                        "text_tokens": 10,
+                        "image_tokens": 40
+                    }
+                }
+            }),
+            "openai:image",
+            "openai:image",
+            Some(&report_context),
+        )
+        .expect("bridge should succeed")
+        .expect("bridge should produce sse");
+
+        let output = utf8(outcome.sse_body);
+        assert!(output.contains("event: image_generation.completed"));
+        assert!(output.contains("\"type\":\"image_generation.completed\""));
+        assert!(output.contains("\"b64_json\":\"aGVsbG8=\""));
+        assert!(output.contains("\"total_tokens\":100"));
+
+        let summary = outcome
+            .terminal_summary
+            .expect("terminal summary should exist");
+        assert_eq!(summary.model.as_deref(), Some("gpt-image-1"));
+        assert_eq!(summary.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(
+            summary
+                .standardized_usage
+                .as_ref()
+                .and_then(|usage| usage.dimensions.get("total_tokens"))
+                .cloned(),
+            Some(json!(100))
+        );
+    }
+
+    #[test]
+    fn bridges_openai_image_sync_data_url_to_edit_completed_sse() {
+        let report_context = json!({
+            "provider_api_format": "openai:image",
+            "client_api_format": "openai:image",
+            "image_request": {
+                "operation": "edit"
+            }
+        });
+        let outcome = maybe_bridge_standard_sync_json_to_stream(
+            &json!({
+                "created": 1776971267,
+                "data": [{
+                    "url": "data:image/webp;base64,d29ybGQ="
+                }],
+                "usage": {
+                    "total_tokens": 9,
+                    "input_tokens": 4,
+                    "output_tokens": 5
+                }
+            }),
+            "openai:image",
+            "openai:image",
+            Some(&report_context),
+        )
+        .expect("bridge should succeed")
+        .expect("bridge should produce sse");
+
+        let output = utf8(outcome.sse_body);
+        assert!(output.contains("event: image_edit.completed"));
+        assert!(output.contains("\"type\":\"image_edit.completed\""));
+        assert!(output.contains("\"b64_json\":\"d29ybGQ=\""));
+        assert!(output.contains("\"total_tokens\":9"));
+    }
 }

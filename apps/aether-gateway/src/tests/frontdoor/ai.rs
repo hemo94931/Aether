@@ -7,7 +7,7 @@ use super::{
 use crate::tests::{
     any, build_router_with_state, build_state_with_execution_runtime_override, json, start_server,
     to_bytes, AppState, Arc, Body, Json, Mutex, Request, Router, StatusCode, EXECUTION_PATH_HEADER,
-    EXECUTION_PATH_LOCAL_AI_PUBLIC,
+    EXECUTION_PATH_LOCAL_AI_PUBLIC, EXECUTION_PATH_LOCAL_EXECUTION_RUNTIME_MISS,
 };
 use axum::response::IntoResponse;
 
@@ -522,7 +522,7 @@ async fn gateway_rejects_invalid_claude_count_tokens_payload_without_hitting_fal
 }
 
 #[tokio::test]
-async fn gateway_rejects_gpt_image_2_on_chat_completions_without_hitting_fallback_probe() {
+async fn gateway_does_not_locally_reject_image_model_name_on_chat_completions() {
     let fallback_probe_hits = Arc::new(Mutex::new(0usize));
     let fallback_probe_hits_clone = Arc::clone(&fallback_probe_hits);
     let fallback_probe = Router::new().route(
@@ -567,18 +567,13 @@ async fn gateway_rejects_gpt_image_2_on_chat_completions_without_hitting_fallbac
         .await
         .expect("request should succeed");
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         response
             .headers()
             .get(EXECUTION_PATH_HEADER)
             .and_then(|value| value.to_str().ok()),
-        Some(EXECUTION_PATH_LOCAL_AI_PUBLIC)
-    );
-    let payload: serde_json::Value = response.json().await.expect("json body should parse");
-    assert_eq!(
-        payload["detail"],
-        "图片模型仅支持通过 /v1/images/generations、/v1/images/edits 或 /v1/images/variations 调用"
+        Some(EXECUTION_PATH_LOCAL_EXECUTION_RUNTIME_MISS)
     );
     assert_eq!(*fallback_probe_hits.lock().expect("mutex should lock"), 0);
 

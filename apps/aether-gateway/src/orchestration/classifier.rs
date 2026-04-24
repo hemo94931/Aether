@@ -82,6 +82,30 @@ const RETRYABLE_RATE_LIMIT_PATTERNS: &[&str] = &[
     "quota hit",
 ];
 
+const RETRYABLE_ACCOUNT_OR_BILLING_PATTERNS: &[&str] = &[
+    "organization has been disabled",
+    "organization_disabled",
+    "account has been disabled",
+    "account_disabled",
+    "account has been deactivated",
+    "account_deactivated",
+    "account deactivated",
+    "account suspended",
+    "account banned",
+    "subscription inactive",
+    "payment_required",
+    "payment required",
+    "insufficient_quota",
+    "insufficient quota",
+    "quota exhausted",
+    "credits exhausted",
+    "credit balance",
+    "credit limit",
+    "verify your account",
+    "account verification",
+    "verification required",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct ParsedLocalErrorResponse {
     type_name: Option<String>,
@@ -167,6 +191,10 @@ pub(crate) fn classify_local_failover(
 
     if is_semantic_rate_limit_error(input.status_code, &parsed_error) {
         return LocalFailoverClassification::RetrySemanticRateLimit;
+    }
+
+    if is_semantic_account_or_billing_error(input.status_code, &parsed_error) {
+        return LocalFailoverClassification::RetryUpstreamFailure;
     }
 
     if is_semantic_client_error(input.status_code, &parsed_error) {
@@ -379,6 +407,21 @@ fn is_semantic_rate_limit_error(status_code: u16, parsed: &ParsedLocalErrorRespo
             .any(|pattern| search_text.contains(&pattern.to_ascii_lowercase()))
 }
 
+fn is_semantic_account_or_billing_error(
+    status_code: u16,
+    parsed: &ParsedLocalErrorResponse,
+) -> bool {
+    if status_code < 400 {
+        return false;
+    }
+
+    let search_text = semantic_search_text(parsed);
+    !search_text.is_empty()
+        && RETRYABLE_ACCOUNT_OR_BILLING_PATTERNS
+            .iter()
+            .any(|pattern| search_text.contains(&pattern.to_ascii_lowercase()))
+}
+
 fn local_failover_regex_rule_matches(
     rule: &LocalFailoverRegexRule,
     response_text: &str,
@@ -536,6 +579,35 @@ mod tests {
                 )
             ),
             LocalFailoverClassification::RetrySemanticRateLimit
+        );
+    }
+
+    #[test]
+    fn classifier_retries_account_and_billing_errors_before_client_error_stop() {
+        assert_eq!(
+            classify_local_failover(
+                &LocalFailoverPolicy::default(),
+                LocalFailoverInput::new(
+                    403,
+                    Some(
+                        "{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"verify your account before continuing\"}}"
+                    )
+                )
+            ),
+            LocalFailoverClassification::RetryUpstreamFailure
+        );
+
+        assert_eq!(
+            classify_local_failover(
+                &LocalFailoverPolicy::default(),
+                LocalFailoverInput::new(
+                    402,
+                    Some(
+                        "{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"payment required: credit balance exhausted\"}}"
+                    )
+                )
+            ),
+            LocalFailoverClassification::RetryUpstreamFailure
         );
     }
 

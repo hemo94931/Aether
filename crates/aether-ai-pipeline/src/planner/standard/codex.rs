@@ -57,7 +57,17 @@ fn apply_codex_openai_image_tool_overrides(body_object: &mut serde_json::Map<Str
     tool.insert("type".to_string(), json!("image_generation"));
     tool.entry("output_format".to_string())
         .or_insert_with(|| json!(CODEX_OPENAI_IMAGE_DEFAULT_OUTPUT_FORMAT));
+    let action = tool
+        .get("action")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("generate")
+        .to_string();
     if !tool.contains_key("action") {
+        tool.insert("action".to_string(), json!("generate"));
+    }
+    if action == "generate" {
         tool.entry("size".to_string())
             .or_insert_with(|| json!(CODEX_IMAGE_TOOL_DEFAULT_SIZE));
         tool.entry("quality".to_string())
@@ -449,6 +459,10 @@ mod tests {
         assert_eq!(
             provider_request_body["tools"][0]["output_format"],
             json!("png")
+        );
+        assert_eq!(
+            provider_request_body["tools"][0]["action"],
+            json!("generate")
         );
         assert_eq!(
             provider_request_body["model"],

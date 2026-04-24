@@ -16,14 +16,11 @@ const CLAUDE_COUNT_TOKENS_MISSING_BODY_DETAIL: &str = "请求体不能为空";
 const GEMINI_VIDEO_TASK_NOT_FOUND_DETAIL: &str = "Video task not found";
 const AI_PUBLIC_METHOD_NOT_ALLOWED_DETAIL: &str = "Method not allowed";
 const AI_PUBLIC_UNAUTHORIZED_DETAIL: &str = "Unauthorized";
-const OPENAI_CHAT_IMAGE_MODEL_DETAIL: &str =
-    "图片模型仅支持通过 /v1/images/generations、/v1/images/edits 或 /v1/images/variations 调用";
 const OPENAI_IMAGE_PROMPT_DETAIL: &str = "图片生成/编辑请求缺少 prompt";
 const OPENAI_IMAGE_EDIT_INPUT_DETAIL: &str = "图片编辑请求至少需要 1 张输入图片";
 const OPENAI_IMAGE_VARIATION_INPUT_DETAIL: &str = "图片变体请求需要 image 文件";
 const OPENAI_IMAGE_N_DETAIL: &str = "当前 Codex 图片反代仅支持 n=1";
 const OPENAI_IMAGE_STREAM_VARIATION_DETAIL: &str = "图片变体接口当前仅支持同步响应";
-const OPENAI_IMAGE_STREAM_MODEL_DETAIL: &str = "stream/partial_images 仅支持 GPT Image 系列模型";
 const OPENAI_IMAGE_PARTIAL_IMAGES_DETAIL: &str =
     "partial_images 仅支持 0-3，且必须配合 stream=true";
 const OPENAI_IMAGE_STYLE_DETAIL: &str = "当前 Codex 图片反代暂不支持 style 参数";
@@ -132,14 +129,6 @@ fn maybe_build_local_openai_request_validation_response(
     if decision.route_kind.as_deref() == Some("chat")
         && request_context.request_path == "/v1/chat/completions"
     {
-        let payload = serde_json::from_slice::<Value>(request_body).ok()?;
-        let model = payload.get("model").and_then(Value::as_str)?;
-        if is_openai_image_model(model) {
-            return Some(build_ai_public_error_response(
-                http::StatusCode::BAD_REQUEST,
-                OPENAI_CHAT_IMAGE_MODEL_DETAIL,
-            ));
-        }
         return None;
     }
 
@@ -168,20 +157,6 @@ fn maybe_build_local_openai_request_validation_response(
             ));
         }
     };
-
-    if validation
-        .model
-        .as_deref()
-        .is_some_and(|model| !image_model_supported_for_operation(operation, model))
-    {
-        return Some(build_ai_public_error_response(
-            http::StatusCode::BAD_REQUEST,
-            format!(
-                "该接口不支持模型 {}",
-                validation.model.as_deref().unwrap_or_default()
-            ),
-        ));
-    }
 
     match operation {
         OpenAiImageOperation::Generate | OpenAiImageOperation::Edit
@@ -235,12 +210,6 @@ fn maybe_build_local_openai_request_validation_response(
             return Some(build_ai_public_error_response(
                 http::StatusCode::BAD_REQUEST,
                 OPENAI_IMAGE_STREAM_VARIATION_DETAIL,
-            ));
-        }
-        if !image_model_supports_streaming(validation.model.as_deref()) {
-            return Some(build_ai_public_error_response(
-                http::StatusCode::BAD_REQUEST,
-                OPENAI_IMAGE_STREAM_MODEL_DETAIL,
             ));
         }
     }
@@ -335,35 +304,6 @@ fn image_request_count(value: &Value) -> Option<u64> {
         })
 }
 
-fn is_openai_image_model(model: &str) -> bool {
-    canonicalize_openai_image_model(model).is_some()
-}
-
-fn canonicalize_openai_image_model(model: &str) -> Option<&'static str> {
-    match model.trim().to_ascii_lowercase().as_str() {
-        "gpt-image-1" => Some("gpt-image-1"),
-        "gpt-image-1.5" => Some("gpt-image-1.5"),
-        "gpt-image-1-mini" => Some("gpt-image-1-mini"),
-        "gpt-image-2" => Some("gpt-image-2"),
-        "chatgpt-image-latest" => Some("chatgpt-image-latest"),
-        "dall-e-2" => Some("dall-e-2"),
-        "dall-e-3" => Some("dall-e-3"),
-        _ => None,
-    }
-}
-
-fn image_model_supported_for_operation(operation: OpenAiImageOperation, model: &str) -> bool {
-    match operation {
-        OpenAiImageOperation::Generate => true,
-        OpenAiImageOperation::Edit => !matches!(model, "dall-e-3"),
-        OpenAiImageOperation::Variation => model == "dall-e-2",
-    }
-}
-
-fn image_model_supports_streaming(model: Option<&str>) -> bool {
-    !matches!(model, Some("dall-e-2" | "dall-e-3"))
-}
-
 fn parse_openai_image_validation_input(
     operation: OpenAiImageOperation,
     content_type: Option<&str>,
@@ -398,8 +338,7 @@ fn parse_openai_image_validation_input_from_json(
     Ok(OpenAiImageValidationInput {
         model: normalize_openai_image_model_for_operation(
             object.get("model").and_then(Value::as_str),
-        )
-        .ok_or(OPENAI_IMAGE_INVALID_JSON_DETAIL)?,
+        ),
         prompt: object
             .get("prompt")
             .and_then(Value::as_str)
@@ -480,8 +419,7 @@ fn parse_openai_image_validation_input_from_multipart(
         .map(|field| String::from_utf8_lossy(&field.data).trim().to_string());
 
     Ok(OpenAiImageValidationInput {
-        model: normalize_openai_image_model_for_operation(model.as_deref())
-            .ok_or(OPENAI_IMAGE_INVALID_MULTIPART_DETAIL)?,
+        model: normalize_openai_image_model_for_operation(model.as_deref()),
         prompt: multipart_text_field(&fields, "prompt"),
         image_count: fields
             .iter()
@@ -515,11 +453,11 @@ fn parse_openai_image_validation_input_from_multipart(
     })
 }
 
-fn normalize_openai_image_model_for_operation(model: Option<&str>) -> Option<Option<String>> {
-    let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Some(None);
-    };
-    canonicalize_openai_image_model(model).map(|canonical| Some(canonical.to_string()))
+fn normalize_openai_image_model_for_operation(model: Option<&str>) -> Option<String> {
+    model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn count_json_images(object: &serde_json::Map<String, Value>) -> usize {
@@ -1090,7 +1028,10 @@ fn estimate_text_tokens(text: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::estimate_claude_count_tokens;
+    use super::{
+        estimate_claude_count_tokens, parse_openai_image_validation_input, OpenAiImageOperation,
+    };
+    use axum::body::Bytes;
     use serde_json::json;
 
     #[test]
@@ -1124,5 +1065,20 @@ mod tests {
         });
 
         assert_eq!(estimate_claude_count_tokens(&payload), Err(()));
+    }
+
+    #[test]
+    fn image_validation_accepts_custom_model_name() {
+        let body =
+            Bytes::from_static(br#"{"model":" Custom/Image-Model:V1 ","prompt":"draw an image"}"#);
+
+        let validation = parse_openai_image_validation_input(
+            OpenAiImageOperation::Generate,
+            Some("application/json"),
+            &body,
+        )
+        .expect("custom image model should validate");
+
+        assert_eq!(validation.model.as_deref(), Some("Custom/Image-Model:V1"));
     }
 }

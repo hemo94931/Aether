@@ -593,6 +593,7 @@ fn build_pool_sort_vectors(
             "cache_affinity" => cache_affinity_ranks.clone(),
             "priority_first" => priority_first_ranks(items, &lru_ranks),
             "single_account" => single_account_ranks(items),
+            "free_team_first" => plan_ranks(items, &lru_ranks, preset.mode.as_deref()),
             "plus_first" => plan_ranks(items, &lru_ranks, Some("plus_only")),
             "free_first" => plan_ranks(items, &lru_ranks, Some("free_only")),
             "team_first" => plan_ranks(items, &lru_ranks, Some("team_only")),
@@ -991,7 +992,7 @@ fn normalize_enabled_pool_presets(
 
 fn pool_preset_supported_for_provider(preset: &str, provider_type: &str) -> bool {
     match preset {
-        "free_first" | "plus_first" | "recent_refresh" | "team_first" => {
+        "free_first" | "free_team_first" | "plus_first" | "recent_refresh" | "team_first" => {
             matches!(provider_type, "codex" | "kiro")
         }
         _ => true,
@@ -1389,6 +1390,126 @@ mod tests {
                 .map(|item| item.candidate.key_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["key-plus", "key-free"]
+        );
+    }
+
+    #[test]
+    fn pool_scheduler_supports_free_team_first_modes() {
+        let key_plus = sample_eligible_candidate(
+            "provider-pool",
+            "endpoint-1",
+            "key-plus",
+            10,
+            Some(json!({
+                "pool_advanced": {
+                    "scheduling_presets": [{"preset": "free_team_first", "enabled": true, "mode": "team_only"}]
+                }
+            })),
+        );
+        let key_free = sample_eligible_candidate(
+            "provider-pool",
+            "endpoint-1",
+            "key-free",
+            10,
+            Some(json!({
+                "pool_advanced": {
+                    "scheduling_presets": [{"preset": "free_team_first", "enabled": true, "mode": "team_only"}]
+                }
+            })),
+        );
+        let key_team = sample_eligible_candidate(
+            "provider-pool",
+            "endpoint-1",
+            "key-team",
+            10,
+            Some(json!({
+                "pool_advanced": {
+                    "scheduling_presets": [{"preset": "free_team_first", "enabled": true, "mode": "team_only"}]
+                }
+            })),
+        );
+
+        let key_context_by_id = BTreeMap::from([
+            (
+                "key-plus".to_string(),
+                PoolCatalogKeyContext {
+                    oauth_plan_type: Some("plus".to_string()),
+                    ..PoolCatalogKeyContext::default()
+                },
+            ),
+            (
+                "key-free".to_string(),
+                PoolCatalogKeyContext {
+                    oauth_plan_type: Some("free".to_string()),
+                    ..PoolCatalogKeyContext::default()
+                },
+            ),
+            (
+                "key-team".to_string(),
+                PoolCatalogKeyContext {
+                    oauth_plan_type: Some("team".to_string()),
+                    ..PoolCatalogKeyContext::default()
+                },
+            ),
+        ]);
+
+        let (reordered, skipped) = apply_local_execution_pool_scheduler_with_runtime_map(
+            vec![key_plus, key_free, key_team],
+            &BTreeMap::new(),
+            &key_context_by_id,
+        );
+
+        assert!(skipped.is_empty());
+        assert_eq!(
+            reordered
+                .iter()
+                .map(|item| item.candidate.key_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["key-team", "key-free", "key-plus"]
+        );
+    }
+
+    #[test]
+    fn pool_scheduler_defaults_empty_pool_advanced_to_cache_affinity() {
+        let key_a = sample_eligible_candidate(
+            "provider-pool",
+            "endpoint-1",
+            "key-a",
+            10,
+            Some(json!({ "pool_advanced": {} })),
+        );
+        let key_b = sample_eligible_candidate(
+            "provider-pool",
+            "endpoint-1",
+            "key-b",
+            10,
+            Some(json!({ "pool_advanced": {} })),
+        );
+
+        let runtime_by_provider = BTreeMap::from([(
+            "provider-pool".to_string(),
+            AdminProviderPoolRuntimeState {
+                lru_score_by_key: BTreeMap::from([
+                    ("key-a".to_string(), 10.0),
+                    ("key-b".to_string(), 200.0),
+                ]),
+                ..AdminProviderPoolRuntimeState::default()
+            },
+        )]);
+
+        let (reordered, skipped) = apply_local_execution_pool_scheduler_with_runtime_map(
+            vec![key_a, key_b],
+            &runtime_by_provider,
+            &BTreeMap::new(),
+        );
+
+        assert!(skipped.is_empty());
+        assert_eq!(
+            reordered
+                .iter()
+                .map(|item| item.candidate.key_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["key-b", "key-a"]
         );
     }
 

@@ -496,6 +496,7 @@ import { parseApiError } from '@/utils/errorParser'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
 import { resolveTimelineFinalStatus } from '../utils/status'
 import {
+  buildPoolGroupVisibleAttempts,
   buildPoolParticipatedCandidates,
   extractPoolGroupId,
   makeAttemptKey,
@@ -508,7 +509,7 @@ interface NodeGroup {
   providerName: string
   primary: CandidateRecord
   primaryStatus: string
-  allAttempts: CandidateRecord[]  // 所有尝试（包括首次和重试）
+  allAttempts: CandidateRecord[]  // 当前展示的尝试（含主节点）
   retryCount: number
   totalLatency: number  // 所有尝试的总延迟
   startIndex: number
@@ -867,15 +868,19 @@ const groupedTimeline = computed<NodeGroup[]>(() => {
     })
     if (attempts.length === 0) continue
 
-    const poolPrimaryStatus = attempts.reduce((best, current) => {
+    const visibleAttempts = buildPoolGroupVisibleAttempts(attempts)
+    if (visibleAttempts.length === 0) continue
+
+    const poolPrimaryStatus = visibleAttempts.reduce((best, current) => {
       const bestPriority = STATUS_PRIORITY[best] ?? 0
       const currentStatus = getDisplayStatus(current)
       const currentPriority = STATUS_PRIORITY[currentStatus] ?? 0
       return currentPriority > bestPriority ? currentStatus : best
-    }, getDisplayStatus(attempts[0]))
+    }, getDisplayStatus(visibleAttempts[0]))
 
-    const successAttempt = attempts.find((item) => item.status === 'success')
-    const poolPrimary = successAttempt || attempts[attempts.length - 1] || attempts[0]
+    const successAttempt = visibleAttempts.find((item) => item.status === 'success')
+    const poolPrimary =
+      successAttempt || visibleAttempts[visibleAttempts.length - 1] || visibleAttempts[0]
     const startIndex = Math.min(...attempts.map(item => item.candidate_index))
     const endIndex = Math.max(...attempts.map(item => item.candidate_index))
 
@@ -884,12 +889,12 @@ const groupedTimeline = computed<NodeGroup[]>(() => {
       providerName: getProviderDisplayName(poolPrimary, { allowAuthTypeFallback: false }),
       primary: poolPrimary,
       primaryStatus: poolPrimaryStatus,
-      allAttempts: attempts,
-      retryCount: Math.max(0, attempts.length - 1),
-      totalLatency: attempts.reduce((sum, item) => sum + (item.latency_ms || 0), 0),
+      allAttempts: visibleAttempts,
+      retryCount: Math.max(0, visibleAttempts.length - 1),
+      totalLatency: visibleAttempts.reduce((sum, item) => sum + (item.latency_ms || 0), 0),
       startIndex,
       endIndex,
-      hasConversion: attempts.some((item) => item.extra_data?.needs_conversion === true),
+      hasConversion: visibleAttempts.some((item) => item.extra_data?.needs_conversion === true),
       providerApiFormat: null,
       isPoolGroup: true,
     })

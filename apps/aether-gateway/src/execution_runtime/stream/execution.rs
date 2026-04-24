@@ -895,6 +895,7 @@ async fn execute_stream_from_frame_stream(
     let direct_stream_finalize_kind = resolve_core_stream_direct_finalize_report_kind(plan_kind);
     let normalized_stream_report_context =
         normalize_provider_private_report_context(report_context.as_ref());
+    let upstream_headers = headers.clone();
     let mut private_stream_normalizer =
         maybe_build_provider_private_stream_normalizer(report_context.as_ref());
     let mut local_stream_rewriter =
@@ -904,10 +905,10 @@ async fn execute_stream_from_frame_stream(
         headers.remove("content-length");
         headers.insert("content-type".to_string(), "text/event-stream".to_string());
     }
-    let content_type = headers.get("content-type").map(String::as_str);
+    let upstream_content_type = upstream_headers.get("content-type").map(String::as_str);
     let skip_direct_finalize_prefetch = should_skip_direct_finalize_prefetch(
         direct_stream_finalize_kind.as_deref(),
-        content_type,
+        upstream_content_type,
         plan.provider_api_format.as_str(),
         plan.client_api_format.as_str(),
         private_stream_normalizer.is_some(),
@@ -933,7 +934,7 @@ async fn execute_stream_from_frame_stream(
             key_id = %plan.key_id,
             model_name,
             candidate_index = candidate_index.as_str(),
-            content_type = content_type.unwrap_or("-"),
+            content_type = upstream_content_type.unwrap_or("-"),
             provider_api_format = plan.provider_api_format.as_str(),
             client_api_format = plan.client_api_format.as_str(),
             "gateway skipped direct finalize prefetch for same-format passthrough stream"
@@ -1012,8 +1013,10 @@ async fn execute_stream_from_frame_stream(
                     provider_prefetched_body.extend_from_slice(&chunk);
                     prefetched_inspection_body.extend_from_slice(&chunk);
 
-                    let inspection =
-                        inspect_prefetched_stream_body(&headers, &prefetched_inspection_body);
+                    let inspection = inspect_prefetched_stream_body(
+                        &upstream_headers,
+                        &prefetched_inspection_body,
+                    );
                     match inspection {
                         StreamPrefetchInspection::EmbeddedError(body_json) => {
                             debug!(
@@ -1062,7 +1065,8 @@ async fn execute_stream_from_frame_stream(
                         StreamPrefetchInspection::NonError => {}
                     }
 
-                    if !response_headers_indicate_sse(&headers) && (200..300).contains(&status_code)
+                    if !response_headers_indicate_sse(&upstream_headers)
+                        && (200..300).contains(&status_code)
                     {
                         if let Some(body_json) =
                             parse_prefetched_sync_json_body(&prefetched_inspection_body)
@@ -1285,7 +1289,7 @@ async fn execute_stream_from_frame_stream(
     let request_id_for_report_log = short_request_id(&request_id);
     let candidate_id_for_report = candidate_id.clone();
     let emit_passthrough_sse_terminal_error =
-        skip_direct_finalize_prefetch && response_headers_indicate_sse(&headers);
+        skip_direct_finalize_prefetch && response_headers_indicate_sse(&upstream_headers);
     let body_capture_policy = match UsageRuntimeAccess::body_capture_policy(state.data.as_ref())
         .await
     {
@@ -2134,6 +2138,119 @@ mod tests {
         assert!(text.contains("event: response.output_text.delta"));
         assert!(text.contains("Hello from remote runtime sync json"));
         assert!(text.contains("event: response.completed"));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn execute_execution_runtime_stream_bridges_openai_image_sync_json_from_remote_runtime_to_image_sse(
+    ) {
+        let listener = crate::test_support::bind_loopback_listener()
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("local addr should resolve");
+        let server = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/v1/execute/stream",
+                any(|_request: Request| async move {
+                    let frames = concat!(
+                        "{\"type\":\"headers\",\"payload\":{\"kind\":\"headers\",\"status_code\":200,\"headers\":{\"content-type\":\"application/json\"}}}\n",
+                        "{\"type\":\"data\",\"payload\":{\"kind\":\"data\",\"text\":\"{\\\"created\\\":1776972364,\\\"data\\\":[{\\\"b64_json\\\":\\\"aGVsbG8=\\\"}],\\\"usage\\\":{\\\"total_tokens\\\":100,\\\"input_tokens\\\":50,\\\"output_tokens\\\":50,\\\"input_tokens_details\\\":{\\\"text_tokens\\\":10,\\\"image_tokens\\\":40}}}\"}}\n",
+                        "{\"type\":\"telemetry\",\"payload\":{\"kind\":\"telemetry\",\"telemetry\":{\"elapsed_ms\":41}}}\n",
+                        "{\"type\":\"eof\",\"payload\":{\"kind\":\"eof\"}}\n"
+                    );
+                    let mut response = axum::http::Response::new(Body::from(frames));
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/x-ndjson"),
+                    );
+                    response
+                }),
+            );
+            axum::serve(listener, app)
+                .await
+                .expect("server should start");
+        });
+
+        let state = AppState::new()
+            .expect("app state should build")
+            .with_execution_runtime_override_base_url(format!("http://{addr}"));
+        let plan = ExecutionPlan {
+            request_id: "req-remote-runtime-image-sync-json-stream".into(),
+            candidate_id: Some("cand-remote-runtime-image-sync-json-stream".into()),
+            provider_name: Some("openai".into()),
+            provider_id: "prov-1".into(),
+            endpoint_id: "ep-1".into(),
+            key_id: "key-1".into(),
+            method: "POST".into(),
+            url: "https://chatgpt.com/backend-api/codex/responses".into(),
+            headers: BTreeMap::from([
+                ("content-type".into(), "application/json".into()),
+                ("accept".into(), "text/event-stream".into()),
+            ]),
+            content_type: Some("application/json".into()),
+            content_encoding: None,
+            body: RequestBody::from_json(json!({
+                "model": "gpt-image-1",
+                "prompt": "hello",
+                "stream": true
+            })),
+            stream: true,
+            client_api_format: "openai:image".into(),
+            provider_api_format: "openai:image".into(),
+            model_name: Some("gpt-image-1".into()),
+            proxy: None,
+            tls_profile: None,
+            timeouts: Some(ExecutionTimeouts {
+                connect_ms: Some(5_000),
+                total_ms: Some(5_000),
+                ..ExecutionTimeouts::default()
+            }),
+        };
+        let decision = GatewayControlDecision::synthetic(
+            "/v1/images/generations",
+            Some("ai_public".to_string()),
+            Some("openai".to_string()),
+            Some("image".to_string()),
+            Some("openai:image".to_string()),
+        )
+        .with_execution_runtime_candidate(true);
+
+        let response = execute_execution_runtime_stream(
+            &state,
+            plan,
+            "trace-remote-runtime-image-sync-json-stream",
+            &decision,
+            "openai_image_stream",
+            None,
+            Some(json!({
+                "provider_api_format": "openai:image",
+                "client_api_format": "openai:image",
+                "mapped_model": "gpt-image-1",
+                "image_request": {
+                    "operation": "generate"
+                }
+            })),
+        )
+        .await
+        .expect("execution should succeed")
+        .expect("execution should return a client response");
+
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should read");
+        let text = String::from_utf8(body.to_vec()).expect("response body should be utf8");
+        assert!(text.contains("event: image_generation.completed"));
+        assert!(text.contains("\"type\":\"image_generation.completed\""));
+        assert!(text.contains("\"b64_json\":\"aGVsbG8=\""));
+        assert!(text.contains("\"total_tokens\":100"));
 
         server.abort();
     }
