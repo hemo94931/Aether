@@ -727,7 +727,7 @@ pub(crate) fn gemini_part_to_canonical_block(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("toolu_{name}_{index}"));
+            .unwrap_or_else(|| format!("call_auto_{index}"));
         return Some(CanonicalContentBlock::ToolUse {
             id,
             name: name.to_string(),
@@ -2206,7 +2206,7 @@ pub(crate) fn flush_openai_responses_message_item(
         "id": id,
         "role": "assistant",
         "status": "completed",
-        "content": std::mem::take(message_content),
+        "content": coalesce_openai_responses_text_content(std::mem::take(message_content)),
     }));
     *message_index += 1;
 }
@@ -2224,7 +2224,62 @@ pub(crate) fn openai_content_value_from_parts(parts: Vec<Value>, tool_only: bool
             return Value::String(text.to_string());
         }
     }
+    if parts.iter().all(|part| {
+        part.as_object()
+            .and_then(|object| object.get("text"))
+            .and_then(Value::as_str)
+            .is_some()
+            && part
+                .as_object()
+                .and_then(|object| object.get("type"))
+                .and_then(Value::as_str)
+                .is_none_or(|part_type| part_type == "text")
+    }) {
+        return Value::String(
+            parts
+                .iter()
+                .filter_map(|part| {
+                    part.as_object()
+                        .and_then(|object| object.get("text"))
+                        .and_then(Value::as_str)
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+        );
+    }
     Value::Array(parts)
+}
+
+fn coalesce_openai_responses_text_content(content: Vec<Value>) -> Vec<Value> {
+    if content.len() <= 1 {
+        return content;
+    }
+    let mut text = String::new();
+    let mut annotations = Vec::new();
+    for part in &content {
+        let Some(part_object) = part.as_object() else {
+            return content;
+        };
+        let part_type = part_object
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !matches!(part_type, "output_text" | "text") {
+            return content;
+        }
+        let Some(part_text) = part_object.get("text").and_then(Value::as_str) else {
+            return content;
+        };
+        text.push_str(part_text);
+        if let Some(part_annotations) = part_object.get("annotations").and_then(Value::as_array) {
+            annotations.extend(part_annotations.iter().cloned());
+        }
+    }
+    vec![json!({
+        "type": "output_text",
+        "text": text,
+        "annotations": annotations,
+    })]
 }
 
 pub(crate) fn openai_content_text(content: Option<&Value>) -> String {
@@ -3376,6 +3431,17 @@ pub(crate) fn openai_usage_to_canonical(value: Option<&Value>) -> Option<Canonic
         .and_then(|details| details.get("cached_tokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let cache_write_tokens = usage
+        .get("prompt_tokens_details")
+        .or_else(|| usage.get("input_tokens_details"))
+        .and_then(Value::as_object)
+        .and_then(|details| {
+            details
+                .get("cached_creation_tokens")
+                .or_else(|| details.get("cache_creation_tokens"))
+        })
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     Some(CanonicalUsage {
         input_tokens,
         output_tokens,
@@ -3384,6 +3450,7 @@ pub(crate) fn openai_usage_to_canonical(value: Option<&Value>) -> Option<Canonic
             .and_then(Value::as_u64)
             .unwrap_or(input_tokens + output_tokens),
         cache_read_tokens,
+        cache_write_tokens,
         reasoning_tokens,
         extensions: openai_extensions(
             usage,

@@ -2,13 +2,13 @@ use serde_json::{json, Value};
 
 use crate::{
     canonical::{
-        canonical_message_to_openai_chat, canonical_response_format_to_openai,
-        canonical_tool_choice_to_openai, canonical_tool_to_openai, namespace_extension_object,
-        openai_content_text, openai_extensions, openai_generation_config,
-        openai_message_content_blocks, openai_response_format_to_canonical,
-        openai_responses_extension, openai_role_to_canonical, openai_tool_choice_to_canonical,
-        openai_tools_to_canonical, write_openai_generation_config, CanonicalInstruction,
-        CanonicalRequest, CanonicalRole, CanonicalThinkingConfig,
+        canonical_extension_object_mut, canonical_message_to_openai_chat,
+        canonical_response_format_to_openai, canonical_tool_choice_to_openai,
+        canonical_tool_to_openai, namespace_extension_object, openai_content_text,
+        openai_extensions, openai_generation_config, openai_message_content_blocks,
+        openai_response_format_to_canonical, openai_responses_extension, openai_role_to_canonical,
+        openai_tool_choice_to_canonical, openai_tools_to_canonical, write_openai_generation_config,
+        CanonicalInstruction, CanonicalRequest, CanonicalRole, CanonicalThinkingConfig,
         OPENAI_RESPONSES_EXTENSION_NAMESPACE, OPENAI_RESPONSES_LEGACY_EXTENSION_NAMESPACE,
     },
     context::FormatContext,
@@ -116,6 +116,13 @@ pub fn from_raw(body_json: &Value) -> Option<CanonicalRequest> {
             "top_logprobs",
         ],
     );
+    if let Some(verbosity) = request.get("verbosity").cloned() {
+        canonical_extension_object_mut(
+            &mut canonical.extensions,
+            OPENAI_RESPONSES_EXTENSION_NAMESPACE,
+        )
+        .insert("verbosity".to_string(), verbosity);
+    }
     Some(canonical)
 }
 
