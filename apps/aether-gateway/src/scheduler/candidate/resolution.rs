@@ -1,8 +1,7 @@
 use std::collections::BTreeSet;
 
-use aether_scheduler_core::SchedulerAffinityTarget;
+use aether_scheduler_core::{candidate_key, SchedulerAffinityTarget};
 
-use super::affinity::candidate_key;
 use super::runtime::{current_candidate_runtime_skip_reason, CandidateRuntimeSelectionSnapshot};
 use super::{SchedulerMinimalCandidateSelectionCandidate, SchedulerSkippedCandidate};
 

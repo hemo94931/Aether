@@ -10,10 +10,10 @@ use aether_data_contracts::repository::candidates::{
     RequestCandidateStatus, StoredRequestCandidate,
 };
 use aether_scheduler_core::{
-    apply_scheduler_candidate_ranking, enumerate_minimal_candidate_selection,
-    EnumerateMinimalCandidateSelectionInput, SchedulerMinimalCandidateSelectionCandidate,
-    SchedulerPriorityMode, SchedulerRankableCandidate, SchedulerRankingContext,
-    SchedulerRankingMode,
+    apply_scheduler_candidate_ranking, candidate_affinity_hash,
+    enumerate_minimal_candidate_selection, EnumerateMinimalCandidateSelectionInput,
+    SchedulerMinimalCandidateSelectionCandidate, SchedulerPriorityMode, SchedulerRankableCandidate,
+    SchedulerRankingContext, SchedulerRankingMode,
 };
 
 use crate::cache::SchedulerAffinityTarget;
@@ -24,7 +24,7 @@ use crate::data::candidate_selection::{
 use crate::data::GatewayDataState;
 use crate::{AppState, GatewayError};
 
-use super::super::affinity::{build_scheduler_affinity_cache_key, candidate_affinity_hash};
+use super::super::affinity::build_scheduler_affinity_cache_key;
 use super::super::selection::select_minimal_candidate as select_candidate_impl;
 use super::support::{sample_auth_snapshot, sample_key, sample_provider, sample_row};
 

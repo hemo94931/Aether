@@ -1,13 +1,12 @@
 use aether_scheduler_core::{
-    apply_scheduler_candidate_ranking, effective_provider_key_health_score,
-    matches_affinity_target, provider_key_health_bucket,
+    apply_scheduler_candidate_ranking, candidate_affinity_hash,
+    effective_provider_key_health_score, matches_affinity_target, provider_key_health_bucket,
     requested_capability_priority_for_candidate, SchedulerAffinityTarget,
     SchedulerRankableCandidate, SchedulerRankingContext, SchedulerRankingMode,
 };
 
 use crate::scheduler::config::{SchedulerOrderingConfig, SchedulerSchedulingMode};
 
-use super::affinity::candidate_affinity_hash;
 use super::runtime::CandidateRuntimeSelectionSnapshot;
 use super::SchedulerMinimalCandidateSelectionCandidate;
 
