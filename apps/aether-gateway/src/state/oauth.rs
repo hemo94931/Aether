@@ -9,7 +9,9 @@ use crate::provider_transport::LocalOAuthHttpExecutor;
 use super::super::provider_transport;
 use crate::provider_key_auth::provider_key_is_oauth_managed;
 use aether_admin::provider::quota as admin_provider_quota_pure;
-use aether_contracts::{ExecutionPlan, ExecutionTimeouts, RequestBody};
+use aether_contracts::{
+    ExecutionPlan, ExecutionTimeouts, RequestBody, EXECUTION_REQUEST_FOLLOW_REDIRECTS_HEADER,
+};
 use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use flate2::read::{DeflateDecoder, GzDecoder};
@@ -1102,6 +1104,11 @@ impl AppState {
                 body_ref: None,
             }
         };
+        let mut headers = request.headers.clone();
+        headers.insert(
+            EXECUTION_REQUEST_FOLLOW_REDIRECTS_HEADER.to_string(),
+            "true".to_string(),
+        );
         let plan = ExecutionPlan {
             request_id: request.request_id.to_string(),
             candidate_id: None,
@@ -1111,7 +1118,7 @@ impl AppState {
             key_id: transport.key.id.clone(),
             method: request.method.as_str().to_string(),
             url: request.url.clone(),
-            headers: request.headers.clone(),
+            headers,
             content_type: request
                 .headers
                 .get("content-type")

@@ -123,7 +123,14 @@ pub(crate) async fn create_provider_oauth_catalog_key(
     record.circuit_breaker_by_format = Some(json!({}));
     record.created_at_unix_ms = Some(now_unix_secs);
     record.updated_at_unix_secs = Some(now_unix_secs);
-    state.create_provider_catalog_key(&record).await
+    let created = state.create_provider_catalog_key(&record).await?;
+    if let Some(key) = created.as_ref() {
+        let _ = state
+            .app()
+            .invalidate_local_oauth_refresh_entry(&key.id)
+            .await;
+    }
+    Ok(created)
 }
 
 pub(crate) async fn update_existing_provider_oauth_catalog_key(
@@ -166,7 +173,14 @@ pub(crate) async fn update_existing_provider_oauth_catalog_key(
         updated.proxy = Some(proxy);
     }
     updated.updated_at_unix_secs = Some(now_unix_secs);
-    state.update_provider_catalog_key(&updated).await
+    let persisted = state.update_provider_catalog_key(&updated).await?;
+    if let Some(key) = persisted.as_ref() {
+        let _ = state
+            .app()
+            .invalidate_local_oauth_refresh_entry(&key.id)
+            .await;
+    }
+    Ok(persisted)
 }
 
 fn provider_oauth_catalog_key_api_formats(

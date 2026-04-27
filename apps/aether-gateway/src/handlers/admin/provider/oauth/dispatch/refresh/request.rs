@@ -101,6 +101,7 @@ pub(super) async fn parse_admin_provider_oauth_refresh_request(
         key,
         provider,
         provider_type,
+        trace_id: request_context.trace_id().to_string(),
         transport,
     }))
 }
