@@ -154,6 +154,7 @@ pub(super) async fn materialize_local_standard_candidate_attempts(
                     candidate: skipped_candidate.candidate,
                     skip_reason: skipped_candidate.skip_reason,
                     transport: None,
+                    ranking: None,
                     extra_data: None,
                 });
             }

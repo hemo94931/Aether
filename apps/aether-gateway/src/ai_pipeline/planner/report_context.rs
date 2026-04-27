@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
+use aether_scheduler_core::SchedulerRankingOutcome;
 use serde_json::{Map, Value};
 
 use crate::ai_pipeline::contracts::ExecutionRuntimeAuthContext;
+use crate::ai_pipeline::planner::candidate_metadata::append_ranking_metadata_to_object;
 use crate::orchestration::ExecutionAttemptIdentity;
 
 pub(crate) struct LocalExecutionReportContextParts<'a> {
@@ -23,6 +25,7 @@ pub(crate) struct LocalExecutionReportContextParts<'a> {
     pub(crate) client_api_format: &'a str,
     pub(crate) mapped_model: Option<&'a str>,
     pub(crate) candidate_group_id: Option<&'a str>,
+    pub(crate) ranking: Option<&'a SchedulerRankingOutcome>,
     pub(crate) upstream_url: Option<&'a str>,
     pub(crate) header_rules: Option<&'a Value>,
     pub(crate) body_rules: Option<&'a Value>,
@@ -171,6 +174,9 @@ pub(crate) fn build_local_execution_report_context(
             "candidate_group_id".to_string(),
             Value::String(candidate_group_id.to_string()),
         );
+    }
+    if let Some(ranking) = parts.ranking {
+        append_ranking_metadata_to_object(&mut object, ranking);
     }
     if let Some(upstream_url) = parts.upstream_url {
         object.insert(

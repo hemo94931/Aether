@@ -140,6 +140,7 @@ pub(super) async fn list_local_video_create_candidate_attempts(
                     candidate: item.candidate,
                     skip_reason: item.skip_reason,
                     transport: None,
+                    ranking: None,
                     extra_data: None,
                 })
                 .collect(),

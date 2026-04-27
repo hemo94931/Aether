@@ -78,6 +78,7 @@ pub(crate) async fn list_local_openai_chat_candidates(
                     candidate: skipped_candidate.candidate,
                     skip_reason: skipped_candidate.skip_reason,
                     transport: None,
+                    ranking: None,
                     extra_data: None,
                 });
             }

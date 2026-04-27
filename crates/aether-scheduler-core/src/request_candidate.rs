@@ -24,6 +24,12 @@ pub struct SchedulerRequestCandidateReportContext {
     pub body_rules: Option<Value>,
     pub proxy: Option<Value>,
     pub error_flow: Option<Value>,
+    pub ranking_mode: Option<String>,
+    pub priority_mode: Option<String>,
+    pub ranking_index: Option<u32>,
+    pub priority_slot: Option<i32>,
+    pub promoted_by: Option<String>,
+    pub demoted_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +65,12 @@ struct ReportCandidateExtraDataInput {
     body_rules: Option<Value>,
     proxy: Option<Value>,
     error_flow: Option<Value>,
+    ranking_mode: Option<String>,
+    priority_mode: Option<String>,
+    ranking_index: Option<u32>,
+    priority_slot: Option<i32>,
+    promoted_by: Option<String>,
+    demoted_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,6 +153,12 @@ pub fn parse_request_candidate_report_context(
             .get("error_flow")
             .cloned()
             .filter(|value| !value.is_null()),
+        ranking_mode: string_field(report_context, "ranking_mode"),
+        priority_mode: string_field(report_context, "priority_mode"),
+        ranking_index: u32_field(report_context, "ranking_index"),
+        priority_slot: i32_field(report_context, "priority_slot"),
+        promoted_by: string_field(report_context, "promoted_by"),
+        demoted_by: string_field(report_context, "demoted_by"),
     })
 }
 
@@ -170,6 +188,12 @@ pub fn resolve_report_request_candidate_slot(
         body_rules,
         proxy,
         error_flow,
+        ranking_mode,
+        priority_mode,
+        ranking_index,
+        priority_slot,
+        promoted_by,
+        demoted_by,
     } = metadata;
     let request_id = request_id?;
     let synthesized_extra_data = build_report_candidate_extra_data(ReportCandidateExtraDataInput {
@@ -182,6 +206,12 @@ pub fn resolve_report_request_candidate_slot(
         body_rules,
         proxy,
         error_flow,
+        ranking_mode,
+        priority_mode,
+        ranking_index,
+        priority_slot,
+        promoted_by,
+        demoted_by,
     });
     let created_at_unix_ms = matched_candidate
         .as_ref()
@@ -346,6 +376,12 @@ pub fn build_local_request_candidate_status_record(
         body_rules: metadata.body_rules.clone(),
         proxy: metadata.proxy.clone(),
         error_flow: metadata.error_flow.clone(),
+        ranking_mode: metadata.ranking_mode.clone(),
+        priority_mode: metadata.priority_mode.clone(),
+        ranking_index: metadata.ranking_index,
+        priority_slot: metadata.priority_slot,
+        promoted_by: metadata.promoted_by.clone(),
+        demoted_by: metadata.demoted_by.clone(),
     });
     let created_at_unix_ms = started_at_unix_ms.or(finished_at_unix_ms);
 
@@ -500,6 +536,14 @@ fn u32_field_from_object(object: &Map<String, Value>, key: &str) -> Option<u32> 
         .and_then(|value| u32::try_from(value).ok())
 }
 
+fn i32_field(value: &Value, key: &str) -> Option<i32> {
+    value
+        .as_object()
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok())
+}
+
 fn match_existing_report_candidate<'a>(
     candidates: &'a [StoredRequestCandidate],
     metadata: &SchedulerRequestCandidateReportContext,
@@ -558,6 +602,12 @@ fn build_report_candidate_extra_data(input: ReportCandidateExtraDataInput) -> Op
         body_rules,
         proxy,
         error_flow,
+        ranking_mode,
+        priority_mode,
+        ranking_index,
+        priority_slot,
+        promoted_by,
+        demoted_by,
     } = input;
     let mut extra_data = Map::with_capacity(8);
     extra_data.insert("gateway_execution_runtime".to_string(), Value::Bool(true));
@@ -594,6 +644,30 @@ fn build_report_candidate_extra_data(input: ReportCandidateExtraDataInput) -> Op
     }
     if let Some(error_flow) = error_flow {
         extra_data.insert("error_flow".to_string(), error_flow);
+    }
+    if let Some(ranking_mode) = ranking_mode {
+        extra_data.insert("ranking_mode".to_string(), Value::String(ranking_mode));
+    }
+    if let Some(priority_mode) = priority_mode {
+        extra_data.insert("priority_mode".to_string(), Value::String(priority_mode));
+    }
+    if let Some(ranking_index) = ranking_index {
+        extra_data.insert(
+            "ranking_index".to_string(),
+            Value::Number(ranking_index.into()),
+        );
+    }
+    if let Some(priority_slot) = priority_slot {
+        extra_data.insert(
+            "priority_slot".to_string(),
+            Value::Number(priority_slot.into()),
+        );
+    }
+    if let Some(promoted_by) = promoted_by {
+        extra_data.insert("promoted_by".to_string(), Value::String(promoted_by));
+    }
+    if let Some(demoted_by) = demoted_by {
+        extra_data.insert("demoted_by".to_string(), Value::String(demoted_by));
     }
     (!extra_data.is_empty()).then_some(Value::Object(extra_data))
 }
@@ -881,7 +955,13 @@ mod tests {
                     "provider_api_format": "openai:responses",
                     "upstream_url": "https://example.com/v1/responses",
                     "mapped_model": "gpt-5-upstream",
-                    "key_name": "primary"
+                    "key_name": "primary",
+                    "ranking_mode": "CacheAffinity",
+                    "priority_mode": "Provider",
+                    "ranking_index": 2,
+                    "priority_slot": 7,
+                    "promoted_by": "cached_affinity",
+                    "demoted_by": "cross_format"
                 })),
                 status_update: SchedulerRequestCandidateStatusUpdate {
                     status: RequestCandidateStatus::Failed,
@@ -914,6 +994,48 @@ mod tests {
                 .as_ref()
                 .and_then(|value| value.get("mapped_model")),
             Some(&json!("gpt-5-upstream"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("ranking_mode")),
+            Some(&json!("CacheAffinity"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("priority_mode")),
+            Some(&json!("Provider"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("ranking_index")),
+            Some(&json!(2))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("priority_slot")),
+            Some(&json!(7))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("promoted_by")),
+            Some(&json!("cached_affinity"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("demoted_by")),
+            Some(&json!("cross_format"))
         );
     }
 

@@ -4,6 +4,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::ai_pipeline::planner::candidate_affinity_cache::remember_scheduler_affinity_for_candidate;
+use crate::ai_pipeline::planner::candidate_metadata::append_ranking_metadata_to_object;
 use crate::ai_pipeline::planner::candidate_resolution::{
     EligibleLocalExecutionCandidate, SkippedLocalExecutionCandidate,
 };
@@ -177,34 +178,7 @@ fn local_candidate_extra_data_with_ranking(
         }
         None => serde_json::Map::new(),
     };
-    object.insert(
-        "ranking_mode".to_string(),
-        Value::String(format!("{:?}", ranking.ranking_mode)),
-    );
-    object.insert(
-        "priority_mode".to_string(),
-        Value::String(format!("{:?}", ranking.priority_mode)),
-    );
-    object.insert(
-        "ranking_index".to_string(),
-        Value::Number(serde_json::Number::from(ranking.ranking_index as u64)),
-    );
-    object.insert(
-        "priority_slot".to_string(),
-        Value::Number(serde_json::Number::from(i64::from(ranking.priority_slot))),
-    );
-    if let Some(promoted_by) = ranking.promoted_by {
-        object.insert(
-            "promoted_by".to_string(),
-            Value::String(promoted_by.to_string()),
-        );
-    }
-    if let Some(demoted_by) = ranking.demoted_by {
-        object.insert(
-            "demoted_by".to_string(),
-            Value::String(demoted_by.to_string()),
-        );
-    }
+    append_ranking_metadata_to_object(&mut object, ranking);
     Some(Value::Object(object))
 }
 
@@ -372,7 +346,10 @@ pub(crate) async fn persist_skipped_local_execution_candidates(
             &generated_candidate_id,
             required_capabilities,
             skipped_candidate.skip_reason,
-            skipped_candidate.extra_data,
+            local_candidate_extra_data_with_ranking(
+                skipped_candidate.extra_data,
+                skipped_candidate.ranking.as_ref(),
+            ),
             error_context,
             record_runtime_miss_diagnostic,
         )
@@ -641,13 +618,23 @@ mod tests {
                         "pool-skipped",
                         Some(json!({ "pool_advanced": {} })),
                     )),
+                    ranking: None,
                     extra_data: None,
                 },
                 SkippedLocalExecutionCandidate {
                     candidate: sample_candidate("normal-skipped"),
                     skip_reason: "key_inactive",
                     transport: None,
-                    extra_data: None,
+                    ranking: Some(SchedulerRankingOutcome {
+                        original_index: 2,
+                        ranking_index: 1,
+                        priority_mode: SchedulerPriorityMode::Provider,
+                        ranking_mode: SchedulerRankingMode::CacheAffinity,
+                        priority_slot: 9,
+                        promoted_by: None,
+                        demoted_by: Some("cross_format"),
+                    }),
+                    extra_data: Some(json!({ "existing": "value" })),
                 },
             ],
             "persist skipped should not fail",
@@ -662,5 +649,19 @@ mod tests {
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].key_id.as_deref(), Some("normal-skipped"));
         assert_eq!(stored[0].candidate_index, 0);
+        let extra_data = stored[0]
+            .extra_data
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .expect("skipped ranking metadata should persist");
+        assert_eq!(extra_data.get("existing"), Some(&json!("value")));
+        assert_eq!(
+            extra_data.get("ranking_mode"),
+            Some(&json!("CacheAffinity"))
+        );
+        assert_eq!(extra_data.get("priority_mode"), Some(&json!("Provider")));
+        assert_eq!(extra_data.get("ranking_index"), Some(&json!(1)));
+        assert_eq!(extra_data.get("priority_slot"), Some(&json!(9)));
+        assert_eq!(extra_data.get("demoted_by"), Some(&json!("cross_format")));
     }
 }

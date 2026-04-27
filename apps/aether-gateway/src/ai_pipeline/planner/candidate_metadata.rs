@@ -1,5 +1,5 @@
 use aether_contracts::ProxySnapshot;
-use aether_scheduler_core::SchedulerMinimalCandidateSelectionCandidate;
+use aether_scheduler_core::{SchedulerMinimalCandidateSelectionCandidate, SchedulerRankingOutcome};
 use serde_json::{json, Map, Value};
 
 use crate::ai_pipeline::planner::candidate_resolution::EligibleLocalExecutionCandidate;
@@ -24,6 +24,40 @@ pub(crate) struct LocalExecutionCandidateMetadataParts<'a> {
     pub(crate) provider_api_format: &'a str,
     pub(crate) client_api_format: &'a str,
     pub(crate) extra_fields: Map<String, Value>,
+}
+
+pub(crate) fn append_ranking_metadata_to_object(
+    object: &mut Map<String, Value>,
+    ranking: &SchedulerRankingOutcome,
+) {
+    object.insert(
+        "ranking_mode".to_string(),
+        Value::String(format!("{:?}", ranking.ranking_mode)),
+    );
+    object.insert(
+        "priority_mode".to_string(),
+        Value::String(format!("{:?}", ranking.priority_mode)),
+    );
+    object.insert(
+        "ranking_index".to_string(),
+        Value::Number(serde_json::Number::from(ranking.ranking_index as u64)),
+    );
+    object.insert(
+        "priority_slot".to_string(),
+        Value::Number(serde_json::Number::from(i64::from(ranking.priority_slot))),
+    );
+    if let Some(promoted_by) = ranking.promoted_by {
+        object.insert(
+            "promoted_by".to_string(),
+            Value::String(promoted_by.to_string()),
+        );
+    }
+    if let Some(demoted_by) = ranking.demoted_by {
+        object.insert(
+            "demoted_by".to_string(),
+            Value::String(demoted_by.to_string()),
+        );
+    }
 }
 
 pub(crate) fn build_request_trace_proxy_value(

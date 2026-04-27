@@ -210,6 +210,7 @@ pub(crate) async fn materialize_local_openai_responses_candidate_attempts(
                     candidate: skipped_candidate.candidate,
                     skip_reason: skipped_candidate.skip_reason,
                     transport: None,
+                    ranking: None,
                     extra_data: None,
                 });
             }

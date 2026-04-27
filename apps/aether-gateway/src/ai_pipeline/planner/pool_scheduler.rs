@@ -449,6 +449,7 @@ fn schedule_pool_group(
                 candidate,
                 skip_reason: POOL_ACCOUNT_BLOCKED_SKIP_REASON,
                 transport: Some(transport),
+                ranking,
                 extra_data: None,
             });
             continue;
@@ -459,6 +460,7 @@ fn schedule_pool_group(
                 candidate,
                 skip_reason: POOL_ACCOUNT_EXHAUSTED_SKIP_REASON,
                 transport: Some(transport),
+                ranking,
                 extra_data: None,
             });
             continue;
@@ -469,6 +471,7 @@ fn schedule_pool_group(
                 candidate,
                 skip_reason: POOL_COOLDOWN_SKIP_REASON,
                 transport: Some(transport),
+                ranking,
                 extra_data: None,
             });
             continue;
@@ -482,6 +485,7 @@ fn schedule_pool_group(
                 candidate,
                 skip_reason: POOL_COST_LIMIT_REACHED_SKIP_REASON,
                 transport: Some(transport),
+                ranking,
                 extra_data: None,
             });
             continue;

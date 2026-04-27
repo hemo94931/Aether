@@ -27,6 +27,7 @@ pub(crate) struct SkippedLocalExecutionCandidate {
     pub(crate) candidate: SchedulerMinimalCandidateSelectionCandidate,
     pub(crate) skip_reason: &'static str,
     pub(crate) transport: Option<Arc<GatewayProviderTransportSnapshot>>,
+    pub(crate) ranking: Option<SchedulerRankingOutcome>,
     pub(crate) extra_data: Option<serde_json::Value>,
 }
 
@@ -131,6 +132,7 @@ where
                 candidate,
                 skip_reason: "transport_snapshot_missing",
                 transport: None,
+                ranking: None,
                 extra_data: None,
             });
             continue;
@@ -145,6 +147,7 @@ where
                 candidate,
                 skip_reason,
                 transport: Some(transport),
+                ranking: None,
                 extra_data: None,
             }),
             None => selectable.push(EligibleLocalExecutionCandidate {

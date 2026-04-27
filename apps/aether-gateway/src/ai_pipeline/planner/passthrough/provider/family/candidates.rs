@@ -123,6 +123,7 @@ pub(crate) async fn materialize_local_same_format_provider_candidate_attempts(
             candidate: item.candidate,
             skip_reason: item.skip_reason,
             transport: None,
+            ranking: None,
             extra_data: None,
         })
         .chain(skipped_candidates)
