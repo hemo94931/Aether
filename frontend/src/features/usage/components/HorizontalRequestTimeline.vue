@@ -1342,15 +1342,16 @@ const currentAttemptRankingInfo = computed<{
 } | null>(() => {
   const attempt = currentAttempt.value
   if (!attempt) return null
+  const ranking = extractObject(attempt.ranking)
   const extra = extractObject(attempt.extra_data)
-  if (!extra) return null
+  if (!ranking && !extra) return null
 
-  const rankingMode = normalizeMetadataText(extra.ranking_mode)
-  const priorityMode = normalizeMetadataText(extra.priority_mode)
-  const promotedBy = normalizeMetadataText(extra.promoted_by)
-  const demotedBy = normalizeMetadataText(extra.demoted_by)
-  const rankingIndex = normalizePriorityNumber(extra.ranking_index)
-  const prioritySlot = normalizePriorityNumber(extra.priority_slot)
+  const rankingMode = normalizeMetadataText(ranking?.mode ?? extra?.ranking_mode)
+  const priorityMode = normalizeMetadataText(ranking?.priority_mode ?? extra?.priority_mode)
+  const promotedBy = normalizeMetadataText(ranking?.promoted_by ?? extra?.promoted_by)
+  const demotedBy = normalizeMetadataText(ranking?.demoted_by ?? extra?.demoted_by)
+  const rankingIndex = normalizePriorityNumber(ranking?.index ?? extra?.ranking_index)
+  const prioritySlot = normalizePriorityNumber(ranking?.priority_slot ?? extra?.priority_slot)
   if (!rankingMode && !priorityMode && !promotedBy && !demotedBy && rankingIndex === null && prioritySlot === null) {
     return null
   }

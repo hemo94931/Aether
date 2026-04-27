@@ -2461,6 +2461,20 @@ registerDynamicRoute('GET', '/api/admin/monitoring/trace/:requestId', async (_co
         status: 'skipped',
         skip_reason: ['并发限制已满', '健康分数过低', '倍率不匹配'][i % 3],
         is_cached: false,
+        ranking: {
+          mode: record.cache_read_input_tokens > 0 ? 'CacheAffinity' : 'FixedOrder',
+          priority_mode: 'Provider',
+          index: i,
+          priority_slot: i + 1,
+          demoted_by: i > 0 ? 'cross_format' : undefined
+        },
+        extra_data: {
+          ranking_mode: record.cache_read_input_tokens > 0 ? 'CacheAffinity' : 'FixedOrder',
+          priority_mode: 'Provider',
+          ranking_index: i,
+          priority_slot: i + 1,
+          demoted_by: i > 0 ? 'cross_format' : undefined
+        },
         latency_ms: 10 + Math.floor(Math.random() * 20),
         created_at: skipStarted.toISOString(),
         started_at: skipStarted.toISOString(),
@@ -2492,6 +2506,20 @@ registerDynamicRoute('GET', '/api/admin/monitoring/trace/:requestId', async (_co
       status: 'success',
       is_cached: record.cache_read_input_tokens > 0,
       status_code: 200,
+      ranking: {
+        mode: record.cache_read_input_tokens > 0 ? 'CacheAffinity' : 'FixedOrder',
+        priority_mode: 'Provider',
+        index: skipCount,
+        priority_slot: record.cache_read_input_tokens > 0 ? 7 : skipCount + 1,
+        promoted_by: record.cache_read_input_tokens > 0 ? 'cached_affinity' : undefined
+      },
+      extra_data: {
+        ranking_mode: record.cache_read_input_tokens > 0 ? 'CacheAffinity' : 'FixedOrder',
+        priority_mode: 'Provider',
+        ranking_index: skipCount,
+        priority_slot: record.cache_read_input_tokens > 0 ? 7 : skipCount + 1,
+        promoted_by: record.cache_read_input_tokens > 0 ? 'cached_affinity' : undefined
+      },
       latency_ms: baseLatency,
       created_at: successStarted.toISOString(),
       started_at: successStarted.toISOString(),
@@ -2524,6 +2552,18 @@ registerDynamicRoute('GET', '/api/admin/monitoring/trace/:requestId', async (_co
         status_code: record.status_code,
         error_type: ['rate_limit_error', 'api_error', 'timeout_error'][i % 3],
         error_message: record.error_message || 'Request failed',
+        ranking: {
+          mode: 'FixedOrder',
+          priority_mode: 'Provider',
+          index: i,
+          priority_slot: i + 1
+        },
+        extra_data: {
+          ranking_mode: 'FixedOrder',
+          priority_mode: 'Provider',
+          ranking_index: i,
+          priority_slot: i + 1
+        },
         latency_ms: attemptLatency,
         created_at: attemptStarted.toISOString(),
         started_at: attemptStarted.toISOString(),
@@ -2549,6 +2589,18 @@ registerDynamicRoute('GET', '/api/admin/monitoring/trace/:requestId', async (_co
       required_capabilities: {},
       status: 'streaming',
       is_cached: false,
+      ranking: {
+        mode: 'FixedOrder',
+        priority_mode: 'Provider',
+        index: 0,
+        priority_slot: 1
+      },
+      extra_data: {
+        ranking_mode: 'FixedOrder',
+        priority_mode: 'Provider',
+        ranking_index: 0,
+        priority_slot: 1
+      },
       latency_ms: undefined,
       created_at: now.toISOString(),
       started_at: now.toISOString(),
