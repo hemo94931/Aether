@@ -51,6 +51,10 @@ pub(crate) fn build_local_execution_report_context(
         Value::String(parts.auth_context.api_key_id.clone()),
     );
     object.insert(
+        "api_key_is_standalone".to_string(),
+        Value::Bool(parts.auth_context.api_key_is_standalone),
+    );
+    object.insert(
         "username".to_string(),
         parts
             .auth_context

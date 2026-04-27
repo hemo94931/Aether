@@ -1543,6 +1543,12 @@ fn build_runtime_request_metadata_seed_from_parts(
             Value::Bool(upstream_is_stream),
         );
     }
+    if let Some(api_key_is_standalone) = context_bool(context, "api_key_is_standalone") {
+        metadata.insert(
+            "api_key_is_standalone".to_string(),
+            Value::Bool(api_key_is_standalone),
+        );
+    }
     let provider_source_bytes = provider_request_body_base64.and_then(decoded_base64_len_hint);
     append_runtime_body_capture_metadata(
         &mut metadata,
@@ -2496,6 +2502,47 @@ mod tests {
             Some("all_candidates_skipped")
         );
         assert_eq!(record.request_metadata, None);
+    }
+
+    #[test]
+    fn pending_usage_record_preserves_standalone_key_metadata() {
+        let plan = ExecutionPlan {
+            request_id: "req-pending-standalone-1".to_string(),
+            candidate_id: None,
+            provider_name: Some("OpenAI".to_string()),
+            provider_id: "provider-1".to_string(),
+            endpoint_id: "endpoint-1".to_string(),
+            key_id: "key-1".to_string(),
+            method: "POST".to_string(),
+            url: "https://example.com/v1/responses".to_string(),
+            headers: BTreeMap::new(),
+            content_type: Some("application/json".to_string()),
+            content_encoding: None,
+            body: RequestBody::from_json(json!({"model": "gpt-5.4"})),
+            stream: false,
+            client_api_format: "openai:responses".to_string(),
+            provider_api_format: "openai:responses".to_string(),
+            model_name: Some("gpt-5.4".to_string()),
+            proxy: None,
+            tls_profile: None,
+            timeouts: None,
+        };
+
+        let record = build_pending_usage_record(
+            &plan,
+            Some(&json!({
+                "api_key_is_standalone": true
+            })),
+            1_700_000_000,
+        )
+        .expect("pending usage should build");
+
+        assert_eq!(
+            record.request_metadata,
+            Some(json!({
+                "api_key_is_standalone": true
+            }))
+        );
     }
 
     #[test]
