@@ -279,7 +279,7 @@ pub fn extract_global_priority_for_format(
 }
 
 pub fn normalize_api_format(value: &str) -> String {
-    aether_ai_formats::normalize_legacy_openai_format_alias(value)
+    aether_ai_formats::normalize_api_format_alias(value)
 }
 
 fn row_has_candidate_model_name(

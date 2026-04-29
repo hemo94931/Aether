@@ -43,7 +43,7 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_with_local_syn
             true,
             false,
             Some(serde_json::json!(["gemini"])),
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             Some(serde_json::json!(["gemini-cli"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -54,7 +54,7 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_with_local_syn
             Some(5),
             Some(4_102_444_800),
             Some(serde_json::json!(["gemini"])),
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             Some(serde_json::json!(["gemini-cli"])),
         )
         .expect("auth snapshot should build")
@@ -68,7 +68,7 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_with_local_syn
             provider_priority: 10,
             provider_is_active: true,
             endpoint_id: "endpoint-gemini-cli-local-1".to_string(),
-            endpoint_api_format: "gemini:cli".to_string(),
+            endpoint_api_format: "gemini:generate_content".to_string(),
             endpoint_api_family: Some("gemini".to_string()),
             endpoint_kind: Some("cli".to_string()),
             endpoint_is_active: true,
@@ -76,11 +76,11 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_with_local_syn
             key_name: "prod".to_string(),
             key_auth_type: "bearer".to_string(),
             key_is_active: true,
-            key_api_formats: Some(vec!["gemini:cli".to_string()]),
+            key_api_formats: Some(vec!["gemini:generate_content".to_string()]),
             key_allowed_models: None,
             key_capabilities: None,
             key_internal_priority: 5,
-            key_global_priority_by_format: Some(serde_json::json!({"gemini:cli": 1})),
+            key_global_priority_by_format: Some(serde_json::json!({"gemini:generate_content": 1})),
             model_id: "model-gemini-cli-local-1".to_string(),
             global_model_id: "global-model-gemini-cli-local-1".to_string(),
             global_model_name: "gemini-cli".to_string(),
@@ -90,7 +90,7 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_with_local_syn
             model_provider_model_mappings: Some(vec![StoredProviderModelMapping {
                 name: "gemini-cli-upstream".to_string(),
                 priority: 1,
-                api_formats: Some(vec!["gemini:cli".to_string()]),
+                api_formats: Some(vec!["gemini:generate_content".to_string()]),
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -123,7 +123,7 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_with_local_syn
         StoredProviderCatalogEndpoint::new(
             "endpoint-gemini-cli-local-1".to_string(),
             "provider-gemini-cli-local-1".to_string(),
-            "gemini:cli".to_string(),
+            "gemini:generate_content".to_string(),
             Some("gemini".to_string()),
             Some("cli".to_string()),
             true,
@@ -159,12 +159,12 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_with_local_syn
         )
         .expect("key should build")
         .with_transport_fields(
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "sk-upstream-gemini-cli")
                 .expect("api key should encrypt"),
             None,
             None,
-            Some(serde_json::json!({"gemini:cli": 1})),
+            Some(serde_json::json!({"gemini:generate_content": 1})),
             None,
             None,
             Some(serde_json::json!({"enabled": true, "node_id":"proxy-node-gemini-cli-local"})),
@@ -463,7 +463,7 @@ async fn gateway_returns_gemini_cli_error_for_local_sync_failure() {
             true,
             false,
             Some(serde_json::json!(["gemini"])),
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             Some(serde_json::json!(["gemini-cli"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -474,7 +474,7 @@ async fn gateway_returns_gemini_cli_error_for_local_sync_failure() {
             Some(5),
             Some(4_102_444_800),
             Some(serde_json::json!(["gemini"])),
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             Some(serde_json::json!(["gemini-cli"])),
         )
         .expect("auth snapshot should build")
@@ -488,7 +488,7 @@ async fn gateway_returns_gemini_cli_error_for_local_sync_failure() {
             provider_priority: 10,
             provider_is_active: true,
             endpoint_id: "endpoint-gemini-cli-local-1".to_string(),
-            endpoint_api_format: "gemini:cli".to_string(),
+            endpoint_api_format: "gemini:generate_content".to_string(),
             endpoint_api_family: Some("gemini".to_string()),
             endpoint_kind: Some("cli".to_string()),
             endpoint_is_active: true,
@@ -496,11 +496,11 @@ async fn gateway_returns_gemini_cli_error_for_local_sync_failure() {
             key_name: "prod".to_string(),
             key_auth_type: "bearer".to_string(),
             key_is_active: true,
-            key_api_formats: Some(vec!["gemini:cli".to_string()]),
+            key_api_formats: Some(vec!["gemini:generate_content".to_string()]),
             key_allowed_models: None,
             key_capabilities: None,
             key_internal_priority: 5,
-            key_global_priority_by_format: Some(serde_json::json!({"gemini:cli": 1})),
+            key_global_priority_by_format: Some(serde_json::json!({"gemini:generate_content": 1})),
             model_id: "model-gemini-cli-local-1".to_string(),
             global_model_id: "global-model-gemini-cli-local-1".to_string(),
             global_model_name: "gemini-cli".to_string(),
@@ -510,7 +510,7 @@ async fn gateway_returns_gemini_cli_error_for_local_sync_failure() {
             model_provider_model_mappings: Some(vec![StoredProviderModelMapping {
                 name: "gemini-cli-upstream".to_string(),
                 priority: 1,
-                api_formats: Some(vec!["gemini:cli".to_string()]),
+                api_formats: Some(vec!["gemini:generate_content".to_string()]),
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -543,7 +543,7 @@ async fn gateway_returns_gemini_cli_error_for_local_sync_failure() {
         StoredProviderCatalogEndpoint::new(
             "endpoint-gemini-cli-local-1".to_string(),
             "provider-gemini-cli-local-1".to_string(),
-            "gemini:cli".to_string(),
+            "gemini:generate_content".to_string(),
             Some("gemini".to_string()),
             Some("cli".to_string()),
             true,
@@ -579,12 +579,12 @@ async fn gateway_returns_gemini_cli_error_for_local_sync_failure() {
         )
         .expect("key should build")
         .with_transport_fields(
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "sk-upstream-gemini-cli")
                 .expect("api key should encrypt"),
             None,
             None,
-            Some(serde_json::json!({"gemini:cli": 1})),
+            Some(serde_json::json!({"gemini:generate_content": 1})),
             None,
             None,
             Some(serde_json::json!({"enabled": true, "node_id":"proxy-node-gemini-cli-local"})),
@@ -755,7 +755,7 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_after_oauth_re
             true,
             false,
             Some(serde_json::json!(["gemini", "gemini_cli"])),
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             Some(serde_json::json!(["gemini-cli"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -766,7 +766,7 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_after_oauth_re
             Some(5),
             Some(4_102_444_800),
             Some(serde_json::json!(["gemini", "gemini_cli"])),
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             Some(serde_json::json!(["gemini-cli"])),
         )
         .expect("auth snapshot should build")
@@ -780,7 +780,7 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_after_oauth_re
             provider_priority: 10,
             provider_is_active: true,
             endpoint_id: "endpoint-gemini-cli-oauth-local-1".to_string(),
-            endpoint_api_format: "gemini:cli".to_string(),
+            endpoint_api_format: "gemini:generate_content".to_string(),
             endpoint_api_family: Some("gemini".to_string()),
             endpoint_kind: Some("cli".to_string()),
             endpoint_is_active: true,
@@ -788,11 +788,11 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_after_oauth_re
             key_name: "oauth".to_string(),
             key_auth_type: "oauth".to_string(),
             key_is_active: true,
-            key_api_formats: Some(vec!["gemini:cli".to_string()]),
+            key_api_formats: Some(vec!["gemini:generate_content".to_string()]),
             key_allowed_models: None,
             key_capabilities: None,
             key_internal_priority: 5,
-            key_global_priority_by_format: Some(serde_json::json!({"gemini:cli": 1})),
+            key_global_priority_by_format: Some(serde_json::json!({"gemini:generate_content": 1})),
             model_id: "model-gemini-cli-oauth-local-1".to_string(),
             global_model_id: "global-model-gemini-cli-oauth-local-1".to_string(),
             global_model_name: "gemini-cli".to_string(),
@@ -802,7 +802,7 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_after_oauth_re
             model_provider_model_mappings: Some(vec![StoredProviderModelMapping {
                 name: "gemini-cli-upstream".to_string(),
                 priority: 1,
-                api_formats: Some(vec!["gemini:cli".to_string()]),
+                api_formats: Some(vec!["gemini:generate_content".to_string()]),
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -835,7 +835,7 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_after_oauth_re
         StoredProviderCatalogEndpoint::new(
             "endpoint-gemini-cli-oauth-local-1".to_string(),
             "provider-gemini-cli-oauth-local-1".to_string(),
-            "gemini:cli".to_string(),
+            "gemini:generate_content".to_string(),
             Some("gemini".to_string()),
             Some("cli".to_string()),
             true,
@@ -876,12 +876,12 @@ async fn gateway_executes_gemini_cli_sync_via_local_decision_gate_after_oauth_re
         )
         .expect("key should build")
         .with_transport_fields(
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "__placeholder__")
                 .expect("placeholder api key should encrypt"),
             Some(encrypted_auth_config),
             None,
-            Some(serde_json::json!({"gemini:cli": 1})),
+            Some(serde_json::json!({"gemini:generate_content": 1})),
             None,
             None,
             Some(
@@ -1254,7 +1254,7 @@ async fn gateway_executes_vertex_ai_gemini_cli_sync_via_local_decision_gate_with
             true,
             false,
             Some(serde_json::json!(["gemini", "vertex"])),
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             Some(serde_json::json!(["gemini-cli"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -1265,7 +1265,7 @@ async fn gateway_executes_vertex_ai_gemini_cli_sync_via_local_decision_gate_with
             Some(5),
             Some(4_102_444_800),
             Some(serde_json::json!(["gemini", "vertex"])),
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             Some(serde_json::json!(["gemini-cli"])),
         )
         .expect("auth snapshot should build")
@@ -1279,7 +1279,7 @@ async fn gateway_executes_vertex_ai_gemini_cli_sync_via_local_decision_gate_with
             provider_priority: 10,
             provider_is_active: true,
             endpoint_id: "endpoint-vertex-cli-local-1".to_string(),
-            endpoint_api_format: "gemini:cli".to_string(),
+            endpoint_api_format: "gemini:generate_content".to_string(),
             endpoint_api_family: Some("gemini".to_string()),
             endpoint_kind: Some("cli".to_string()),
             endpoint_is_active: true,
@@ -1287,11 +1287,11 @@ async fn gateway_executes_vertex_ai_gemini_cli_sync_via_local_decision_gate_with
             key_name: "prod".to_string(),
             key_auth_type: "api_key".to_string(),
             key_is_active: true,
-            key_api_formats: Some(vec!["gemini:cli".to_string()]),
+            key_api_formats: Some(vec!["gemini:generate_content".to_string()]),
             key_allowed_models: None,
             key_capabilities: None,
             key_internal_priority: 5,
-            key_global_priority_by_format: Some(serde_json::json!({"gemini:cli": 1})),
+            key_global_priority_by_format: Some(serde_json::json!({"gemini:generate_content": 1})),
             model_id: "model-vertex-cli-local-1".to_string(),
             global_model_id: "global-model-vertex-cli-local-1".to_string(),
             global_model_name: "gemini-cli".to_string(),
@@ -1301,7 +1301,7 @@ async fn gateway_executes_vertex_ai_gemini_cli_sync_via_local_decision_gate_with
             model_provider_model_mappings: Some(vec![StoredProviderModelMapping {
                 name: "gemini-cli-upstream".to_string(),
                 priority: 1,
-                api_formats: Some(vec!["gemini:cli".to_string()]),
+                api_formats: Some(vec!["gemini:generate_content".to_string()]),
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -1334,7 +1334,7 @@ async fn gateway_executes_vertex_ai_gemini_cli_sync_via_local_decision_gate_with
         StoredProviderCatalogEndpoint::new(
             "endpoint-vertex-cli-local-1".to_string(),
             "provider-vertex-cli-local-1".to_string(),
-            "gemini:cli".to_string(),
+            "gemini:generate_content".to_string(),
             Some("gemini".to_string()),
             Some("cli".to_string()),
             true,
@@ -1370,12 +1370,12 @@ async fn gateway_executes_vertex_ai_gemini_cli_sync_via_local_decision_gate_with
         )
         .expect("key should build")
         .with_transport_fields(
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "vertex-upstream-secret")
                 .expect("api key should encrypt"),
             None,
             None,
-            Some(serde_json::json!({"gemini:cli": 1})),
+            Some(serde_json::json!({"gemini:generate_content": 1})),
             None,
             None,
             None,
@@ -1689,7 +1689,7 @@ async fn gateway_executes_antigravity_gemini_cli_sync_via_local_decision_gate_af
             true,
             false,
             Some(serde_json::json!(["gemini", "antigravity"])),
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             Some(serde_json::json!(["gemini-cli"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -1700,7 +1700,7 @@ async fn gateway_executes_antigravity_gemini_cli_sync_via_local_decision_gate_af
             Some(5),
             Some(4_102_444_800),
             Some(serde_json::json!(["gemini", "antigravity"])),
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             Some(serde_json::json!(["gemini-cli"])),
         )
         .expect("auth snapshot should build")
@@ -1714,7 +1714,7 @@ async fn gateway_executes_antigravity_gemini_cli_sync_via_local_decision_gate_af
             provider_priority: 10,
             provider_is_active: true,
             endpoint_id: "endpoint-antigravity-cli-oauth-local-1".to_string(),
-            endpoint_api_format: "gemini:cli".to_string(),
+            endpoint_api_format: "gemini:generate_content".to_string(),
             endpoint_api_family: Some("gemini".to_string()),
             endpoint_kind: Some("cli".to_string()),
             endpoint_is_active: true,
@@ -1722,11 +1722,11 @@ async fn gateway_executes_antigravity_gemini_cli_sync_via_local_decision_gate_af
             key_name: "oauth".to_string(),
             key_auth_type: "oauth".to_string(),
             key_is_active: true,
-            key_api_formats: Some(vec!["gemini:cli".to_string()]),
+            key_api_formats: Some(vec!["gemini:generate_content".to_string()]),
             key_allowed_models: None,
             key_capabilities: None,
             key_internal_priority: 5,
-            key_global_priority_by_format: Some(serde_json::json!({"gemini:cli": 1})),
+            key_global_priority_by_format: Some(serde_json::json!({"gemini:generate_content": 1})),
             model_id: "model-antigravity-cli-oauth-local-1".to_string(),
             global_model_id: "global-model-antigravity-cli-oauth-local-1".to_string(),
             global_model_name: "gemini-cli".to_string(),
@@ -1736,7 +1736,7 @@ async fn gateway_executes_antigravity_gemini_cli_sync_via_local_decision_gate_af
             model_provider_model_mappings: Some(vec![StoredProviderModelMapping {
                 name: "claude-sonnet-4-5".to_string(),
                 priority: 1,
-                api_formats: Some(vec!["gemini:cli".to_string()]),
+                api_formats: Some(vec!["gemini:generate_content".to_string()]),
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -1769,7 +1769,7 @@ async fn gateway_executes_antigravity_gemini_cli_sync_via_local_decision_gate_af
         StoredProviderCatalogEndpoint::new(
             "endpoint-antigravity-cli-oauth-local-1".to_string(),
             "provider-antigravity-cli-oauth-local-1".to_string(),
-            "gemini:cli".to_string(),
+            "gemini:generate_content".to_string(),
             Some("gemini".to_string()),
             Some("cli".to_string()),
             true,
@@ -1804,12 +1804,12 @@ async fn gateway_executes_antigravity_gemini_cli_sync_via_local_decision_gate_af
         )
         .expect("key should build")
         .with_transport_fields(
-            Some(serde_json::json!(["gemini:cli"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "__placeholder__")
                 .expect("placeholder api key should encrypt"),
             Some(encrypted_auth_config),
             None,
-            Some(serde_json::json!({"gemini:cli": 1})),
+            Some(serde_json::json!({"gemini:generate_content": 1})),
             None,
             None,
             None,

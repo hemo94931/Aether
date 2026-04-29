@@ -94,7 +94,7 @@ pub(crate) async fn resolve_local_openai_responses_candidate_payload_parts(
         .provider_type
         .trim()
         .eq_ignore_ascii_case("kiro")
-        && provider_api_format.eq_ignore_ascii_case("claude:cli");
+        && provider_api_format.eq_ignore_ascii_case("claude:messages");
 
     let same_format = api_format_alias_matches(provider_api_format, &client_api_format);
     let conversion_kind = request_conversion_kind(spec_metadata.api_format, provider_api_format);
@@ -104,7 +104,7 @@ pub(crate) async fn resolve_local_openai_responses_candidate_payload_parts(
         local_standard_transport_unsupported_reason_with_network(transport, provider_api_format)
     } else {
         match conversion_kind {
-            Some(_) if is_antigravity && provider_api_format == "gemini:cli" => None,
+            Some(_) if is_antigravity && provider_api_format == "gemini:generate_content" => None,
             Some(kind) => {
                 crate::ai_pipeline::conversion::request_conversion_transport_unsupported_reason(
                     transport, kind,
@@ -162,10 +162,9 @@ pub(crate) async fn resolve_local_openai_responses_candidate_payload_parts(
     let direct_auth = if kiro_auth.is_some() {
         None
     } else if same_format {
-        match crate::ai_pipeline::normalize_legacy_openai_format_alias(provider_api_format).as_str()
-        {
-            "gemini:cli" => resolve_local_gemini_auth(transport),
-            "claude:cli" => resolve_local_standard_auth(transport),
+        match crate::ai_pipeline::normalize_api_format_alias(provider_api_format).as_str() {
+            "gemini:generate_content" => resolve_local_gemini_auth(transport),
+            "claude:messages" => resolve_local_standard_auth(transport),
             "openai:responses" | "openai:responses:compact" => {
                 resolve_local_openai_bearer_auth(transport)
             }
@@ -536,7 +535,7 @@ pub(crate) async fn resolve_local_openai_responses_candidate_payload_parts(
 }
 
 fn api_format_alias_matches(left: &str, right: &str) -> bool {
-    crate::ai_pipeline::legacy_openai_format_alias_matches(left, right)
+    crate::ai_pipeline::api_format_alias_matches(left, right)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -32,7 +32,7 @@ use crate::{AppState, GatewayError};
 pub(super) use crate::ai_pipeline::planner::candidate_materialization::LocalExecutionCandidateAttempt as LocalGeminiFilesCandidateAttempt;
 pub(super) use crate::ai_pipeline::planner::decision_input::LocalAuthenticatedDecisionInput as LocalGeminiFilesDecisionInput;
 
-pub(super) const GEMINI_FILES_CANDIDATE_API_FORMAT: &str = "gemini:chat";
+pub(super) const GEMINI_FILES_CANDIDATE_API_FORMAT: &str = "gemini:files";
 pub(super) const GEMINI_FILES_CLIENT_API_FORMAT: &str = "gemini:files";
 pub(super) const GEMINI_FILES_REQUIRED_CAPABILITY: &str = "gemini_files";
 

@@ -85,7 +85,7 @@ pub async fn build_standard_models_fetch_execution_plan(
 ) -> Result<ExecutionPlan, String> {
     let api_format = transport.endpoint.api_format.trim().to_ascii_lowercase();
     let provider_api_format = api_format.clone();
-    let mut headers = standard_models_fetch_headers(&api_format);
+    let mut headers = standard_models_fetch_headers(&api_format, &transport.provider.provider_type);
     let mut protected_headers = Vec::<String>::new();
 
     if api_format.starts_with("openai:") || api_format.starts_with("claude:") {
@@ -167,7 +167,7 @@ pub async fn build_antigravity_fetch_available_models_plan(
             headers,
             content_type: Some("application/json".to_string()),
             body: RequestBody::from_json(json!({ "project": project_id })),
-            client_api_format: "gemini:chat".to_string(),
+            client_api_format: "gemini:generate_content".to_string(),
             provider_api_format: ANTIGRAVITY_FETCH_PROVIDER_API_FORMAT.to_string(),
             model_name: Some("fetchAvailableModels".to_string()),
         },
@@ -207,7 +207,7 @@ pub async fn build_gemini_cli_load_code_assist_plan(
                     "pluginType": "GEMINI",
                 }
             })),
-            client_api_format: "gemini:cli".to_string(),
+            client_api_format: "gemini:generate_content".to_string(),
             provider_api_format: GEMINI_CLI_LOAD_CODE_ASSIST_PROVIDER_API_FORMAT.to_string(),
             model_name: Some("loadCodeAssist".to_string()),
         },
@@ -222,7 +222,7 @@ pub async fn build_vertex_models_fetch_execution_plan(
     api_format: &str,
     auth_header: Option<(String, String)>,
 ) -> Result<ExecutionPlan, String> {
-    let mut headers = standard_models_fetch_headers(api_format);
+    let mut headers = standard_models_fetch_headers(api_format, &transport.provider.provider_type);
     let mut protected_headers = Vec::<String>::new();
     if let Some((name, value)) = auth_header {
         protected_headers.push(name.clone());
@@ -380,34 +380,35 @@ fn apply_fetch_header_rules(
     Ok(headers)
 }
 
-fn standard_models_fetch_headers(api_format: &str) -> BTreeMap<String, String> {
-    let api_format = aether_ai_formats::normalize_legacy_openai_format_alias(api_format);
+fn standard_models_fetch_headers(
+    api_format: &str,
+    provider_type: &str,
+) -> BTreeMap<String, String> {
+    let api_format = aether_ai_formats::normalize_api_format_alias(api_format);
+    let provider_type = provider_type.trim().to_ascii_lowercase();
     match api_format.as_str() {
         "openai:responses" | "openai:responses:compact" => BTreeMap::from([(
             "user-agent".to_string(),
             OPENAI_RESPONSES_USER_AGENT.to_string(),
         )]),
-        "claude:chat" => BTreeMap::from([(
-            "anthropic-version".to_string(),
-            CLAUDE_VERSION_HEADER.to_string(),
-        )]),
-        "claude:cli" => BTreeMap::from([
-            ("user-agent".to_string(), CLAUDE_CLI_USER_AGENT.to_string()),
-            (
+        "claude:messages" => {
+            let mut headers = BTreeMap::from([(
                 "anthropic-version".to_string(),
                 CLAUDE_VERSION_HEADER.to_string(),
-            ),
-        ]),
-        "gemini:chat" => BROWSER_FINGERPRINT_HEADERS
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect(),
-        "gemini:cli" => {
+            )]);
+            if matches!(provider_type.as_str(), "claude_code" | "kiro") {
+                headers.insert("user-agent".to_string(), CLAUDE_CLI_USER_AGENT.to_string());
+            }
+            headers
+        }
+        "gemini:generate_content" => {
             let mut headers = BROWSER_FINGERPRINT_HEADERS
                 .iter()
                 .map(|(key, value)| (key.to_string(), value.to_string()))
                 .collect::<BTreeMap<_, _>>();
-            headers.insert("user-agent".to_string(), GEMINI_CLI_USER_AGENT.to_string());
+            if provider_type == "gemini_cli" {
+                headers.insert("user-agent".to_string(), GEMINI_CLI_USER_AGENT.to_string());
+            }
             headers
         }
         _ => BTreeMap::new(),
@@ -625,7 +626,7 @@ mod tests {
             oauth_auth: None,
             proxy: None,
         };
-        let mut transport = sample_transport("custom", "claude:chat", "api_key");
+        let mut transport = sample_transport("custom", "claude:messages", "api_key");
         transport.key.decrypted_auth_config = None;
         let plan =
             build_standard_models_fetch_execution_plan(&runtime, &transport, Some("cursor-1"))
@@ -652,7 +653,7 @@ mod tests {
             oauth_auth: None,
             proxy: None,
         };
-        let mut transport = sample_transport("custom", "gemini:chat", "api_key");
+        let mut transport = sample_transport("custom", "gemini:generate_content", "api_key");
         transport.key.decrypted_auth_config = None;
         let plan = build_models_fetch_execution_plan(&runtime, &transport)
             .await
@@ -677,7 +678,7 @@ mod tests {
             ),
             proxy: None,
         };
-        let transport = sample_transport("antigravity", "gemini:chat", "oauth");
+        let transport = sample_transport("antigravity", "gemini:generate_content", "oauth");
         let plan = build_antigravity_fetch_available_models_plan(
             &runtime,
             &transport,
@@ -716,7 +717,7 @@ mod tests {
             ),
             proxy: None,
         };
-        let transport = sample_transport("gemini_cli", "gemini:cli", "oauth");
+        let transport = sample_transport("gemini_cli", "gemini:generate_content", "oauth");
         let plan = build_gemini_cli_load_code_assist_plan(&runtime, &transport)
             .await
             .expect("plan");
@@ -738,13 +739,13 @@ mod tests {
             oauth_auth: None,
             proxy: None,
         };
-        let mut transport = sample_transport("vertex_ai", "claude:chat", "api_key");
+        let mut transport = sample_transport("vertex_ai", "claude:messages", "api_key");
         transport.key.decrypted_auth_config = None;
         let plan = build_vertex_models_fetch_execution_plan(
             &runtime,
             &transport,
             "https://aiplatform.googleapis.com/v1/publishers/google/models?key=secret",
-            "gemini:chat",
+            "gemini:generate_content",
             None,
         )
         .await

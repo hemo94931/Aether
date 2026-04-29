@@ -67,7 +67,7 @@ pub fn build_standard_request_body_from_canonical(
     provider_api_format: &str,
     upstream_is_stream: bool,
 ) -> Option<Value> {
-    match aether_ai_formats::normalize_legacy_openai_format_alias(provider_api_format).as_str() {
+    match aether_ai_formats::normalize_api_format_alias(provider_api_format).as_str() {
         "openai:chat" => build_local_openai_chat_request_body(
             canonical_request,
             mapped_model,
@@ -85,12 +85,12 @@ pub fn build_standard_request_body_from_canonical(
             false,
             true,
         ),
-        "claude:chat" | "claude:cli" => convert_openai_chat_request_to_claude_request(
+        "claude:messages" => convert_openai_chat_request_to_claude_request(
             canonical_request,
             mapped_model,
             upstream_is_stream,
         ),
-        "gemini:chat" | "gemini:cli" => convert_openai_chat_request_to_gemini_request(
+        "gemini:generate_content" => convert_openai_chat_request_to_gemini_request(
             canonical_request,
             mapped_model,
             upstream_is_stream,
@@ -117,15 +117,15 @@ fn normalize_standard_request_to_openai_chat_request_cow<'a>(
     client_api_format: &str,
     request_path: &str,
 ) -> Option<Cow<'a, Value>> {
-    match aether_ai_formats::normalize_legacy_openai_format_alias(client_api_format).as_str() {
+    match aether_ai_formats::normalize_api_format_alias(client_api_format).as_str() {
         "openai:chat" => Some(Cow::Borrowed(body_json)),
         "openai:responses" | "openai:responses:compact" => {
             normalize_openai_responses_request_to_openai_chat_request(body_json).map(Cow::Owned)
         }
-        "claude:chat" | "claude:cli" => {
+        "claude:messages" => {
             normalize_claude_request_to_openai_chat_request(body_json).map(Cow::Owned)
         }
-        "gemini:chat" | "gemini:cli" => {
+        "gemini:generate_content" => {
             normalize_gemini_request_to_openai_chat_request(body_json, request_path).map(Cow::Owned)
         }
         _ => None,
@@ -162,10 +162,8 @@ mod tests {
     const STANDARD_SURFACES: &[&str] = &[
         "openai:chat",
         "openai:responses",
-        "claude:chat",
-        "claude:cli",
-        "gemini:chat",
-        "gemini:cli",
+        "claude:messages",
+        "gemini:generate_content",
     ];
 
     fn sample_request_for(api_format: &str) -> (Value, &'static str) {
@@ -190,7 +188,7 @@ mod tests {
                 }),
                 "/v1/responses",
             ),
-            "claude:chat" | "claude:cli" => (
+            "claude:messages" => (
                 json!({
                     "model": "source-model",
                     "system": "Be concise.",
@@ -202,7 +200,7 @@ mod tests {
                 }),
                 "/v1/messages",
             ),
-            "gemini:chat" | "gemini:cli" => (
+            "gemini:generate_content" => (
                 json!({
                     "systemInstruction": {
                         "parts": [{"text": "Be concise."}]
@@ -223,7 +221,7 @@ mod tests {
 
     fn assert_stream_flag(provider_api_format: &str, upstream_is_stream: bool, converted: &Value) {
         match provider_api_format {
-            "openai:chat" | "openai:responses" | "claude:chat" | "claude:cli" => {
+            "openai:chat" | "openai:responses" | "claude:messages" => {
                 assert_eq!(
                     converted
                         .get("stream")
@@ -233,7 +231,7 @@ mod tests {
                     "{provider_api_format} stream flag should follow upstream_is_stream"
                 );
             }
-            "gemini:chat" | "gemini:cli" => {
+            "gemini:generate_content" => {
                 assert!(
                     converted.get("stream").is_none(),
                     "gemini streaming is represented by endpoint URL, not request body"
@@ -299,7 +297,7 @@ mod tests {
     ) -> Value {
         let chat_canonical = normalize_standard_request_to_openai_chat_request(
             request,
-            "claude:chat",
+            "claude:messages",
             "/v1/messages",
         )
         .expect("legacy claude normalization should succeed");
@@ -319,7 +317,7 @@ mod tests {
     ) -> Value {
         let chat_canonical = normalize_standard_request_to_openai_chat_request(
             request,
-            "gemini:chat",
+            "gemini:generate_content",
             "/v1beta/models/source-model:generateContent",
         )
         .expect("legacy gemini normalization should succeed");
@@ -607,13 +605,12 @@ mod tests {
             "openai:chat",
             "openai:responses",
             "openai:responses:compact",
-            "gemini:chat",
-            "gemini:cli",
+            "gemini:generate_content",
         ] {
             for upstream_is_stream in [false, true] {
                 let converted = build_standard_request_body(
                     &request,
-                    "claude:chat",
+                    "claude:messages",
                     "mapped-model",
                     "custom",
                     provider_api_format,
@@ -627,7 +624,7 @@ mod tests {
                     legacy_claude_request_body(&request, provider_api_format, upstream_is_stream);
                 assert_eq!(
                     converted, legacy,
-                    "typed canonical claude:chat -> {provider_api_format} changed payload with upstream_is_stream={upstream_is_stream}"
+                    "typed canonical claude:messages -> {provider_api_format} changed payload with upstream_is_stream={upstream_is_stream}"
                 );
             }
         }
@@ -689,13 +686,12 @@ mod tests {
             "openai:chat",
             "openai:responses",
             "openai:responses:compact",
-            "claude:chat",
-            "claude:cli",
+            "claude:messages",
         ] {
             for upstream_is_stream in [false, true] {
                 let converted = build_standard_request_body(
                     &request,
-                    "gemini:chat",
+                    "gemini:generate_content",
                     "mapped-model",
                     "custom",
                     provider_api_format,
@@ -709,7 +705,7 @@ mod tests {
                     legacy_gemini_request_body(&request, provider_api_format, upstream_is_stream);
                 assert_eq!(
                     converted, legacy,
-                    "typed canonical gemini:chat -> {provider_api_format} changed payload with upstream_is_stream={upstream_is_stream}"
+                    "typed canonical gemini:generate_content -> {provider_api_format} changed payload with upstream_is_stream={upstream_is_stream}"
                 );
             }
         }
@@ -770,7 +766,7 @@ mod tests {
 
         let converted = build_standard_request_body(
             &request,
-            "claude:chat",
+            "claude:messages",
             "gpt-5",
             "openai",
             "openai:chat",
@@ -801,7 +797,7 @@ mod tests {
 
         let converted = build_standard_request_body(
             &request,
-            "gemini:chat",
+            "gemini:generate_content",
             "gpt-5",
             "openai",
             "openai:chat",
@@ -835,10 +831,10 @@ mod tests {
 
         let converted = build_standard_request_body(
             &request,
-            "gemini:chat",
+            "gemini:generate_content",
             "claude-sonnet-4-5",
             "anthropic",
-            "claude:chat",
+            "claude:messages",
             "/v1beta/models/gemini-2.5-pro:generateContent",
             false,
             None,
@@ -871,10 +867,10 @@ mod tests {
 
         let converted = build_standard_request_body(
             &request,
-            "claude:cli",
+            "claude:messages",
             "gemini-2.5-pro",
             "google",
-            "gemini:cli",
+            "gemini:generate_content",
             "/v1/messages",
             false,
             None,
@@ -1000,7 +996,7 @@ mod tests {
             "openai:chat",
             "gemini-2.5-pro",
             "google",
-            "gemini:chat",
+            "gemini:generate_content",
             "/v1/chat/completions",
             false,
             None,
@@ -1052,7 +1048,7 @@ mod tests {
             "openai:chat",
             "claude-sonnet-4-5",
             "anthropic",
-            "claude:chat",
+            "claude:messages",
             "/v1/chat/completions",
             false,
             None,
@@ -1073,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_responses_nested_tools_survive_claude_cli_and_kiro_envelope_conversion() {
+    fn openai_responses_nested_tools_survive_claude_messages_and_kiro_envelope_conversion() {
         let request = json!({
             "model": "gpt-5",
             "input": "Use the weather tool for Shanghai.",
@@ -1102,13 +1098,13 @@ mod tests {
             "openai:responses",
             "claude-sonnet-4.6",
             "kiro",
-            "claude:cli",
+            "claude:messages",
             "/v1/responses",
             true,
             None,
             None,
         )
-        .expect("openai responses should convert to claude cli");
+        .expect("openai responses should convert to claude messages");
         assert_eq!(claude["tools"][0]["name"], "get_weather");
         assert_eq!(claude["tool_choice"]["name"], "get_weather");
 

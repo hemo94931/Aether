@@ -56,10 +56,9 @@ pub fn classify_local_antigravity_request_support(
         );
     }
 
-    let endpoint_format = transport.endpoint.api_format.trim();
-    if !endpoint_format.eq_ignore_ascii_case("gemini:chat")
-        && !endpoint_format.eq_ignore_ascii_case("gemini:cli")
-    {
+    let endpoint_format =
+        aether_ai_formats::normalize_api_format_alias(&transport.endpoint.api_format);
+    if endpoint_format != "gemini:generate_content" {
         return AntigravityRequestSideSupport::Unsupported(
             AntigravityRequestSideUnsupportedReason::UnsupportedApiFormat,
         );

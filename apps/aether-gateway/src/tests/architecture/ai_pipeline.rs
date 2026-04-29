@@ -2782,7 +2782,7 @@ fn ai_pipeline_openai_responses_specs_are_owned_by_pipeline_crate() {
 }
 
 #[test]
-fn ai_pipeline_openai_cli_legacy_names_stay_out_of_primary_paths() {
+fn ai_pipeline_legacy_api_format_names_stay_out_of_primary_paths() {
     for path in [
         "crates/aether-ai-pipeline/src/contracts/plan_kinds.rs",
         "crates/aether-ai-pipeline/src/planner/route.rs",
@@ -2794,6 +2794,10 @@ fn ai_pipeline_openai_cli_legacy_names_stay_out_of_primary_paths() {
         for forbidden in [
             "openai:cli",
             "openai:compact",
+            "claude:chat",
+            "claude:cli",
+            "gemini:chat",
+            "gemini:cli",
             "openai_cli_",
             "openai_compact_",
             "OPENAI_CLI",
@@ -2811,16 +2815,23 @@ fn ai_pipeline_openai_cli_legacy_names_stay_out_of_primary_paths() {
         .split("#[cfg(test)]")
         .next()
         .expect("registry source should have an implementation section");
-    for forbidden in ["\"openai:cli\"", "\"openai:compact\""] {
+    for forbidden in [
+        "\"openai:cli\"",
+        "\"openai:compact\"",
+        "\"claude:chat\"",
+        "\"claude:cli\"",
+        "\"gemini:chat\"",
+        "\"gemini:cli\"",
+    ] {
         assert!(
             !implementation.contains(forbidden),
-            "conversion registry implementation should route legacy aliases through aether-ai-formats helpers: {forbidden}"
+            "conversion registry implementation should not branch on retired API format aliases: {forbidden}"
         );
     }
 }
 
 #[test]
-fn openai_cli_legacy_alias_occurrences_are_whitelisted() {
+fn retired_api_format_occurrences_are_whitelisted() {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -2832,31 +2843,12 @@ fn openai_cli_legacy_alias_occurrences_are_whitelisted() {
 
     let allowed_paths = [
         "apps/aether-gateway/src/ai_pipeline/conversion/mod.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/common.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/plans/sync.rs",
-        "apps/aether-gateway/src/execution_runtime/tests.rs",
-        "apps/aether-gateway/src/handlers/public/support/models/shared.rs",
-        "apps/aether-gateway/src/scheduler/affinity.rs",
-        "crates/aether-admin/src/system.rs",
-        "crates/aether-ai-formats/src/canonical.rs",
+        "apps/aether-gateway/src/handlers/admin/provider/write/normalize.rs",
         "crates/aether-ai-formats/src/formats.rs",
         "crates/aether-ai-formats/src/matrix.rs",
         "crates/aether-ai-formats/src/registry.rs",
-        "crates/aether-ai-pipeline/src/contracts/report_kinds.rs",
         "crates/aether-ai-pipeline/src/conversion/registry.rs",
-        "crates/aether-ai-pipeline/src/finalize/sync_products.rs",
-        "crates/aether-ai-pipeline/src/planner/common.rs",
-        "crates/aether-model-fetch/src/logic.rs",
         "crates/aether-usage-runtime/src/report.rs",
-        "frontend/src/api/endpoints/types/api-format.ts",
-        "frontend/src/features/models/components/RoutingTab.vue",
-        "frontend/src/features/providers/components/EndpointFormDialog.vue",
-        "frontend/src/features/providers/components/PriorityManagementDialog.vue",
-        "frontend/src/features/usage/conversation/__tests__/stream.spec.ts",
-        "frontend/src/features/usage/utils/__tests__/status.spec.ts",
-        "frontend/src/features/usage/utils/status.ts",
-        "frontend/src/mocks/data.ts",
-        "frontend/src/mocks/handler.ts",
     ];
     let allowed = allowed_paths
         .into_iter()
@@ -2864,12 +2856,10 @@ fn openai_cli_legacy_alias_occurrences_are_whitelisted() {
     let patterns = [
         "openai:cli",
         "openai:compact",
-        "openai_cli",
-        "openai_compact",
-        "OPENAI_CLI",
-        "OPENAI_COMPACT",
-        "OpenAI CLI",
-        "OpenAI Compact",
+        "claude:chat",
+        "claude:cli",
+        "gemini:chat",
+        "gemini:cli",
     ];
 
     let mut violations = Vec::new();
@@ -2896,7 +2886,7 @@ fn openai_cli_legacy_alias_occurrences_are_whitelisted() {
 
     assert!(
         violations.is_empty(),
-        "legacy OpenAI Responses aliases should stay confined to explicit compatibility files:\n{}",
+        "retired API format aliases should stay confined to migration or negative-test files:\n{}",
         violations.join("\n")
     );
 }

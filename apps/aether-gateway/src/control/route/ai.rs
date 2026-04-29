@@ -54,21 +54,22 @@ pub(super) fn classify_ai_public_route(
             "ai_public",
             "claude",
             "count_tokens",
-            "claude:chat",
+            "claude:messages",
             false,
         ))
     } else if method == http::Method::POST && normalized_path == "/v1/messages" {
-        if is_claude_cli_request(headers) {
-            Some(classified("ai_public", "claude", "cli", "claude:cli", true))
+        let route_kind = if is_claude_cli_request(headers) {
+            "cli"
         } else {
-            Some(classified(
-                "ai_public",
-                "claude",
-                "chat",
-                "claude:chat",
-                true,
-            ))
-        }
+            "messages"
+        };
+        Some(classified(
+            "ai_public",
+            "claude",
+            route_kind,
+            "claude:messages",
+            true,
+        ))
     } else if normalized_path.starts_with("/v1/videos") {
         Some(classified(
             "ai_public",
@@ -87,13 +88,19 @@ pub(super) fn classify_ai_public_route(
                 true,
             ))
         } else if is_gemini_cli_request(headers) {
-            Some(classified("ai_public", "gemini", "cli", "gemini:cli", true))
+            Some(classified(
+                "ai_public",
+                "gemini",
+                "cli",
+                "gemini:generate_content",
+                true,
+            ))
         } else {
             Some(classified(
                 "ai_public",
                 "gemini",
-                "chat",
-                "gemini:chat",
+                "generate_content",
+                "gemini:generate_content",
                 true,
             ))
         }
@@ -112,7 +119,7 @@ pub(super) fn classify_ai_public_route(
             "ai_public",
             "gemini",
             "files",
-            "gemini:chat",
+            "gemini:files",
             true,
         ))
     } else {

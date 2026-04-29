@@ -469,7 +469,7 @@ async fn gateway_exports_admin_provider_key_locally_with_trusted_admin_principal
     let mut key = sample_key(
         "key-kiro-a",
         "provider-kiro",
-        "claude:cli",
+        "claude:messages",
         "oauth-access-token",
     );
     key.auth_type = "oauth".to_string();
@@ -1569,7 +1569,12 @@ async fn gateway_handles_admin_keys_grouped_by_format_locally_with_trusted_admin
     key_a.health_by_format = Some(json!({"openai:chat": {"health_score": 0.8}}));
     key_a.circuit_breaker_by_format = Some(json!({"openai:chat": {"open": false}}));
 
-    let mut key_b = sample_key("key-claude-a", "provider-claude", "claude:chat", "sk-ant-a");
+    let mut key_b = sample_key(
+        "key-claude-a",
+        "provider-claude",
+        "claude:messages",
+        "sk-ant-a",
+    );
     key_b.internal_priority = 20;
     key_b.request_count = Some(2);
     key_b.success_count = Some(1);
@@ -1592,7 +1597,7 @@ async fn gateway_handles_admin_keys_grouped_by_format_locally_with_trusted_admin
             sample_endpoint(
                 "endpoint-claude-chat",
                 "provider-claude",
-                "claude:chat",
+                "claude:messages",
                 "https://api.claude.example",
             ),
         ],
@@ -1633,7 +1638,7 @@ async fn gateway_handles_admin_keys_grouped_by_format_locally_with_trusted_admin
         "https://api.openai.example"
     );
     assert_eq!(payload["openai:chat"][0]["capabilities"], json!(["1h缓存"]));
-    assert_eq!(payload["claude:chat"][0]["provider_active"], false);
+    assert_eq!(payload["claude:messages"][0]["provider_active"], false);
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();

@@ -604,8 +604,9 @@ mod tests {
             }]
         });
 
-        let diagnostic = request_body_build_failure_extra_data(&body, "openai:chat", "claude:chat")
-            .expect("diagnostic");
+        let diagnostic =
+            request_body_build_failure_extra_data(&body, "openai:chat", "claude:messages")
+                .expect("diagnostic");
 
         assert_eq!(
             diagnostic["request_body_build_error"]["path"],
@@ -617,7 +618,7 @@ mod tests {
         );
         assert_eq!(
             diagnostic["failure_diagnostic"]["source"],
-            "openai:chat_to_claude:chat"
+            "openai:chat_to_claude:messages"
         );
         assert!(diagnostic["request_body_build_error"]["message"]
             .as_str()
@@ -635,8 +636,9 @@ mod tests {
             }]
         });
 
-        let diagnostic = request_body_build_failure_extra_data(&body, "openai:chat", "claude:chat")
-            .expect("diagnostic");
+        let diagnostic =
+            request_body_build_failure_extra_data(&body, "openai:chat", "claude:messages")
+                .expect("diagnostic");
 
         assert_eq!(
             diagnostic["request_body_build_error"]["path"],
@@ -657,8 +659,9 @@ mod tests {
             }]
         });
 
-        let diagnostic = request_body_build_failure_extra_data(&body, "openai:chat", "gemini:chat")
-            .expect("diagnostic");
+        let diagnostic =
+            request_body_build_failure_extra_data(&body, "openai:chat", "gemini:generate_content")
+                .expect("diagnostic");
 
         assert_eq!(
             diagnostic["request_body_build_error"]["path"],
@@ -681,7 +684,7 @@ mod tests {
         });
 
         let diagnostic =
-            request_body_build_failure_extra_data(&body, "openai:responses", "claude:chat")
+            request_body_build_failure_extra_data(&body, "openai:responses", "claude:messages")
                 .expect("diagnostic");
 
         assert_eq!(
@@ -698,9 +701,12 @@ mod tests {
             "tool_choice": { "type": "function" }
         });
 
-        let diagnostic =
-            request_body_build_failure_extra_data(&body, "openai:responses", "gemini:chat")
-                .expect("diagnostic");
+        let diagnostic = request_body_build_failure_extra_data(
+            &body,
+            "openai:responses",
+            "gemini:generate_content",
+        )
+        .expect("diagnostic");
 
         assert_eq!(
             diagnostic["request_body_build_error"]["path"],

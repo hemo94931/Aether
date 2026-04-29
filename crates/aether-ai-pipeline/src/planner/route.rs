@@ -43,7 +43,7 @@ pub fn resolve_execution_runtime_stream_plan_kind(
     }
 
     if route_family == Some("claude")
-        && route_kind == Some("chat")
+        && is_claude_messages_route_kind(route_kind)
         && *method == Method::POST
         && path == "/v1/messages"
     {
@@ -59,7 +59,7 @@ pub fn resolve_execution_runtime_stream_plan_kind(
     }
 
     if route_family == Some("gemini")
-        && route_kind == Some("chat")
+        && is_gemini_generate_content_route_kind(route_kind)
         && *method == Method::POST
         && path.ends_with(":streamGenerateContent")
     {
@@ -206,7 +206,7 @@ pub fn resolve_execution_runtime_sync_plan_kind(
     }
 
     if route_family == Some("claude")
-        && route_kind == Some("chat")
+        && is_claude_messages_route_kind(route_kind)
         && *method == Method::POST
         && path == "/v1/messages"
     {
@@ -222,7 +222,7 @@ pub fn resolve_execution_runtime_sync_plan_kind(
     }
 
     if route_family == Some("gemini")
-        && route_kind == Some("chat")
+        && is_gemini_generate_content_route_kind(route_kind)
         && *method == Method::POST
         && path.ends_with(":generateContent")
     {
@@ -267,6 +267,14 @@ fn is_openai_responses_route_kind(route_kind: Option<&str>) -> bool {
 
 fn is_openai_responses_compact_route_kind(route_kind: Option<&str>) -> bool {
     matches!(route_kind, Some("responses:compact") | Some("compact"))
+}
+
+fn is_claude_messages_route_kind(route_kind: Option<&str>) -> bool {
+    matches!(route_kind, Some("messages") | Some("chat"))
+}
+
+fn is_gemini_generate_content_route_kind(route_kind: Option<&str>) -> bool {
+    matches!(route_kind, Some("generate_content") | Some("chat"))
 }
 
 pub fn is_matching_stream_request(

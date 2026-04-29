@@ -459,7 +459,7 @@ mod tests {
                 "\"code\":\"invalid_request\"",
             ),
             (
-                "claude:chat",
+                "claude:messages",
                 data_line(json!({
                     "type": "error",
                     "error": {
@@ -473,7 +473,7 @@ mod tests {
                 "\"code\":\"rate_limit\"",
             ),
             (
-                "gemini:cli",
+                "gemini:generate_content",
                 data_line(json!({
                     "error": {
                         "code": 429,
@@ -524,7 +524,7 @@ mod tests {
                 "\"code\":\"invalid_request\"",
             ),
             (
-                "claude:chat",
+                "claude:messages",
                 data_line(json!({
                     "type": "error",
                     "error": {
@@ -538,7 +538,7 @@ mod tests {
                 "\"code\":\"rate_limit\"",
             ),
             (
-                "gemini:cli",
+                "gemini:generate_content",
                 data_line(json!({
                     "error": {
                         "code": 429,
@@ -553,7 +553,7 @@ mod tests {
         ];
 
         for (provider_api_format, line, message, err_type, code) in cases {
-            let report_context = report_context(provider_api_format, "claude:chat");
+            let report_context = report_context(provider_api_format, "claude:messages");
             let mut matrix = StreamingStandardFormatMatrix::default();
             let output = matrix
                 .transform_line(&report_context, line)
@@ -591,7 +591,7 @@ mod tests {
                 "\"status\":\"INVALID_ARGUMENT\"",
             ),
             (
-                "claude:chat",
+                "claude:messages",
                 data_line(json!({
                     "type": "error",
                     "error": {
@@ -605,7 +605,7 @@ mod tests {
                 "\"status\":\"RESOURCE_EXHAUSTED\"",
             ),
             (
-                "gemini:cli",
+                "gemini:generate_content",
                 data_line(json!({
                     "error": {
                         "code": 429,
@@ -620,7 +620,7 @@ mod tests {
         ];
 
         for (provider_api_format, line, message, code, status) in cases {
-            let report_context = report_context(provider_api_format, "gemini:chat");
+            let report_context = report_context(provider_api_format, "gemini:generate_content");
             let mut matrix = StreamingStandardFormatMatrix::default();
             let output = matrix
                 .transform_line(&report_context, line)
@@ -656,7 +656,7 @@ mod tests {
                 "\"code\":\"invalid_request\"",
             ),
             (
-                "claude:chat",
+                "claude:messages",
                 data_line(json!({
                     "type": "error",
                     "error": {
@@ -670,7 +670,7 @@ mod tests {
                 "\"code\":\"rate_limit\"",
             ),
             (
-                "gemini:cli",
+                "gemini:generate_content",
                 data_line(json!({
                     "error": {
                         "code": 429,
@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn rewrites_gemini_inline_image_streams_to_claude_image_blocks() {
-        let report_context = report_context("gemini:chat", "claude:chat");
+        let report_context = report_context("gemini:generate_content", "claude:messages");
         let mut matrix = StreamingStandardFormatMatrix::default();
         let output = matrix
             .transform_line(
@@ -735,7 +735,7 @@ mod tests {
 
     #[test]
     fn rewrites_claude_image_blocks_to_gemini_inline_image_streams() {
-        let report_context = report_context("claude:chat", "gemini:chat");
+        let report_context = report_context("claude:messages", "gemini:generate_content");
         let mut matrix = StreamingStandardFormatMatrix::default();
         let output = matrix
             .transform_line(
@@ -763,7 +763,7 @@ mod tests {
 
     #[test]
     fn terminal_observer_preserves_claude_cache_usage() {
-        let report_context = report_context("claude:chat", "openai:chat");
+        let report_context = report_context("claude:messages", "openai:chat");
         let mut observer = StreamingStandardTerminalObserver::default();
 
         observer

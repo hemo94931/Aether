@@ -1,6 +1,7 @@
 use crate::handlers::admin::provider::shared::payloads::AdminProviderKeyUpdatePatch;
 use crate::handlers::admin::provider::write::normalize::{
-    normalize_auth_type, validate_vertex_api_formats,
+    normalize_api_format_json_object_keys, normalize_api_format_list, normalize_auth_type,
+    validate_vertex_api_formats,
 };
 use crate::handlers::admin::request::AdminAppState;
 use crate::handlers::admin::shared::{
@@ -190,8 +191,10 @@ pub(crate) async fn build_admin_update_provider_key_record(
     }
 
     if fields.contains("api_formats") {
-        let api_formats = normalize_string_list(payload.api_formats)
-            .ok_or_else(|| "api_formats 为必填字段".to_string())?;
+        let api_formats = normalize_api_format_list(
+            normalize_string_list(payload.api_formats)
+                .ok_or_else(|| "api_formats 为必填字段".to_string())?,
+        );
         if managed_fixed_oauth_key {
             updated.api_formats = None;
         } else {
@@ -202,7 +205,8 @@ pub(crate) async fn build_admin_update_provider_key_record(
         if managed_fixed_oauth_key {
             updated.api_formats = None;
         } else {
-            let api_formats = json_string_list(existing.api_formats.as_ref());
+            let api_formats =
+                normalize_api_format_list(json_string_list(existing.api_formats.as_ref()));
             validate_vertex_api_formats(&provider.provider_type, &target_auth_type, &api_formats)?;
         }
     }
@@ -218,13 +222,13 @@ pub(crate) async fn build_admin_update_provider_key_record(
     }
     if fields.contains("rate_multipliers") {
         updated.rate_multipliers =
-            normalize_json_object(payload.rate_multipliers, "rate_multipliers")?;
+            normalize_api_format_json_object_keys(payload.rate_multipliers, "rate_multipliers")?;
     }
     if let Some(internal_priority) = payload.internal_priority {
         updated.internal_priority = internal_priority;
     }
     if fields.contains("global_priority_by_format") {
-        updated.global_priority_by_format = normalize_json_object(
+        updated.global_priority_by_format = normalize_api_format_json_object_keys(
             payload.global_priority_by_format,
             "global_priority_by_format",
         )?;

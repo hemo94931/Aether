@@ -388,7 +388,7 @@ fn resolve_request_transport_unsupported_reason(
         }
         return match provider_api_format.as_str() {
             "openai:chat" => local_openai_chat_transport_unsupported_reason(transport),
-            "gemini:chat" | "gemini:cli" => local_gemini_transport_unsupported_reason_with_network(
+            "gemini:generate_content" => local_gemini_transport_unsupported_reason_with_network(
                 transport,
                 provider_api_format.as_str(),
             ),
@@ -472,7 +472,7 @@ mod tests {
                 config: None,
                 format_acceptance_config: Some(json!({
                     "enabled": true,
-                    "accept_formats": ["claude:cli"]
+                    "accept_formats": ["claude:messages"]
                 })),
                 proxy: None,
             },
@@ -519,7 +519,7 @@ mod tests {
             endpoint: GatewayProviderTransportEndpoint {
                 id: "endpoint-cc-1".to_string(),
                 provider_id: "provider-cc-1".to_string(),
-                api_format: "claude:cli".to_string(),
+                api_format: "claude:messages".to_string(),
                 api_family: Some("claude".to_string()),
                 endpoint_kind: Some("cli".to_string()),
                 is_active: true,
@@ -538,7 +538,7 @@ mod tests {
                 name: "CC-特价-0.4".to_string(),
                 auth_type: "api_key".to_string(),
                 is_active: true,
-                api_formats: Some(vec!["claude:cli".to_string()]),
+                api_formats: Some(vec!["claude:messages".to_string()]),
                 allowed_models: None,
                 capabilities: None,
                 rate_multipliers: None,
@@ -558,7 +558,7 @@ mod tests {
             &sample_candidate(),
             Some(&sample_transport()),
             "openai:responses",
-            "claude:cli",
+            "claude:messages",
             serde_json::Map::new(),
             ExecutionStrategy::LocalCrossFormat,
             ConversionMode::Bidirectional,
@@ -605,8 +605,8 @@ mod tests {
         let metadata = build_local_execution_candidate_metadata_for_candidate(
             &sample_candidate(),
             Some(&sample_claude_code_transport_without_auth()),
-            "claude:cli",
-            "claude:cli",
+            "claude:messages",
+            "claude:messages",
             serde_json::Map::new(),
         );
 

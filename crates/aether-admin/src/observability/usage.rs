@@ -839,13 +839,12 @@ fn admin_usage_api_format_defaults_to_non_stream(item: &StoredRequestUsageAudit)
         return false;
     };
     matches!(
-        aether_ai_formats::normalize_legacy_openai_format_alias(value).as_str(),
+        aether_ai_formats::normalize_api_format_alias(value).as_str(),
         "openai:chat"
             | "openai:responses"
             | "openai:responses:compact"
             | "openai:image"
-            | "claude:chat"
-            | "claude:cli"
+            | "claude:messages"
     )
 }
 

@@ -245,8 +245,8 @@ async fn gateway_handles_admin_dashboard_stats_locally_without_proxying_upstream
     claude_usage.input_tokens = 900;
     claude_usage.output_tokens = 100;
     claude_usage.total_tokens = 1_000;
-    claude_usage.api_format = Some("claude:chat".to_string());
-    claude_usage.endpoint_api_format = Some("claude:chat".to_string());
+    claude_usage.api_format = Some("claude:messages".to_string());
+    claude_usage.endpoint_api_format = Some("claude:messages".to_string());
     claude_usage.cache_creation_input_tokens = 50;
     claude_usage.cache_creation_ephemeral_5m_input_tokens = 20;
     claude_usage.cache_creation_ephemeral_1h_input_tokens = 30;

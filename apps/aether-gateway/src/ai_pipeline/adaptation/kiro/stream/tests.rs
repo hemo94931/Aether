@@ -39,8 +39,8 @@ fn encode_frame(headers: Vec<u8>, payload: Vec<u8>) -> Vec<u8> {
 
 fn kiro_report_context(thinking_enabled: bool) -> Value {
     let mut context = json!({
-        "provider_api_format": "claude:cli",
-        "client_api_format": "claude:cli",
+        "provider_api_format": "claude:messages",
+        "client_api_format": "claude:messages",
         "envelope_name": "kiro:generateAssistantResponse",
         "mapped_model": "claude-sonnet-4.5"
     });

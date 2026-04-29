@@ -120,7 +120,7 @@ mod tests {
 
         let converted = build_standard_request_body(
             &request,
-            "claude:chat",
+            "claude:messages",
             "gpt-5",
             "openai",
             "openai:chat",
@@ -154,10 +154,10 @@ mod tests {
 
         let converted = build_standard_request_body(
             &request,
-            "gemini:chat",
+            "gemini:generate_content",
             "claude-sonnet-4-5",
             "anthropic",
-            "claude:chat",
+            "claude:messages",
             "/v1beta/models/gemini-2.5-pro:generateContent",
             false,
             None,
@@ -190,10 +190,10 @@ mod tests {
 
         let converted = build_standard_request_body(
             &request,
-            "claude:cli",
+            "claude:messages",
             "gemini-2.5-pro",
             "google",
-            "gemini:cli",
+            "gemini:generate_content",
             "/v1/messages",
             false,
             None,
@@ -223,7 +223,7 @@ mod tests {
 
         let converted = build_standard_request_body(
             &request,
-            "claude:cli",
+            "claude:messages",
             "gpt-5",
             "openai",
             "openai:responses",
@@ -258,7 +258,7 @@ mod tests {
 
         let converted = build_standard_request_body(
             &request,
-            "claude:cli",
+            "claude:messages",
             "gpt-5",
             "codex",
             "openai:responses",

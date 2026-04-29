@@ -79,7 +79,7 @@ fn standard_sync_bridge_converts_claude_sync_json_to_openai_responses_sse() {
                 "output_tokens": 3
             }
         }),
-        "claude:chat",
+        "claude:messages",
         "openai:responses",
         Some(&report_context),
     )
@@ -111,8 +111,8 @@ fn standard_sync_bridge_converts_claude_sync_json_to_openai_responses_sse() {
 fn antigravity_stream_rewriter_unwraps_and_injects_tool_ids() {
     let report_context = json!({
         "has_envelope": true,
-        "provider_api_format": "gemini:cli",
-        "client_api_format": "gemini:cli",
+        "provider_api_format": "gemini:generate_content",
+        "client_api_format": "gemini:generate_content",
         "envelope_name": "antigravity:v1internal",
         "needs_conversion": false,
         "mapped_model": "claude-sonnet-4-5",
@@ -378,8 +378,8 @@ fn openai_image_stream_rewriter_emits_partial_and_completed_events_for_edit() {
 fn gemini_cli_v1internal_stream_rewriter_unwraps_response_object() {
     let report_context = json!({
         "has_envelope": true,
-        "provider_api_format": "gemini:cli",
-        "client_api_format": "gemini:cli",
+        "provider_api_format": "gemini:generate_content",
+        "client_api_format": "gemini:generate_content",
         "envelope_name": "gemini_cli:v1internal",
         "needs_conversion": false,
     });
@@ -424,7 +424,7 @@ fn openai_chat_error_to_openai_responses_stream_rewriter_converts_to_response_fa
 #[test]
 fn claude_error_to_openai_responses_stream_rewriter_converts_to_response_failed() {
     let report_context = json!({
-        "provider_api_format": "claude:chat",
+        "provider_api_format": "claude:messages",
         "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "claude-sonnet-4-5",
@@ -452,7 +452,7 @@ fn claude_error_to_openai_responses_stream_rewriter_converts_to_response_failed(
 #[test]
 fn gemini_error_to_openai_responses_stream_rewriter_converts_to_response_failed() {
     let report_context = json!({
-        "provider_api_format": "gemini:cli",
+        "provider_api_format": "gemini:generate_content",
         "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "gemini-2.5-pro",
@@ -477,7 +477,7 @@ fn gemini_error_to_openai_responses_stream_rewriter_converts_to_response_failed(
 fn openai_chat_error_to_claude_chat_stream_rewriter_uses_error_event_line() {
     let report_context = json!({
         "provider_api_format": "openai:chat",
-        "client_api_format": "claude:chat",
+        "client_api_format": "claude:messages",
         "needs_conversion": true,
         "mapped_model": "gpt-5.4",
     });
@@ -501,7 +501,7 @@ fn openai_chat_error_to_claude_chat_stream_rewriter_uses_error_event_line() {
 fn openai_chat_error_to_gemini_chat_stream_rewriter_keeps_data_only_error() {
     let report_context = json!({
         "provider_api_format": "openai:chat",
-        "client_api_format": "gemini:chat",
+        "client_api_format": "gemini:generate_content",
         "needs_conversion": true,
         "mapped_model": "gpt-5.4",
     });
@@ -524,7 +524,7 @@ fn openai_chat_error_to_gemini_chat_stream_rewriter_keeps_data_only_error() {
 #[test]
 fn claude_to_openai_chat_stream_rewriter_converts_text_deltas() {
     let report_context = json!({
-        "provider_api_format": "claude:chat",
+        "provider_api_format": "claude:messages",
         "client_api_format": "openai:chat",
         "needs_conversion": true,
         "mapped_model": "claude-sonnet-4-5",
@@ -557,7 +557,7 @@ fn claude_to_openai_chat_stream_rewriter_converts_text_deltas() {
 #[test]
 fn claude_to_openai_chat_stream_rewriter_converts_tool_use_to_tool_calls() {
     let report_context = json!({
-        "provider_api_format": "claude:chat",
+        "provider_api_format": "claude:messages",
         "client_api_format": "openai:chat",
         "needs_conversion": true,
         "mapped_model": "claude-sonnet-4-5",
@@ -597,7 +597,7 @@ fn claude_to_openai_chat_stream_rewriter_converts_tool_use_to_tool_calls() {
 #[test]
 fn gemini_to_openai_chat_stream_rewriter_buffers_and_converts_text() {
     let report_context = json!({
-        "provider_api_format": "gemini:chat",
+        "provider_api_format": "gemini:generate_content",
         "client_api_format": "openai:chat",
         "needs_conversion": true,
         "mapped_model": "gemini-2.5-pro",
@@ -630,7 +630,7 @@ fn gemini_to_openai_chat_stream_rewriter_buffers_and_converts_text() {
 #[test]
 fn gemini_to_openai_chat_stream_rewriter_buffers_and_converts_function_call() {
     let report_context = json!({
-        "provider_api_format": "gemini:chat",
+        "provider_api_format": "gemini:generate_content",
         "client_api_format": "openai:chat",
         "needs_conversion": true,
         "mapped_model": "gemini-2.5-pro",
@@ -761,7 +761,7 @@ fn openai_responses_to_openai_chat_stream_rewriter_converts_completed_event_with
 #[test]
 fn antigravity_gemini_to_openai_chat_stream_rewriter_unwraps_and_converts_function_call() {
     let report_context = json!({
-        "provider_api_format": "gemini:chat",
+        "provider_api_format": "gemini:generate_content",
         "client_api_format": "openai:chat",
         "needs_conversion": true,
         "has_envelope": true,
@@ -788,7 +788,7 @@ fn antigravity_gemini_to_openai_chat_stream_rewriter_unwraps_and_converts_functi
 #[test]
 fn antigravity_gemini_to_openai_responses_stream_rewriter_unwraps_and_converts_function_call() {
     let report_context = json!({
-        "provider_api_format": "gemini:cli",
+        "provider_api_format": "gemini:generate_content",
         "client_api_format": "openai:responses",
         "needs_conversion": true,
         "envelope_name": "antigravity:v1internal",
@@ -815,7 +815,7 @@ fn antigravity_gemini_to_openai_responses_stream_rewriter_unwraps_and_converts_f
 #[test]
 fn gemini_to_openai_responses_stream_rewriter_buffers_and_converts_to_completed_event() {
     let report_context = json!({
-        "provider_api_format": "gemini:cli",
+        "provider_api_format": "gemini:generate_content",
         "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "gemini-2.5-pro",
@@ -850,7 +850,7 @@ fn gemini_to_openai_responses_stream_rewriter_buffers_and_converts_to_completed_
 #[test]
 fn claude_to_openai_responses_stream_rewriter_buffers_and_converts_to_completed_event() {
     let report_context = json!({
-        "provider_api_format": "claude:cli",
+        "provider_api_format": "claude:messages",
         "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "claude-sonnet-4-5",
@@ -888,7 +888,7 @@ fn claude_to_openai_responses_stream_rewriter_buffers_and_converts_to_completed_
 #[test]
 fn claude_to_openai_responses_stream_rewriter_converts_tool_use_to_function_call() {
     let report_context = json!({
-        "provider_api_format": "claude:cli",
+        "provider_api_format": "claude:messages",
         "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "claude-sonnet-4-5",
@@ -934,7 +934,7 @@ fn claude_to_openai_responses_stream_rewriter_converts_tool_use_to_function_call
 #[test]
 fn gemini_to_openai_responses_stream_rewriter_converts_function_call_to_completed_event() {
     let report_context = json!({
-        "provider_api_format": "gemini:cli",
+        "provider_api_format": "gemini:generate_content",
         "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "gemini-2.5-pro",
@@ -961,7 +961,7 @@ fn gemini_to_openai_responses_stream_rewriter_converts_function_call_to_complete
 #[test]
 fn gemini_to_openai_responses_compact_stream_rewriter_converts_function_call_to_completed_event() {
     let report_context = json!({
-        "provider_api_format": "gemini:cli",
+        "provider_api_format": "gemini:generate_content",
         "client_api_format": "openai:responses:compact",
         "needs_conversion": true,
         "mapped_model": "gemini-2.5-pro",
@@ -989,7 +989,7 @@ fn gemini_to_openai_responses_compact_stream_rewriter_converts_function_call_to_
 fn openai_chat_to_claude_chat_stream_rewriter_converts_via_standard_matrix() {
     let report_context = json!({
         "provider_api_format": "openai:chat",
-        "client_api_format": "claude:chat",
+        "client_api_format": "claude:messages",
         "needs_conversion": true,
         "mapped_model": "gpt-5",
     });
@@ -1029,7 +1029,7 @@ fn openai_chat_to_claude_chat_stream_rewriter_injects_default_usage_when_finish_
 {
     let report_context = json!({
         "provider_api_format": "openai:chat",
-        "client_api_format": "claude:chat",
+        "client_api_format": "claude:messages",
         "needs_conversion": true,
         "mapped_model": "gpt-5.4",
     });
@@ -1066,7 +1066,7 @@ fn openai_chat_to_claude_chat_stream_rewriter_injects_default_usage_when_finish_
 fn openai_chat_to_gemini_cli_stream_rewriter_converts_via_standard_matrix() {
     let report_context = json!({
         "provider_api_format": "openai:chat",
-        "client_api_format": "gemini:cli",
+        "client_api_format": "gemini:generate_content",
         "needs_conversion": true,
         "mapped_model": "gpt-5",
     });

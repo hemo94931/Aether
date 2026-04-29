@@ -162,7 +162,7 @@ pub(super) fn detect_public_models_auth_signature(uri: &Uri, headers: &http::Hea
         .is_some();
     let has_anthropic_version = header_value_str(headers, "anthropic-version").is_some();
     if has_claude_key && has_anthropic_version {
-        return "claude:chat".to_string();
+        return "claude:messages".to_string();
     }
 
     let has_gemini_key = header_value_str(headers, "x-goog-api-key").is_some()
@@ -171,11 +171,11 @@ pub(super) fn detect_public_models_auth_signature(uri: &Uri, headers: &http::Hea
                 .any(|(key, value)| key == "key" && !value.trim().is_empty())
         });
     if has_gemini_key {
-        return "gemini:chat".to_string();
+        return "gemini:generate_content".to_string();
     }
 
     if uri.path().starts_with("/v1beta/models") {
-        return "gemini:chat".to_string();
+        return "gemini:generate_content".to_string();
     }
 
     "openai:chat".to_string()

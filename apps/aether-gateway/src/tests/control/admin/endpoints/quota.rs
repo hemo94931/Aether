@@ -472,7 +472,7 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_kiro_with_trusted_ad
     )
     .expect("key should build")
     .with_transport_fields(
-        Some(json!(["claude:cli"])),
+        Some(json!(["claude:messages"])),
         encrypted_api_key,
         Some(encrypted_auth_config),
         None,
@@ -495,7 +495,7 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_kiro_with_trusted_ad
         vec![sample_endpoint(
             "endpoint-kiro-cli",
             "provider-kiro",
-            "claude:cli",
+            "claude:messages",
             "https://q.us-west-2.amazonaws.com",
         )],
         vec![key],
@@ -830,7 +830,7 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_antigravity_with_tru
     )
     .expect("key should build")
     .with_transport_fields(
-        Some(json!(["gemini:chat"])),
+        Some(json!(["gemini:generate_content"])),
         encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "ya29.ant-token")
             .expect("api key ciphertext should build"),
         Some(encrypted_auth_config),
@@ -854,7 +854,7 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_antigravity_with_tru
         vec![sample_endpoint(
             "endpoint-antigravity-chat",
             "provider-antigravity",
-            "gemini:chat",
+            "gemini:generate_content",
             "https://daily-cloudcode-pa.googleapis.com",
         )],
         vec![key],

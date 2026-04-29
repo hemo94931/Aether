@@ -110,7 +110,7 @@ fn maybe_bridge_openai_image_sync_json_to_stream(
 }
 
 fn normalize_api_format(value: &str) -> String {
-    crate::ai_pipeline::normalize_legacy_openai_format_alias(value)
+    crate::ai_pipeline::normalize_api_format_alias(value)
 }
 
 fn is_standard_api_format(value: &str) -> bool {
@@ -119,10 +119,8 @@ fn is_standard_api_format(value: &str) -> bool {
         "openai:chat"
             | "openai:responses"
             | "openai:responses:compact"
-            | "claude:chat"
-            | "claude:cli"
-            | "gemini:chat"
-            | "gemini:cli"
+            | "claude:messages"
+            | "gemini:generate_content"
     )
 }
 
@@ -210,10 +208,10 @@ fn convert_provider_sync_response_to_openai_responses(
             report_context,
             false,
         ),
-        "claude:chat" | "claude:cli" => {
+        "claude:messages" => {
             convert_claude_response_to_openai_responses(provider_body_json, report_context)
         }
-        "gemini:chat" | "gemini:cli" => {
+        "gemini:generate_content" => {
             convert_gemini_response_to_openai_responses(provider_body_json, report_context)
         }
         _ => None,
@@ -257,11 +255,11 @@ fn emit_client_stream_from_canonical_frames(
             let mut emitter = OpenAIResponsesClientEmitter::default();
             emit_with_openai_responses_emitter(&mut emitter, canonical_frames)
         }
-        "claude:chat" | "claude:cli" => {
+        "claude:messages" => {
             let mut emitter = ClaudeClientEmitter::default();
             emit_with_claude_emitter(&mut emitter, canonical_frames)
         }
-        "gemini:chat" | "gemini:cli" => {
+        "gemini:generate_content" => {
             let mut emitter = GeminiClientEmitter::default();
             emit_with_gemini_emitter(&mut emitter, canonical_frames)
         }

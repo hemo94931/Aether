@@ -53,7 +53,7 @@ const OPENAI_SPEC: ProviderSpec = ProviderSpec {
 const CLAUDE_SPEC: ProviderSpec = ProviderSpec {
     provider_id: "provider-claude-usage-pricing-1",
     provider_name: "claude",
-    api_format: "claude:chat",
+    api_format: "claude:messages",
     endpoint_id: "endpoint-claude-usage-pricing-1",
     key_id: "key-claude-usage-pricing-1",
     model_id: "model-claude-usage-pricing-1",
@@ -67,7 +67,7 @@ const CLAUDE_SPEC: ProviderSpec = ProviderSpec {
 const GEMINI_SPEC: ProviderSpec = ProviderSpec {
     provider_id: "provider-gemini-usage-pricing-1",
     provider_name: "gemini",
-    api_format: "gemini:chat",
+    api_format: "gemini:generate_content",
     endpoint_id: "endpoint-gemini-usage-pricing-1",
     key_id: "key-gemini-usage-pricing-1",
     model_id: "model-gemini-usage-pricing-1",

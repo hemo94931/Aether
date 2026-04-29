@@ -67,15 +67,15 @@ pub fn implicit_sync_finalize_report_kind(plan_kind: &str) -> Option<&'static st
 pub fn core_error_default_client_api_format(report_kind: &str) -> Option<&'static str> {
     match report_kind {
         OPENAI_CHAT_SYNC_FINALIZE_REPORT_KIND => Some("openai:chat"),
-        CLAUDE_CHAT_SYNC_FINALIZE_REPORT_KIND => Some("claude:chat"),
-        GEMINI_CHAT_SYNC_FINALIZE_REPORT_KIND => Some("gemini:chat"),
+        CLAUDE_CHAT_SYNC_FINALIZE_REPORT_KIND => Some("claude:messages"),
+        GEMINI_CHAT_SYNC_FINALIZE_REPORT_KIND => Some("gemini:generate_content"),
         OPENAI_RESPONSES_SYNC_FINALIZE_REPORT_KIND => Some("openai:responses"),
         OPENAI_RESPONSES_COMPACT_SYNC_FINALIZE_REPORT_KIND => Some("openai:responses:compact"),
         LEGACY_OPENAI_CLI_SYNC_FINALIZE_REPORT_KIND => Some("openai:responses"),
         LEGACY_OPENAI_COMPACT_SYNC_FINALIZE_REPORT_KIND => Some("openai:responses:compact"),
         OPENAI_IMAGE_SYNC_FINALIZE_REPORT_KIND => Some("openai:image"),
-        CLAUDE_CLI_SYNC_FINALIZE_REPORT_KIND => Some("claude:cli"),
-        GEMINI_CLI_SYNC_FINALIZE_REPORT_KIND => Some("gemini:cli"),
+        CLAUDE_CLI_SYNC_FINALIZE_REPORT_KIND => Some("claude:messages"),
+        GEMINI_CLI_SYNC_FINALIZE_REPORT_KIND => Some("gemini:generate_content"),
         _ => None,
     }
 }

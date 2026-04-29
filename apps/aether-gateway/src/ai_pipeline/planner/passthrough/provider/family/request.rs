@@ -36,20 +36,15 @@ pub(crate) fn resolve_same_format_provider_transport_unsupported_reason_for_trac
     transport: &GatewayProviderTransportSnapshot,
     provider_api_format: &str,
 ) -> Option<&'static str> {
-    let provider_api_format = match crate::ai_pipeline::normalize_legacy_openai_format_alias(
-        provider_api_format,
-    )
-    .as_str()
-    {
-        "openai:chat" => "openai:chat",
-        "openai:responses" => "openai:responses",
-        "openai:responses:compact" => "openai:responses:compact",
-        "claude:chat" => "claude:chat",
-        "claude:cli" => "claude:cli",
-        "gemini:chat" => "gemini:chat",
-        "gemini:cli" => "gemini:cli",
-        _ => return Some("transport_api_format_unsupported"),
-    };
+    let provider_api_format =
+        match crate::ai_pipeline::normalize_api_format_alias(provider_api_format).as_str() {
+            "openai:chat" => "openai:chat",
+            "openai:responses" => "openai:responses",
+            "openai:responses:compact" => "openai:responses:compact",
+            "claude:messages" => "claude:messages",
+            "gemini:generate_content" => "gemini:generate_content",
+            _ => return Some("transport_api_format_unsupported"),
+        };
     let behavior = policy::classify_same_format_provider_request_behavior(
         transport,
         crate::ai_pipeline::planner::spec_metadata::LocalExecutionSurfaceSpecMetadata {

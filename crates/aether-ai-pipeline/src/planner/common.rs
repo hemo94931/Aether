@@ -60,18 +60,21 @@ mod tests {
             "codex",
             "openai:responses"
         ));
-        assert!(force_upstream_streaming_for_provider("codex", "openai:cli"));
+        assert!(!force_upstream_streaming_for_provider(
+            "codex",
+            "openai:responses:compact"
+        ));
     }
 
     #[test]
     fn does_not_force_streaming_for_compact_or_other_provider_types() {
         assert!(!force_upstream_streaming_for_provider(
             "codex",
-            "openai:compact"
+            "openai:responses:compact"
         ));
         assert!(!force_upstream_streaming_for_provider(
             "openai",
-            "openai:cli"
+            "openai:responses"
         ));
     }
 }

@@ -757,11 +757,10 @@ const AVAILABLE_API_FORMATS = [
   { value: 'openai:responses', label: 'OpenAI Responses' },
   { value: 'openai:responses:compact', label: 'OpenAI Responses Compact' },
   { value: 'openai:video', label: 'OpenAI Video' },
-  { value: 'claude:chat', label: 'Claude Chat' },
-  { value: 'claude:cli', label: 'Claude CLI' },
-  { value: 'gemini:chat', label: 'Gemini Chat' },
-  { value: 'gemini:cli', label: 'Gemini CLI' },
+  { value: 'claude:messages', label: 'Claude Messages' },
+  { value: 'gemini:generate_content', label: 'Gemini Generate Content' },
   { value: 'gemini:video', label: 'Gemini Video' },
+  { value: 'gemini:files', label: 'Gemini Files' },
 ] as const
 
 // 使用模块级常量
@@ -844,7 +843,7 @@ function formatOptionalTokens(value: number | null | undefined): string {
 // useDebounceFn 自动处理清理，无需 onUnmounted
 
 // 判断是否应该显示格式转换信息
-// 包括：1. 跨格式转换（has_format_conversion=true）2. 同族格式差异（如 CLAUDE_CLI → CLAUDE）
+// 包括：1. 跨格式转换（has_format_conversion=true）2. 同族格式差异
 function shouldShowFormatConversion(record: UsageRecord): boolean {
   if (!record.api_format || !record.endpoint_api_format) {
     return false

@@ -750,7 +750,7 @@ mod tests {
         let endpoint = StoredProviderCatalogEndpoint::new(
             "endpoint-safe-3".to_string(),
             "provider-1".to_string(),
-            "gemini:chat".to_string(),
+            "gemini:generate_content".to_string(),
             Some("gemini".to_string()),
             Some("chat".to_string()),
             true,
@@ -785,7 +785,7 @@ mod tests {
         )
         .expect("key should build")
         .with_transport_fields(
-            Some(serde_json::json!(["gemini:chat"])),
+            Some(serde_json::json!(["gemini:generate_content"])),
             encrypted_api_key,
             Some(encrypted_auth_config),
             None,

@@ -97,7 +97,7 @@ mod tests {
             endpoint: GatewayProviderTransportEndpoint {
                 id: "endpoint-1".to_string(),
                 provider_id: "provider-1".to_string(),
-                api_format: "gemini:cli".to_string(),
+                api_format: "gemini:generate_content".to_string(),
                 api_family: Some("gemini".to_string()),
                 endpoint_kind: Some("cli".to_string()),
                 is_active: true,
@@ -116,7 +116,7 @@ mod tests {
                 name: "key".to_string(),
                 auth_type: "api_key".to_string(),
                 is_active: true,
-                api_formats: Some(vec!["gemini:cli".to_string()]),
+                api_formats: Some(vec!["gemini:generate_content".to_string()]),
                 allowed_models: None,
                 capabilities: None,
                 rate_multipliers: None,
@@ -156,8 +156,13 @@ mod tests {
     #[test]
     fn detects_vertex_query_auth_usage_for_gemini_formats() {
         let transport = sample_transport();
-        assert!(uses_vertex_api_key_query_auth(&transport, "gemini:cli"));
-        assert!(uses_vertex_api_key_query_auth(&transport, "gemini:chat"));
-        assert!(!uses_vertex_api_key_query_auth(&transport, "claude:chat"));
+        assert!(uses_vertex_api_key_query_auth(
+            &transport,
+            "gemini:generate_content"
+        ));
+        assert!(!uses_vertex_api_key_query_auth(
+            &transport,
+            "claude:messages"
+        ));
     }
 }

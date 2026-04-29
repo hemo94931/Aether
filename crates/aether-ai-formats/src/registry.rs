@@ -147,11 +147,8 @@ mod tests {
     use crate::formats::FormatId;
 
     #[test]
-    fn cli_alias_routes_to_openai_responses() {
-        assert_eq!(
-            FormatId::parse("openai:cli"),
-            Some(FormatId::OpenAiResponses)
-        );
+    fn openai_cli_alias_is_not_a_primary_format() {
+        assert_eq!(FormatId::parse("openai:cli"), None);
     }
 
     #[test]

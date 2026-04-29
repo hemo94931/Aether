@@ -22,28 +22,28 @@ pub struct LocalSameFormatProviderSpec {
 pub fn resolve_sync_spec(plan_kind: &str) -> Option<LocalSameFormatProviderSpec> {
     match plan_kind {
         CLAUDE_CHAT_SYNC_PLAN_KIND => Some(LocalSameFormatProviderSpec {
-            api_format: "claude:chat",
+            api_format: "claude:messages",
             decision_kind: CLAUDE_CHAT_SYNC_PLAN_KIND,
             report_kind: "claude_chat_sync_success",
             family: LocalSameFormatProviderFamily::Standard,
             require_streaming: false,
         }),
         CLAUDE_CLI_SYNC_PLAN_KIND => Some(LocalSameFormatProviderSpec {
-            api_format: "claude:cli",
+            api_format: "claude:messages",
             decision_kind: CLAUDE_CLI_SYNC_PLAN_KIND,
             report_kind: "claude_cli_sync_success",
             family: LocalSameFormatProviderFamily::Standard,
             require_streaming: false,
         }),
         GEMINI_CHAT_SYNC_PLAN_KIND => Some(LocalSameFormatProviderSpec {
-            api_format: "gemini:chat",
+            api_format: "gemini:generate_content",
             decision_kind: GEMINI_CHAT_SYNC_PLAN_KIND,
             report_kind: "gemini_chat_sync_success",
             family: LocalSameFormatProviderFamily::Gemini,
             require_streaming: false,
         }),
         GEMINI_CLI_SYNC_PLAN_KIND => Some(LocalSameFormatProviderSpec {
-            api_format: "gemini:cli",
+            api_format: "gemini:generate_content",
             decision_kind: GEMINI_CLI_SYNC_PLAN_KIND,
             report_kind: "gemini_cli_sync_success",
             family: LocalSameFormatProviderFamily::Gemini,
@@ -56,28 +56,28 @@ pub fn resolve_sync_spec(plan_kind: &str) -> Option<LocalSameFormatProviderSpec>
 pub fn resolve_stream_spec(plan_kind: &str) -> Option<LocalSameFormatProviderSpec> {
     match plan_kind {
         CLAUDE_CHAT_STREAM_PLAN_KIND => Some(LocalSameFormatProviderSpec {
-            api_format: "claude:chat",
+            api_format: "claude:messages",
             decision_kind: CLAUDE_CHAT_STREAM_PLAN_KIND,
             report_kind: "claude_chat_stream_success",
             family: LocalSameFormatProviderFamily::Standard,
             require_streaming: true,
         }),
         CLAUDE_CLI_STREAM_PLAN_KIND => Some(LocalSameFormatProviderSpec {
-            api_format: "claude:cli",
+            api_format: "claude:messages",
             decision_kind: CLAUDE_CLI_STREAM_PLAN_KIND,
             report_kind: "claude_cli_stream_success",
             family: LocalSameFormatProviderFamily::Standard,
             require_streaming: true,
         }),
         GEMINI_CHAT_STREAM_PLAN_KIND => Some(LocalSameFormatProviderSpec {
-            api_format: "gemini:chat",
+            api_format: "gemini:generate_content",
             decision_kind: GEMINI_CHAT_STREAM_PLAN_KIND,
             report_kind: "gemini_chat_stream_success",
             family: LocalSameFormatProviderFamily::Gemini,
             require_streaming: true,
         }),
         GEMINI_CLI_STREAM_PLAN_KIND => Some(LocalSameFormatProviderSpec {
-            api_format: "gemini:cli",
+            api_format: "gemini:generate_content",
             decision_kind: GEMINI_CLI_STREAM_PLAN_KIND,
             report_kind: "gemini_cli_stream_success",
             family: LocalSameFormatProviderFamily::Gemini,
@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn resolves_claude_sync_same_format_spec() {
         let spec = resolve_sync_spec("claude_chat_sync").expect("spec");
-        assert_eq!(spec.api_format, "claude:chat");
+        assert_eq!(spec.api_format, "claude:messages");
         assert_eq!(spec.report_kind, "claude_chat_sync_success");
         assert!(!spec.require_streaming);
     }
@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn resolves_gemini_stream_same_format_spec() {
         let spec = resolve_stream_spec("gemini_cli_stream").expect("spec");
-        assert_eq!(spec.api_format, "gemini:cli");
+        assert_eq!(spec.api_format, "gemini:generate_content");
         assert_eq!(spec.report_kind, "gemini_cli_stream_success");
         assert!(spec.require_streaming);
     }

@@ -44,7 +44,7 @@ async fn gateway_executes_claude_chat_sync_via_local_decision_gate_with_local_sy
             true,
             false,
             Some(serde_json::json!(["claude"])),
-            Some(serde_json::json!(["claude:chat"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["claude-sonnet-4-5"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -55,7 +55,7 @@ async fn gateway_executes_claude_chat_sync_via_local_decision_gate_with_local_sy
             Some(5),
             Some(4_102_444_800),
             Some(serde_json::json!(["claude"])),
-            Some(serde_json::json!(["claude:chat"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["claude-sonnet-4-5"])),
         )
         .expect("auth snapshot should build")
@@ -69,7 +69,7 @@ async fn gateway_executes_claude_chat_sync_via_local_decision_gate_with_local_sy
             provider_priority: 10,
             provider_is_active: true,
             endpoint_id: "endpoint-claude-local-1".to_string(),
-            endpoint_api_format: "claude:chat".to_string(),
+            endpoint_api_format: "claude:messages".to_string(),
             endpoint_api_family: Some("claude".to_string()),
             endpoint_kind: Some("chat".to_string()),
             endpoint_is_active: true,
@@ -77,11 +77,11 @@ async fn gateway_executes_claude_chat_sync_via_local_decision_gate_with_local_sy
             key_name: "prod".to_string(),
             key_auth_type: "api_key".to_string(),
             key_is_active: true,
-            key_api_formats: Some(vec!["claude:chat".to_string()]),
+            key_api_formats: Some(vec!["claude:messages".to_string()]),
             key_allowed_models: None,
             key_capabilities: None,
             key_internal_priority: 5,
-            key_global_priority_by_format: Some(serde_json::json!({"claude:chat": 1})),
+            key_global_priority_by_format: Some(serde_json::json!({"claude:messages": 1})),
             model_id: "model-claude-local-1".to_string(),
             global_model_id: "global-model-claude-local-1".to_string(),
             global_model_name: "claude-sonnet-4-5".to_string(),
@@ -91,7 +91,7 @@ async fn gateway_executes_claude_chat_sync_via_local_decision_gate_with_local_sy
             model_provider_model_mappings: Some(vec![StoredProviderModelMapping {
                 name: "claude-sonnet-4-5-upstream".to_string(),
                 priority: 1,
-                api_formats: Some(vec!["claude:chat".to_string()]),
+                api_formats: Some(vec!["claude:messages".to_string()]),
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -124,7 +124,7 @@ async fn gateway_executes_claude_chat_sync_via_local_decision_gate_with_local_sy
         StoredProviderCatalogEndpoint::new(
             "endpoint-claude-local-1".to_string(),
             "provider-claude-local-1".to_string(),
-            "claude:chat".to_string(),
+            "claude:messages".to_string(),
             Some("claude".to_string()),
             Some("chat".to_string()),
             true,
@@ -159,12 +159,12 @@ async fn gateway_executes_claude_chat_sync_via_local_decision_gate_with_local_sy
         )
         .expect("key should build")
         .with_transport_fields(
-            Some(serde_json::json!(["claude:chat"])),
+            Some(serde_json::json!(["claude:messages"])),
             encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "sk-upstream-claude-chat")
                 .expect("api key should encrypt"),
             None,
             None,
-            Some(serde_json::json!({"claude:chat": 1})),
+            Some(serde_json::json!({"claude:messages": 1})),
             None,
             None,
             Some(serde_json::json!({"enabled": true, "node_id":"proxy-node-claude-chat-local"})),
@@ -470,7 +470,7 @@ async fn gateway_surfaces_candidate_list_empty_reason_for_claude_chat_runtime_mi
             true,
             false,
             Some(serde_json::json!(["claude"])),
-            Some(serde_json::json!(["claude:chat"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["claude-sonnet-4-5"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -481,7 +481,7 @@ async fn gateway_surfaces_candidate_list_empty_reason_for_claude_chat_runtime_mi
             Some(5),
             Some(4_102_444_800),
             Some(serde_json::json!(["claude"])),
-            Some(serde_json::json!(["claude:chat"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["claude-sonnet-4-5"])),
         )
         .expect("auth snapshot should build")
@@ -595,7 +595,7 @@ async fn gateway_returns_claude_chat_error_for_local_sync_failure() {
             true,
             false,
             Some(serde_json::json!(["claude"])),
-            Some(serde_json::json!(["claude:chat"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["claude-sonnet-4-5"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -606,7 +606,7 @@ async fn gateway_returns_claude_chat_error_for_local_sync_failure() {
             Some(5),
             Some(4_102_444_800),
             Some(serde_json::json!(["claude"])),
-            Some(serde_json::json!(["claude:chat"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["claude-sonnet-4-5"])),
         )
         .expect("auth snapshot should build")
@@ -620,7 +620,7 @@ async fn gateway_returns_claude_chat_error_for_local_sync_failure() {
             provider_priority: 10,
             provider_is_active: true,
             endpoint_id: "endpoint-claude-local-1".to_string(),
-            endpoint_api_format: "claude:chat".to_string(),
+            endpoint_api_format: "claude:messages".to_string(),
             endpoint_api_family: Some("claude".to_string()),
             endpoint_kind: Some("chat".to_string()),
             endpoint_is_active: true,
@@ -628,11 +628,11 @@ async fn gateway_returns_claude_chat_error_for_local_sync_failure() {
             key_name: "prod".to_string(),
             key_auth_type: "api_key".to_string(),
             key_is_active: true,
-            key_api_formats: Some(vec!["claude:chat".to_string()]),
+            key_api_formats: Some(vec!["claude:messages".to_string()]),
             key_allowed_models: None,
             key_capabilities: None,
             key_internal_priority: 5,
-            key_global_priority_by_format: Some(serde_json::json!({"claude:chat": 1})),
+            key_global_priority_by_format: Some(serde_json::json!({"claude:messages": 1})),
             model_id: "model-claude-local-1".to_string(),
             global_model_id: "global-model-claude-local-1".to_string(),
             global_model_name: "claude-sonnet-4-5".to_string(),
@@ -642,7 +642,7 @@ async fn gateway_returns_claude_chat_error_for_local_sync_failure() {
             model_provider_model_mappings: Some(vec![StoredProviderModelMapping {
                 name: "claude-sonnet-4-5-upstream".to_string(),
                 priority: 1,
-                api_formats: Some(vec!["claude:chat".to_string()]),
+                api_formats: Some(vec!["claude:messages".to_string()]),
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -675,7 +675,7 @@ async fn gateway_returns_claude_chat_error_for_local_sync_failure() {
         StoredProviderCatalogEndpoint::new(
             "endpoint-claude-local-1".to_string(),
             "provider-claude-local-1".to_string(),
-            "claude:chat".to_string(),
+            "claude:messages".to_string(),
             Some("claude".to_string()),
             Some("chat".to_string()),
             true,
@@ -710,12 +710,12 @@ async fn gateway_returns_claude_chat_error_for_local_sync_failure() {
         )
         .expect("key should build")
         .with_transport_fields(
-            Some(serde_json::json!(["claude:chat"])),
+            Some(serde_json::json!(["claude:messages"])),
             encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "sk-upstream-claude-chat")
                 .expect("api key should encrypt"),
             None,
             None,
-            Some(serde_json::json!({"claude:chat": 1})),
+            Some(serde_json::json!({"claude:messages": 1})),
             None,
             None,
             Some(serde_json::json!({"enabled": true, "node_id":"proxy-node-claude-chat-local"})),

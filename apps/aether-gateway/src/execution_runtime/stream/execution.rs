@@ -2354,8 +2354,8 @@ mod tests {
         assert!(should_skip_direct_finalize_prefetch(
             Some("claude_cli_sync_finalize"),
             Some("text/event-stream"),
-            "claude:cli",
-            "claude:cli",
+            "claude:messages",
+            "claude:messages",
             false,
             false,
         ));
@@ -2366,8 +2366,8 @@ mod tests {
         assert!(should_skip_direct_finalize_prefetch(
             Some("claude_cli_sync_finalize"),
             None,
-            "claude:cli",
-            "claude:cli",
+            "claude:messages",
+            "claude:messages",
             false,
             false,
         ));
@@ -2378,8 +2378,8 @@ mod tests {
         assert!(!should_skip_direct_finalize_prefetch(
             Some("claude_cli_sync_finalize"),
             Some("application/json"),
-            "claude:cli",
-            "claude:cli",
+            "claude:messages",
+            "claude:messages",
             false,
             false,
         ));
@@ -2391,7 +2391,7 @@ mod tests {
             Some("claude_cli_sync_finalize"),
             Some("text/event-stream"),
             "openai:chat",
-            "claude:cli",
+            "claude:messages",
             false,
             true,
         ));

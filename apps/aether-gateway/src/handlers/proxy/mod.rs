@@ -463,7 +463,7 @@ fn aggregate_sync_sse_response_for_client(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    match api_format.map(crate::ai_pipeline::normalize_legacy_openai_format_alias) {
+    match api_format.map(crate::ai_pipeline::normalize_api_format_alias) {
         Some(value) if value.eq_ignore_ascii_case("openai:chat") => {
             aggregate_openai_chat_stream_sync_response(body)
         }
@@ -473,16 +473,10 @@ fn aggregate_sync_sse_response_for_client(
         {
             aggregate_openai_responses_stream_sync_response(body)
         }
-        Some(value)
-            if value.eq_ignore_ascii_case("claude:chat")
-                || value.eq_ignore_ascii_case("claude:cli") =>
-        {
+        Some(value) if value.eq_ignore_ascii_case("claude:messages") => {
             aggregate_claude_stream_sync_response(body)
         }
-        Some(value)
-            if value.eq_ignore_ascii_case("gemini:chat")
-                || value.eq_ignore_ascii_case("gemini:cli") =>
-        {
+        Some(value) if value.eq_ignore_ascii_case("gemini:generate_content") => {
             aggregate_gemini_stream_sync_response(body)
         }
         _ if public_path == "/v1/chat/completions" => {
@@ -534,25 +528,25 @@ fn resolve_affinity_forward_client_api_format(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    match api_format.map(crate::ai_pipeline::normalize_legacy_openai_format_alias) {
+    match api_format.map(crate::ai_pipeline::normalize_api_format_alias) {
         Some(value) if value.eq_ignore_ascii_case("openai:chat") => Some("openai:chat"),
         Some(value) if value.eq_ignore_ascii_case("openai:responses") => Some("openai:responses"),
         Some(value) if value.eq_ignore_ascii_case("openai:responses:compact") => {
             Some("openai:responses:compact")
         }
-        Some(value) if value.eq_ignore_ascii_case("claude:chat") => Some("claude:chat"),
-        Some(value) if value.eq_ignore_ascii_case("claude:cli") => Some("claude:cli"),
-        Some(value) if value.eq_ignore_ascii_case("gemini:chat") => Some("gemini:chat"),
-        Some(value) if value.eq_ignore_ascii_case("gemini:cli") => Some("gemini:cli"),
+        Some(value) if value.eq_ignore_ascii_case("claude:messages") => Some("claude:messages"),
+        Some(value) if value.eq_ignore_ascii_case("gemini:generate_content") => {
+            Some("gemini:generate_content")
+        }
         _ if public_path == "/v1/chat/completions" => Some("openai:chat"),
         _ if public_path == "/v1/responses" => Some("openai:responses"),
         _ if public_path == "/v1/responses/compact" => Some("openai:responses:compact"),
-        _ if public_path == "/v1/messages" => Some("claude:chat"),
+        _ if public_path == "/v1/messages" => Some("claude:messages"),
         _ if decision.route_family.as_deref() == Some("gemini")
             && (public_path.contains(":generateContent")
                 || public_path.contains(":streamGenerateContent")) =>
         {
-            Some("gemini:chat")
+            Some("gemini:generate_content")
         }
         _ => None,
     }
@@ -1760,8 +1754,8 @@ mod tests {
             "/v1/messages",
             Some("ai_public".to_string()),
             Some("claude".to_string()),
-            Some("chat".to_string()),
-            Some("claude:chat".to_string()),
+            Some("messages".to_string()),
+            Some("claude:messages".to_string()),
         );
         let diagnostic = LocalExecutionRuntimeMissDiagnostic {
             reason: "missing_auth_context".to_string(),

@@ -265,7 +265,7 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
         .provider_type
         .trim()
         .eq_ignore_ascii_case("kiro")
-        && provider_api_format.eq_ignore_ascii_case("claude:cli");
+        && provider_api_format.eq_ignore_ascii_case("claude:messages");
     let oauth_context = OauthPreparationContext {
         trace_id,
         api_format: provider_api_format.as_str(),

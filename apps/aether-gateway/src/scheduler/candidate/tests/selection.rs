@@ -1385,9 +1385,11 @@ async fn keeps_refreshable_kiro_candidate_selectable_with_runtime_oauth_invalid_
     row.provider_name = "kiro".to_string();
     row.provider_type = "kiro".to_string();
     row.endpoint_id = "endpoint-kiro".to_string();
+    row.endpoint_api_format = "claude:messages".to_string();
     row.key_id = "key-kiro".to_string();
     row.key_name = "kiro-refreshable".to_string();
     row.key_auth_type = "oauth".to_string();
+    row.key_api_formats = Some(vec!["claude:messages".to_string()]);
 
     let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
         row,
@@ -1422,7 +1424,7 @@ async fn keeps_refreshable_kiro_candidate_selectable_with_runtime_oauth_invalid_
     let (selected, skipped) = collect_selectable_candidates_with_skip_reasons(
         state.data.as_ref(),
         &state,
-        "openai:chat",
+        "claude:messages",
         "gpt-4.1",
         false,
         None,
@@ -1443,9 +1445,11 @@ async fn keeps_refreshable_kiro_candidate_selectable_when_oauth_token_expired() 
     row.provider_name = "kiro".to_string();
     row.provider_type = "kiro".to_string();
     row.endpoint_id = "endpoint-kiro".to_string();
+    row.endpoint_api_format = "claude:messages".to_string();
     row.key_id = "key-kiro".to_string();
     row.key_name = "kiro-expired-refreshable".to_string();
     row.key_auth_type = "oauth".to_string();
+    row.key_api_formats = Some(vec!["claude:messages".to_string()]);
 
     let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
         row,
@@ -1479,7 +1483,7 @@ async fn keeps_refreshable_kiro_candidate_selectable_when_oauth_token_expired() 
     let (selected, skipped) = collect_selectable_candidates_with_skip_reasons(
         state.data.as_ref(),
         &state,
-        "openai:chat",
+        "claude:messages",
         "gpt-4.1",
         false,
         None,
@@ -1500,9 +1504,11 @@ async fn skips_kiro_candidate_after_refresh_failure_requires_reauth() {
     row.provider_name = "kiro".to_string();
     row.provider_type = "kiro".to_string();
     row.endpoint_id = "endpoint-kiro".to_string();
+    row.endpoint_api_format = "claude:messages".to_string();
     row.key_id = "key-kiro".to_string();
     row.key_name = "kiro-refresh-failed".to_string();
     row.key_auth_type = "oauth".to_string();
+    row.key_api_formats = Some(vec!["claude:messages".to_string()]);
 
     let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
         row,
@@ -1540,7 +1546,7 @@ async fn skips_kiro_candidate_after_refresh_failure_requires_reauth() {
     let (selected, skipped) = collect_selectable_candidates_with_skip_reasons(
         state.data.as_ref(),
         &state,
-        "openai:chat",
+        "claude:messages",
         "gpt-4.1",
         false,
         None,
@@ -1562,9 +1568,11 @@ async fn skips_refreshable_kiro_candidate_when_oauth_marker_is_account_block() {
     row.provider_name = "kiro".to_string();
     row.provider_type = "kiro".to_string();
     row.endpoint_id = "endpoint-kiro".to_string();
+    row.endpoint_api_format = "claude:messages".to_string();
     row.key_id = "key-kiro".to_string();
     row.key_name = "kiro-account-blocked".to_string();
     row.key_auth_type = "oauth".to_string();
+    row.key_api_formats = Some(vec!["claude:messages".to_string()]);
 
     let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
         row,
@@ -1599,7 +1607,7 @@ async fn skips_refreshable_kiro_candidate_when_oauth_marker_is_account_block() {
     let (selected, skipped) = collect_selectable_candidates_with_skip_reasons(
         state.data.as_ref(),
         &state,
-        "openai:chat",
+        "claude:messages",
         "gpt-4.1",
         false,
         None,
@@ -1702,22 +1710,22 @@ async fn skips_kiro_candidate_when_account_quota_is_exhausted_and_pool_flag_enab
     first.provider_name = "kiro".to_string();
     first.provider_type = "kiro".to_string();
     first.endpoint_id = "endpoint-kiro".to_string();
-    first.endpoint_api_format = "claude:cli".to_string();
+    first.endpoint_api_format = "claude:messages".to_string();
     first.key_id = "key-kiro".to_string();
     first.key_name = "kiro-exhausted".to_string();
     first.key_auth_type = "oauth".to_string();
-    first.key_api_formats = Some(vec!["claude:cli".to_string()]);
-    first.key_global_priority_by_format = Some(serde_json::json!({"claude:cli": 1}));
+    first.key_api_formats = Some(vec!["claude:messages".to_string()]);
+    first.key_global_priority_by_format = Some(serde_json::json!({"claude:messages": 1}));
 
     let mut second = sample_row();
     second.provider_id = "provider-openai".to_string();
     second.provider_name = "openai".to_string();
     second.endpoint_id = "endpoint-openai".to_string();
-    second.endpoint_api_format = "claude:cli".to_string();
+    second.endpoint_api_format = "claude:messages".to_string();
     second.key_id = "key-openai".to_string();
     second.key_name = "fallback".to_string();
-    second.key_api_formats = Some(vec!["claude:cli".to_string()]);
-    second.key_global_priority_by_format = Some(serde_json::json!({"claude:cli": 2}));
+    second.key_api_formats = Some(vec!["claude:messages".to_string()]);
+    second.key_global_priority_by_format = Some(serde_json::json!({"claude:messages": 2}));
 
     let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
         first, second,
@@ -1762,7 +1770,7 @@ async fn skips_kiro_candidate_when_account_quota_is_exhausted_and_pool_flag_enab
     let (selected, skipped) = collect_selectable_candidates_with_skip_reasons(
         state.data.as_ref(),
         &state,
-        "claude:cli",
+        "claude:messages",
         "gpt-4.1",
         false,
         None,
@@ -1878,14 +1886,14 @@ async fn same_priority_candidates_use_aggregate_health_score_when_api_format_spe
             sample_key("key-a", "provider-a", Some(10)).with_health_fields(
                 Some(serde_json::json!({
                     "openai:responses": {"health_score": 0.40},
-                    "claude:chat": {"health_score": 0.55}
+                    "claude:messages": {"health_score": 0.55}
                 })),
                 None,
             ),
             sample_key("key-b", "provider-b", Some(10)).with_health_fields(
                 Some(serde_json::json!({
                     "openai:responses": {"health_score": 0.90},
-                    "claude:chat": {"health_score": 0.92}
+                    "claude:messages": {"health_score": 0.92}
                 })),
                 None,
             ),

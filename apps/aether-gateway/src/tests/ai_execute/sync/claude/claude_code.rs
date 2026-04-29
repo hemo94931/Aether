@@ -48,7 +48,7 @@ async fn gateway_executes_claude_code_cli_sync_via_local_decision_gate_with_loca
             true,
             false,
             Some(serde_json::json!(["claude", "claude_code"])),
-            Some(serde_json::json!(["claude:cli"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["claude-code"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -59,7 +59,7 @@ async fn gateway_executes_claude_code_cli_sync_via_local_decision_gate_with_loca
             Some(5),
             Some(4_102_444_800),
             Some(serde_json::json!(["claude", "claude_code"])),
-            Some(serde_json::json!(["claude:cli"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["claude-code"])),
         )
         .expect("auth snapshot should build")
@@ -73,7 +73,7 @@ async fn gateway_executes_claude_code_cli_sync_via_local_decision_gate_with_loca
             provider_priority: 10,
             provider_is_active: true,
             endpoint_id: "endpoint-claude-code-cli-local-1".to_string(),
-            endpoint_api_format: "claude:cli".to_string(),
+            endpoint_api_format: "claude:messages".to_string(),
             endpoint_api_family: Some("claude".to_string()),
             endpoint_kind: Some("cli".to_string()),
             endpoint_is_active: true,
@@ -81,11 +81,11 @@ async fn gateway_executes_claude_code_cli_sync_via_local_decision_gate_with_loca
             key_name: "prod".to_string(),
             key_auth_type: "oauth".to_string(),
             key_is_active: true,
-            key_api_formats: Some(vec!["claude:cli".to_string()]),
+            key_api_formats: Some(vec!["claude:messages".to_string()]),
             key_allowed_models: None,
             key_capabilities: None,
             key_internal_priority: 5,
-            key_global_priority_by_format: Some(serde_json::json!({"claude:cli": 1})),
+            key_global_priority_by_format: Some(serde_json::json!({"claude:messages": 1})),
             model_id: "model-claude-code-cli-local-1".to_string(),
             global_model_id: "global-model-claude-code-cli-local-1".to_string(),
             global_model_name: "claude-code".to_string(),
@@ -95,7 +95,7 @@ async fn gateway_executes_claude_code_cli_sync_via_local_decision_gate_with_loca
             model_provider_model_mappings: Some(vec![StoredProviderModelMapping {
                 name: "claude-code-upstream".to_string(),
                 priority: 1,
-                api_formats: Some(vec!["claude:cli".to_string()]),
+                api_formats: Some(vec!["claude:messages".to_string()]),
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -132,7 +132,7 @@ async fn gateway_executes_claude_code_cli_sync_via_local_decision_gate_with_loca
         StoredProviderCatalogEndpoint::new(
             "endpoint-claude-code-cli-local-1".to_string(),
             "provider-claude-code-cli-local-1".to_string(),
-            "claude:cli".to_string(),
+            "claude:messages".to_string(),
             Some("claude".to_string()),
             Some("cli".to_string()),
             true,
@@ -167,7 +167,7 @@ async fn gateway_executes_claude_code_cli_sync_via_local_decision_gate_with_loca
         )
         .expect("key should build")
         .with_transport_fields(
-            Some(serde_json::json!(["claude:cli"])),
+            Some(serde_json::json!(["claude:messages"])),
             encrypt_python_fernet_plaintext(
                 DEVELOPMENT_ENCRYPTION_KEY,
                 "sk-upstream-claude-code-oauth",
@@ -175,7 +175,7 @@ async fn gateway_executes_claude_code_cli_sync_via_local_decision_gate_with_loca
             .expect("api key should encrypt"),
             None,
             None,
-            Some(serde_json::json!({"claude:cli": 1})),
+            Some(serde_json::json!({"claude:messages": 1})),
             None,
             None,
             Some(

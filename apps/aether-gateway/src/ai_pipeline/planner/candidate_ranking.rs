@@ -151,7 +151,7 @@ fn planner_ranking_mode(mode: SchedulerSchedulingMode) -> SchedulerRankingMode {
 }
 
 fn normalize_api_format_alias(value: &str) -> String {
-    crate::ai_pipeline::normalize_legacy_openai_format_alias(value)
+    crate::ai_pipeline::normalize_api_format_alias(value)
 }
 
 fn api_format_matches(left: &str, right: &str) -> bool {
@@ -564,7 +564,7 @@ mod tests {
             ],
             vec![
                 sample_endpoint_for_provider("provider-same", "endpoint-same", "openai:chat"),
-                sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:chat"),
+                sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:messages"),
             ],
             vec![
                 sample_key_for_provider("provider-same", "key-same", ""),
@@ -586,7 +586,7 @@ mod tests {
                     "provider-cross",
                     "endpoint-cross",
                     "key-cross",
-                    "claude:chat",
+                    "claude:messages",
                     Some(0),
                     0,
                 ),
@@ -618,7 +618,7 @@ mod tests {
             ],
             vec![
                 sample_endpoint_for_provider("provider-same", "endpoint-same", "openai:chat"),
-                sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:chat"),
+                sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:messages"),
             ],
             vec![
                 sample_key_for_provider("provider-same", "key-same", ""),
@@ -652,7 +652,7 @@ mod tests {
                     "provider-cross",
                     "endpoint-cross",
                     "key-cross",
-                    "claude:chat",
+                    "claude:messages",
                     Some(0),
                     0,
                 ),
@@ -675,7 +675,7 @@ mod tests {
             ],
             vec![
                 sample_endpoint_for_provider("provider-same", "endpoint-same", "openai:chat"),
-                sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:chat"),
+                sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:messages"),
             ],
             vec![
                 sample_key_for_provider("provider-same", "key-same", ""),
@@ -697,7 +697,7 @@ mod tests {
                     "provider-cross",
                     "endpoint-cross",
                     "key-cross",
-                    "claude:chat",
+                    "claude:messages",
                     Some(0),
                     0,
                 ),
@@ -728,7 +728,7 @@ mod tests {
             ],
             vec![
                 sample_endpoint_for_provider("provider-same", "endpoint-same", "openai:chat"),
-                sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:chat"),
+                sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:messages"),
             ],
             vec![
                 sample_key_for_provider("provider-same", "key-same", ""),
@@ -754,7 +754,7 @@ mod tests {
                     "provider-cross",
                     "endpoint-cross",
                     "key-cross",
-                    "claude:chat",
+                    "claude:messages",
                     Some(0),
                     0,
                 ),
@@ -846,7 +846,11 @@ mod tests {
         let provider_catalog = InMemoryProviderCatalogReadRepository::seed(
             vec![sample_provider_with_options("provider-shared", false, 0)],
             vec![
-                sample_endpoint_for_provider("provider-shared", "aaa-claude-chat", "claude:chat"),
+                sample_endpoint_for_provider(
+                    "provider-shared",
+                    "aaa-claude-chat",
+                    "claude:messages",
+                ),
                 sample_endpoint_for_provider(
                     "provider-shared",
                     "zzz-openai-responses",
@@ -858,7 +862,7 @@ mod tests {
                 "key-shared",
                 "",
                 true,
-                Some(json!(["claude:chat", "openai:responses"])),
+                Some(json!(["claude:messages", "openai:responses"])),
                 None,
             )],
         );
@@ -877,7 +881,7 @@ mod tests {
                     "provider-shared",
                     "aaa-claude-chat",
                     "key-shared",
-                    "claude:chat",
+                    "claude:messages",
                     Some(0),
                     0,
                 ),
@@ -890,13 +894,13 @@ mod tests {
                     0,
                 ),
             ],
-            "claude:cli",
+            "claude:messages",
             None,
         )
         .await;
 
-        assert_eq!(ranked[0].endpoint_id, "zzz-openai-responses");
-        assert_eq!(ranked[1].endpoint_id, "aaa-claude-chat");
+        assert_eq!(ranked[0].endpoint_id, "aaa-claude-chat");
+        assert_eq!(ranked[1].endpoint_id, "zzz-openai-responses");
     }
 
     #[tokio::test]
@@ -1117,7 +1121,7 @@ mod tests {
                 sample_provider_with_options("provider-same", false, 10),
             ],
             vec![
-                sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:chat"),
+                sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:messages"),
                 sample_endpoint_for_provider("provider-same", "endpoint-same", "openai:chat"),
             ],
             vec![
@@ -1126,7 +1130,7 @@ mod tests {
                     "key-cross",
                     "",
                     true,
-                    Some(json!(["claude:chat"])),
+                    Some(json!(["claude:messages"])),
                     None,
                 ),
                 sample_key_for_provider_with_options(
@@ -1154,7 +1158,7 @@ mod tests {
                     "provider-cross",
                     "endpoint-cross",
                     "key-cross",
-                    "claude:chat",
+                    "claude:messages",
                     Some(0),
                     0,
                 ),
@@ -1188,14 +1192,18 @@ mod tests {
             vec![sample_provider_with_options("provider-shared", false, 0)],
             vec![
                 sample_endpoint_for_provider("provider-shared", "endpoint-exact", "openai:chat"),
-                sample_endpoint_for_provider("provider-shared", "endpoint-cross", "claude:chat"),
+                sample_endpoint_for_provider(
+                    "provider-shared",
+                    "endpoint-cross",
+                    "claude:messages",
+                ),
             ],
             vec![sample_key_for_provider_with_options(
                 "provider-shared",
                 "key-shared",
                 "",
                 true,
-                Some(json!(["openai:chat", "claude:chat"])),
+                Some(json!(["openai:chat", "claude:messages"])),
                 None,
             )],
         );
@@ -1222,7 +1230,7 @@ mod tests {
                     "provider-shared",
                     "endpoint-cross",
                     "key-shared",
-                    "claude:chat",
+                    "claude:messages",
                     Some(0),
                     0,
                 ),
@@ -1245,7 +1253,7 @@ mod tests {
     #[tokio::test]
     async fn realtime_gate_allows_cross_format_candidates_when_endpoint_acceptance_is_enabled() {
         let mut endpoint_cross =
-            sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:chat");
+            sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:messages");
         endpoint_cross.format_acceptance_config = Some(json!({
             "enabled": true,
             "accept_formats": ["openai:chat"],
@@ -1266,7 +1274,7 @@ mod tests {
                     "key-cross",
                     "",
                     true,
-                    Some(json!(["claude:chat"])),
+                    Some(json!(["claude:messages"])),
                     None,
                 ),
                 sample_key_for_provider_with_options(
@@ -1294,7 +1302,7 @@ mod tests {
                     "provider-cross",
                     "endpoint-cross",
                     "key-cross",
-                    "claude:chat",
+                    "claude:messages",
                     Some(0),
                     0,
                 ),

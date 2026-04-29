@@ -82,55 +82,40 @@ impl FromStr for FormatId {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_lowercase().as_str() {
             "openai" | "openai:chat" | "/v1/chat/completions" => Ok(Self::OpenAiChat),
-            "openai:responses" | "openai:cli" | "/v1/responses" => Ok(Self::OpenAiResponses),
-            "openai:responses:compact" | "openai:compact" | "/v1/responses/compact" => {
+            "openai:responses" | "/v1/responses" => Ok(Self::OpenAiResponses),
+            "openai:responses:compact" | "/v1/responses/compact" => {
                 Ok(Self::OpenAiResponsesCompact)
             }
-            "claude:messages" | "claude:chat" | "claude:cli" | "/v1/messages" => {
-                Ok(Self::ClaudeMessages)
-            }
-            "gemini:generate_content" | "gemini:chat" | "gemini:cli" => {
-                Ok(Self::GeminiGenerateContent)
-            }
+            "claude:messages" | "/v1/messages" => Ok(Self::ClaudeMessages),
+            "gemini:generate_content" => Ok(Self::GeminiGenerateContent),
             _ => Err(()),
         }
     }
 }
 
-pub fn normalize_legacy_openai_format_alias(value: &str) -> String {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "openai:cli" => "openai:responses".to_string(),
-        "openai:compact" => "openai:responses:compact".to_string(),
-        other => other.to_string(),
-    }
+pub fn normalize_api_format_alias(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
-pub fn legacy_openai_format_alias_matches(left: &str, right: &str) -> bool {
-    normalize_legacy_openai_format_alias(left) == normalize_legacy_openai_format_alias(right)
+pub fn api_format_alias_matches(left: &str, right: &str) -> bool {
+    normalize_api_format_alias(left) == normalize_api_format_alias(right)
 }
 
-pub fn openai_format_storage_aliases(value: &str) -> Vec<String> {
-    match normalize_legacy_openai_format_alias(value).as_str() {
-        "openai:responses" => vec!["openai:responses".to_string(), "openai:cli".to_string()],
-        "openai:responses:compact" => vec![
-            "openai:responses:compact".to_string(),
-            "openai:compact".to_string(),
-        ],
-        normalized => vec![normalized.to_string()],
-    }
+pub fn api_format_storage_aliases(value: &str) -> Vec<String> {
+    vec![normalize_api_format_alias(value)]
 }
 
 pub fn is_openai_responses_format(value: &str) -> bool {
-    normalize_legacy_openai_format_alias(value) == "openai:responses"
+    normalize_api_format_alias(value) == "openai:responses"
 }
 
 pub fn is_openai_responses_compact_format(value: &str) -> bool {
-    normalize_legacy_openai_format_alias(value) == "openai:responses:compact"
+    normalize_api_format_alias(value) == "openai:responses:compact"
 }
 
 pub fn is_openai_responses_family_format(value: &str) -> bool {
     matches!(
-        normalize_legacy_openai_format_alias(value).as_str(),
+        normalize_api_format_alias(value).as_str(),
         "openai:responses" | "openai:responses:compact"
     )
 }
@@ -138,66 +123,66 @@ pub fn is_openai_responses_family_format(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        legacy_openai_format_alias_matches, normalize_legacy_openai_format_alias,
-        openai_format_storage_aliases, FormatId,
+        api_format_alias_matches, api_format_storage_aliases, normalize_api_format_alias, FormatId,
     };
 
     #[test]
-    fn normalizes_legacy_aliases() {
-        assert_eq!(
-            FormatId::parse("openai:cli"),
-            Some(FormatId::OpenAiResponses)
-        );
-        assert_eq!(
-            FormatId::parse("openai:compact"),
-            Some(FormatId::OpenAiResponsesCompact)
-        );
-        assert_eq!(
-            FormatId::parse("claude:cli"),
-            Some(FormatId::ClaudeMessages)
-        );
-        assert_eq!(
-            FormatId::parse("gemini:chat"),
-            Some(FormatId::GeminiGenerateContent)
-        );
+    fn retired_api_formats_do_not_parse() {
+        assert_eq!(FormatId::parse("openai:cli"), None);
+        assert_eq!(FormatId::parse("openai:compact"), None);
+        assert_eq!(FormatId::parse("claude:chat"), None);
+        assert_eq!(FormatId::parse("claude:cli"), None);
+        assert_eq!(FormatId::parse("gemini:chat"), None);
+        assert_eq!(FormatId::parse("gemini:cli"), None);
     }
 
     #[test]
-    fn normalizes_openai_legacy_aliases_without_rewriting_other_families() {
+    fn normalizes_api_format_aliases() {
         assert_eq!(
-            normalize_legacy_openai_format_alias(" openai:cli "),
+            normalize_api_format_alias(" OPENAI:RESPONSES "),
             "openai:responses"
         );
         assert_eq!(
-            normalize_legacy_openai_format_alias("OPENAI:COMPACT"),
+            normalize_api_format_alias("OPENAI:RESPONSES:COMPACT"),
             "openai:responses:compact"
         );
         assert_eq!(
-            normalize_legacy_openai_format_alias("claude:cli"),
-            "claude:cli"
+            normalize_api_format_alias("CLAUDE:MESSAGES"),
+            "claude:messages"
         );
-        assert!(legacy_openai_format_alias_matches(
-            "openai:cli",
-            "openai:responses"
+        assert_eq!(
+            normalize_api_format_alias("GEMINI:GENERATE_CONTENT"),
+            "gemini:generate_content"
+        );
+        assert_eq!(normalize_api_format_alias("openai:image"), "openai:image");
+        assert_eq!(normalize_api_format_alias("openai:video"), "openai:video");
+        assert_eq!(normalize_api_format_alias("gemini:video"), "gemini:video");
+        assert_eq!(normalize_api_format_alias("gemini:files"), "gemini:files");
+        assert!(!api_format_alias_matches("claude:cli", "claude:messages"));
+        assert!(!api_format_alias_matches(
+            "gemini:chat",
+            "gemini:generate_content"
         ));
+        assert!(!api_format_alias_matches("openai:cli", "openai:responses"));
     }
 
     #[test]
-    fn storage_aliases_include_legacy_openai_rows_only() {
+    fn storage_aliases_only_include_normalized_value() {
         assert_eq!(
-            openai_format_storage_aliases("openai:responses"),
-            vec!["openai:responses".to_string(), "openai:cli".to_string()]
+            api_format_storage_aliases("openai:responses"),
+            vec!["openai:responses".to_string()]
         );
         assert_eq!(
-            openai_format_storage_aliases("openai:compact"),
-            vec![
-                "openai:responses:compact".to_string(),
-                "openai:compact".to_string()
-            ]
+            api_format_storage_aliases("openai:responses:compact"),
+            vec!["openai:responses:compact".to_string()]
         );
         assert_eq!(
-            openai_format_storage_aliases("claude:cli"),
-            vec!["claude:cli".to_string()]
+            api_format_storage_aliases("claude:messages"),
+            vec!["claude:messages".to_string()]
+        );
+        assert_eq!(
+            api_format_storage_aliases("gemini:generate_content"),
+            vec!["gemini:generate_content".to_string()]
         );
     }
 }

@@ -439,7 +439,7 @@ mod tests {
             content_encoding: None,
             body: RequestBody::from_json(json!({"model": "gpt-test"})),
             stream: true,
-            client_api_format: "claude:cli".to_string(),
+            client_api_format: "claude:messages".to_string(),
             provider_api_format: "openai:chat".to_string(),
             model_name: Some("gpt-test".to_string()),
             proxy: None,

@@ -30,7 +30,7 @@ const PROVIDER_ADAPTATION_SURFACES: &[ProviderAdaptationDescriptor] = &[
         surface: ProviderAdaptationSurface::AntigravityGeminiChat,
         provider_type: Some(ANTIGRAVITY_PROVIDER_TYPE),
         envelope_name: ANTIGRAVITY_V1INTERNAL_ENVELOPE_NAME,
-        anchor_api_format: "gemini:chat",
+        anchor_api_format: "gemini:generate_content",
         supports_request_bridge: true,
         supports_sync_finalize_bridge: true,
         supports_stream_bridge: true,
@@ -41,7 +41,7 @@ const PROVIDER_ADAPTATION_SURFACES: &[ProviderAdaptationDescriptor] = &[
         surface: ProviderAdaptationSurface::AntigravityGeminiCli,
         provider_type: Some(ANTIGRAVITY_PROVIDER_TYPE),
         envelope_name: ANTIGRAVITY_V1INTERNAL_ENVELOPE_NAME,
-        anchor_api_format: "gemini:cli",
+        anchor_api_format: "gemini:generate_content",
         supports_request_bridge: true,
         supports_sync_finalize_bridge: true,
         supports_stream_bridge: true,
@@ -52,7 +52,7 @@ const PROVIDER_ADAPTATION_SURFACES: &[ProviderAdaptationDescriptor] = &[
         surface: ProviderAdaptationSurface::GeminiCliV1Internal,
         provider_type: None,
         envelope_name: GEMINI_CLI_V1INTERNAL_ENVELOPE_NAME,
-        anchor_api_format: "gemini:cli",
+        anchor_api_format: "gemini:generate_content",
         supports_request_bridge: false,
         supports_sync_finalize_bridge: true,
         supports_stream_bridge: true,
@@ -63,7 +63,7 @@ const PROVIDER_ADAPTATION_SURFACES: &[ProviderAdaptationDescriptor] = &[
         surface: ProviderAdaptationSurface::KiroClaudeCli,
         provider_type: Some(KIRO_PROVIDER_TYPE),
         envelope_name: KIRO_ENVELOPE_NAME,
-        anchor_api_format: "claude:cli",
+        anchor_api_format: "claude:messages",
         supports_request_bridge: true,
         supports_sync_finalize_bridge: true,
         supports_stream_bridge: true,
@@ -149,20 +149,20 @@ mod tests {
         assert_eq!(
             provider_adaptation_anchor_api_format(
                 ANTIGRAVITY_V1INTERNAL_ENVELOPE_NAME,
-                "gemini:cli"
+                "gemini:generate_content"
             ),
-            Some("gemini:cli")
+            Some("gemini:generate_content")
         );
         assert_eq!(
             provider_adaptation_anchor_api_format(
                 GEMINI_CLI_V1INTERNAL_ENVELOPE_NAME,
-                "gemini:cli"
+                "gemini:generate_content"
             ),
-            Some("gemini:cli")
+            Some("gemini:generate_content")
         );
         assert_eq!(
-            provider_adaptation_anchor_api_format(KIRO_ENVELOPE_NAME, "claude:cli"),
-            Some("claude:cli")
+            provider_adaptation_anchor_api_format(KIRO_ENVELOPE_NAME, "claude:messages"),
+            Some("claude:messages")
         );
     }
 
@@ -170,19 +170,19 @@ mod tests {
     fn exposes_private_surface_capabilities() {
         assert!(provider_adaptation_allows_sync_finalize_envelope(
             ANTIGRAVITY_V1INTERNAL_ENVELOPE_NAME,
-            "gemini:chat"
+            "gemini:generate_content"
         ));
         assert!(provider_adaptation_should_unwrap_stream_envelope(
             GEMINI_CLI_V1INTERNAL_ENVELOPE_NAME,
-            "gemini:cli"
+            "gemini:generate_content"
         ));
         assert!(provider_adaptation_requires_eventstream_accept(
             Some(KIRO_ENVELOPE_NAME),
-            "claude:cli"
+            "claude:messages"
         ));
         assert!(!provider_adaptation_requires_eventstream_accept(
             Some(ANTIGRAVITY_V1INTERNAL_ENVELOPE_NAME),
-            "gemini:cli"
+            "gemini:generate_content"
         ));
     }
 }

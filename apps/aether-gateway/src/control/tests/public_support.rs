@@ -33,7 +33,7 @@ fn classifies_v1beta_models_as_gemini_public_support_route() {
     assert_eq!(decision.route_kind.as_deref(), Some("list"));
     assert_eq!(
         decision.auth_endpoint_signature.as_deref(),
-        Some("gemini:chat")
+        Some("gemini:generate_content")
     );
 }
 

@@ -37,7 +37,7 @@ pub fn build_core_error_body_for_client_format(
     let mut error_object = Map::new();
     error_object.insert("message".to_string(), Value::String(message.to_string()));
 
-    match aether_ai_formats::normalize_legacy_openai_format_alias(client_api_format).as_str() {
+    match aether_ai_formats::normalize_api_format_alias(client_api_format).as_str() {
         "openai:chat" | "openai:responses" | "openai:responses:compact" => {
             error_object.insert(
                 "type".to_string(),
@@ -51,7 +51,7 @@ pub fn build_core_error_body_for_client_format(
                 Value::Object(error_object),
             )])))
         }
-        "claude:chat" | "claude:cli" => {
+        "claude:messages" => {
             error_object.insert(
                 "type".to_string(),
                 Value::String(map_local_sync_error_kind_to_claude_type(kind).to_string()),
@@ -64,7 +64,7 @@ pub fn build_core_error_body_for_client_format(
                 ("error".to_string(), Value::Object(error_object)),
             ])))
         }
-        "gemini:chat" | "gemini:cli" => Some(Value::Object(Map::from_iter([(
+        "gemini:generate_content" => Some(Value::Object(Map::from_iter([(
             "error".to_string(),
             Value::Object(Map::from_iter([
                 (

@@ -135,7 +135,7 @@ describe('usage status helpers', () => {
 
   it('defaults OpenAI and Claude requests to non-stream when client flags are absent', () => {
     expect(formatUsageStreamLabel(buildUsageRecord({
-      api_format: 'openai:cli',
+      api_format: 'openai:responses',
       is_stream: true,
       upstream_is_stream: true,
       client_requested_stream: undefined,
@@ -143,7 +143,7 @@ describe('usage status helpers', () => {
     }))).toBe('标准->流式')
 
     expect(formatUsageStreamLabel(buildUsageRecord({
-      api_format: 'claude:chat',
+      api_format: 'claude:messages',
       is_stream: false,
       upstream_is_stream: false,
       client_requested_stream: undefined,
@@ -153,7 +153,7 @@ describe('usage status helpers', () => {
 
   it('keeps upstream fallback for formats without a default non-stream convention', () => {
     expect(formatUsageStreamLabel(buildUsageRecord({
-      api_format: 'gemini:cli',
+      api_format: 'gemini:generate_content',
       is_stream: true,
       upstream_is_stream: true,
       client_requested_stream: undefined,
@@ -163,7 +163,7 @@ describe('usage status helpers', () => {
 
   it('prefers client_requested_stream over stale client_is_stream when they disagree', () => {
     expect(formatUsageStreamLabel(buildUsageRecord({
-      api_format: 'openai:cli',
+      api_format: 'openai:responses',
       is_stream: true,
       upstream_is_stream: true,
       client_requested_stream: false,

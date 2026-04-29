@@ -342,7 +342,7 @@ pub(crate) async fn materialize_local_openai_responses_candidate_attempts(
 }
 
 fn api_format_alias_matches(left: &str, right: &str) -> bool {
-    crate::ai_pipeline::legacy_openai_format_alias_matches(left, right)
+    crate::ai_pipeline::api_format_alias_matches(left, right)
 }
 pub(crate) async fn mark_skipped_local_openai_responses_candidate(
     state: &AppState,

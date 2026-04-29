@@ -63,7 +63,7 @@ pub(crate) async fn resolve_local_standard_candidate_payload_parts(
         .provider_type
         .trim()
         .eq_ignore_ascii_case("kiro")
-        && provider_api_format.eq_ignore_ascii_case("claude:cli");
+        && provider_api_format.eq_ignore_ascii_case("claude:messages");
     let Some(conversion_kind) = crate::ai_pipeline::conversion::request_conversion_kind(
         spec_metadata.api_format,
         provider_api_format,

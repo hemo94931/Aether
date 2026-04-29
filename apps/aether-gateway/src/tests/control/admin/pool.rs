@@ -885,7 +885,7 @@ async fn gateway_handles_admin_pool_list_keys_with_quota_compatibility_fields() 
     let mut key = sample_key(
         "key-antigravity-a",
         "provider-antigravity",
-        "gemini:chat",
+        "gemini:generate_content",
         "sk-antigravity",
     );
     key.name = "quota-key".to_string();
@@ -1008,7 +1008,7 @@ async fn gateway_includes_pool_quota_and_compat_fields_in_list_keys_response() {
     let mut key = sample_key(
         "key-antigravity-oauth",
         "provider-antigravity",
-        "gemini:chat",
+        "gemini:generate_content",
         "oauth-placeholder",
     );
     key.name = "quota key".to_string();
@@ -1133,7 +1133,7 @@ async fn gateway_prefers_status_snapshot_antigravity_quota_over_stale_metadata()
     let mut key = sample_key(
         "key-antigravity-snapshot-fresh",
         "provider-antigravity",
-        "gemini:chat",
+        "gemini:generate_content",
         "oauth-placeholder",
     );
     key.name = "antigravity snapshot fresh".to_string();
@@ -1248,7 +1248,7 @@ async fn gateway_renders_gemini_cli_account_quota_from_status_snapshot() {
     let mut key = sample_key(
         "key-gemini-cli-snapshot",
         "provider-gemini-cli",
-        "gemini:chat",
+        "gemini:generate_content",
         "oauth-placeholder",
     );
     key.name = "gemini cli snapshot".to_string();
@@ -1700,7 +1700,7 @@ async fn gateway_marks_exhausted_kiro_pool_key_as_blocked_when_flag_enabled() {
     let mut key = sample_key(
         "key-kiro-exhausted",
         "provider-kiro",
-        "claude:cli",
+        "claude:messages",
         "oauth-placeholder",
     );
     key.name = "kiro exhausted".to_string();
@@ -1773,7 +1773,7 @@ async fn gateway_prefers_status_snapshot_kiro_quota_over_stale_metadata() {
     let mut key = sample_key(
         "key-kiro-snapshot-fresh",
         "provider-kiro",
-        "claude:cli",
+        "claude:messages",
         "oauth-placeholder",
     );
     key.name = "kiro snapshot fresh".to_string();

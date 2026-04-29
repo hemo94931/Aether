@@ -1338,10 +1338,6 @@ function hasDefaultBodyRules(apiFormat: string): boolean {
 
 function normalizeLegacyOpenAIFormatAlias(apiFormat: string): string {
   switch (apiFormat.trim().toLowerCase()) {
-    case 'openai:cli':
-      return 'openai:responses'
-    case 'openai:compact':
-      return 'openai:responses:compact'
     default:
       return apiFormat.trim().toLowerCase()
   }
@@ -1385,10 +1381,10 @@ function getDefaultPath(apiFormat: string, baseUrl?: string): string {
   const providerType = (props.provider?.provider_type || '').toLowerCase()
   const normalizedApiFormat = normalizeLegacyOpenAIFormatAlias(apiFormat)
   if (providerType === 'vertex_ai') {
-    if (normalizedApiFormat === 'gemini:chat') {
+    if (normalizedApiFormat === 'gemini:generate_content') {
       return '/v1/publishers/google/models/{model}:{action}'
     }
-    if (normalizedApiFormat === 'claude:chat') {
+    if (normalizedApiFormat === 'claude:messages') {
       return '/v1/projects/{project_id}/locations/{region}/publishers/anthropic/models/{model}:{action}'
     }
   }

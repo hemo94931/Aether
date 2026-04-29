@@ -720,13 +720,13 @@ async fn gateway_handles_public_catalog_providers_without_proxying_upstream() {
             sample_endpoint(
                 "endpoint-claude",
                 "provider-claude",
-                "claude:chat",
+                "claude:messages",
                 "https://api.anthropic.example",
             ),
             sample_endpoint(
                 "endpoint-claude-cli",
                 "provider-claude",
-                "claude:cli",
+                "claude:messages",
                 "https://api.anthropic.example",
             ),
         ],
@@ -943,7 +943,7 @@ async fn gateway_handles_public_catalog_stats_without_proxying_upstream() {
             sample_endpoint(
                 "endpoint-claude",
                 "provider-claude",
-                "claude:chat",
+                "claude:messages",
                 "https://api.anthropic.example",
             ),
         ],
@@ -956,7 +956,7 @@ async fn gateway_handles_public_catalog_stats_without_proxying_upstream() {
             sample_models_candidate_row(
                 "provider-claude",
                 "claude",
-                "claude:chat",
+                "claude:messages",
                 "claude-3-7-sonnet",
                 20,
             ),
@@ -989,7 +989,7 @@ async fn gateway_handles_public_catalog_stats_without_proxying_upstream() {
     assert_eq!(payload["active_models"], 3);
     assert_eq!(
         payload["supported_formats"],
-        json!(["claude:chat", "openai:chat"])
+        json!(["claude:messages", "openai:chat"])
     );
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
@@ -1078,7 +1078,7 @@ async fn gateway_handles_public_health_api_formats_without_proxying_upstream() {
             sample_endpoint(
                 "endpoint-claude",
                 "provider-claude",
-                "claude:chat",
+                "claude:messages",
                 "https://api.anthropic.example",
             ),
         ],
@@ -1158,7 +1158,7 @@ async fn gateway_handles_public_health_api_formats_without_proxying_upstream() {
         .as_array()
         .expect("formats should be an array");
     assert_eq!(formats.len(), 2);
-    assert_eq!(formats[0]["api_format"], "claude:chat");
+    assert_eq!(formats[0]["api_format"], "claude:messages");
     assert_eq!(formats[0]["api_path"], "/v1/messages");
     assert_eq!(formats[0]["total_attempts"], 1);
     assert_eq!(formats[0]["success_rate"], 1.0);
@@ -4442,7 +4442,7 @@ async fn gateway_handles_users_me_endpoint_status_locally_without_proxying_upstr
             sample_endpoint(
                 "endpoint-claude",
                 "provider-claude",
-                "claude:chat",
+                "claude:messages",
                 "https://api.anthropic.example",
             ),
         ],
@@ -4456,7 +4456,7 @@ async fn gateway_handles_users_me_endpoint_status_locally_without_proxying_upstr
             sample_key(
                 "key-claude",
                 "provider-claude",
-                "claude:chat",
+                "claude:messages",
                 "sk-claude-endpoint-status",
             ),
         ],
@@ -4540,8 +4540,8 @@ async fn gateway_handles_users_me_endpoint_status_locally_without_proxying_upstr
     let payload: serde_json::Value = response.json().await.expect("json body should parse");
     let items = payload.as_array().expect("payload should be an array");
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["api_format"], "claude:chat");
-    assert_eq!(items[0]["display_name"], "Claude Chat");
+    assert_eq!(items[0]["api_format"], "claude:messages");
+    assert_eq!(items[0]["display_name"], "Claude Messages");
     assert_eq!(items[0]["health_score"], 1.0);
     assert_eq!(items[0]["timeline"].as_array().map(Vec::len), Some(100));
     assert!(items[0].get("total_endpoints").is_none());

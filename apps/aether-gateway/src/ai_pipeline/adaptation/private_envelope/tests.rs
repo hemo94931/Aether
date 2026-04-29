@@ -9,7 +9,7 @@ fn normalizes_supported_private_report_context() {
     let report_context = json!({
         "has_envelope": true,
         "envelope_name": "antigravity:v1internal",
-        "provider_api_format": "gemini:cli",
+        "provider_api_format": "gemini:generate_content",
     });
     let normalized = normalize_provider_private_report_context(Some(&report_context))
         .expect("context should normalize");
@@ -21,8 +21,8 @@ fn normalizes_supported_private_report_context() {
 fn private_stream_normalizer_unwraps_antigravity_stream() {
     let report_context = json!({
         "has_envelope": true,
-        "provider_api_format": "gemini:cli",
-        "client_api_format": "gemini:cli",
+        "provider_api_format": "gemini:generate_content",
+        "client_api_format": "gemini:generate_content",
         "envelope_name": "antigravity:v1internal",
         "mapped_model": "claude-sonnet-4-5",
     });

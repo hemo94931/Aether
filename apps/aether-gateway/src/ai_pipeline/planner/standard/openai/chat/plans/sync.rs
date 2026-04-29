@@ -145,13 +145,13 @@ mod tests {
             "codex",
             "openai:responses"
         ));
-        assert!(openai_chat_sync_upstream_is_stream_for_candidate(
+        assert!(!openai_chat_sync_upstream_is_stream_for_candidate(
             "codex",
-            "openai:cli"
+            "openai:responses:compact"
         ));
         assert!(!openai_chat_sync_upstream_is_stream_for_candidate(
             "openai",
-            "openai:cli"
+            "openai:responses"
         ));
         assert!(!openai_chat_sync_upstream_is_stream_for_candidate(
             "codex",

@@ -482,9 +482,9 @@ async fn gateway_handles_admin_usage_aggregation_stats_locally_with_trusted_admi
     );
     usage_3.provider_id = Some("provider-anthropic".to_string());
     usage_3.total_tokens = usage_3.input_tokens;
-    usage_3.api_format = Some("claude:cli".to_string());
+    usage_3.api_format = Some("claude:messages".to_string());
     usage_3.api_family = Some("claude".to_string());
-    usage_3.endpoint_api_format = Some("claude:cli".to_string());
+    usage_3.endpoint_api_format = Some("claude:messages".to_string());
     usage_3.provider_api_family = Some("claude".to_string());
 
     let usage_repository = Arc::new(InMemoryUsageReadRepository::seed(vec![
@@ -558,7 +558,7 @@ async fn gateway_handles_admin_usage_aggregation_stats_locally_with_trusted_admi
     assert_eq!(api_format_items.len(), 2);
     assert_eq!(api_format_items[0]["api_format"], "openai:chat");
     assert_eq!(api_format_items[0]["output_tokens"], 40);
-    assert_eq!(api_format_items[1]["api_format"], "claude:cli");
+    assert_eq!(api_format_items[1]["api_format"], "claude:messages");
     assert_eq!(api_format_items[1]["output_tokens"], 20);
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 

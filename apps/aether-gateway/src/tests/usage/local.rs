@@ -824,7 +824,7 @@ async fn gateway_records_failed_usage_for_claude_runtime_miss_without_execution_
             true,
             false,
             Some(serde_json::json!(["claude"])),
-            Some(serde_json::json!(["claude:chat"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["claude-sonnet-4-5"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -835,7 +835,7 @@ async fn gateway_records_failed_usage_for_claude_runtime_miss_without_execution_
             Some(5),
             Some(4_102_444_800),
             Some(serde_json::json!(["claude"])),
-            Some(serde_json::json!(["claude:chat"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["claude-sonnet-4-5"])),
         )
         .expect("auth snapshot should build")
@@ -974,7 +974,7 @@ async fn gateway_records_failed_usage_for_claude_runtime_miss_without_execution_
     );
     assert_eq!(stored_usage.provider_name, "unknown");
     assert_eq!(stored_usage.model, "claude-sonnet-4-5");
-    assert_eq!(stored_usage.api_format.as_deref(), Some("claude:chat"));
+    assert_eq!(stored_usage.api_format.as_deref(), Some("claude:messages"));
     assert_eq!(
         stored_usage.routing_execution_path(),
         Some("local_execution_runtime_miss")
@@ -984,7 +984,7 @@ async fn gateway_records_failed_usage_for_claude_runtime_miss_without_execution_
         Some("candidate_list_empty")
     );
     assert_eq!(stored_usage.routing_route_family(), Some("claude"));
-    assert_eq!(stored_usage.routing_route_kind(), Some("chat"));
+    assert_eq!(stored_usage.routing_route_kind(), Some("messages"));
     assert_eq!(
         stored_usage
             .request_metadata
@@ -1369,7 +1369,7 @@ async fn gateway_records_failed_usage_when_all_local_claude_cli_candidates_are_s
             true,
             false,
             None,
-            Some(serde_json::json!(["claude:cli"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["gpt-5.4"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -1380,7 +1380,7 @@ async fn gateway_records_failed_usage_when_all_local_claude_cli_candidates_are_s
             Some(5),
             Some(4_102_444_800),
             None,
-            Some(serde_json::json!(["claude:cli"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["gpt-5.4"])),
         )
         .expect("auth snapshot should build")
@@ -1595,10 +1595,10 @@ async fn gateway_records_failed_usage_when_all_local_claude_cli_candidates_are_s
     );
     assert_eq!(stored_usage.provider_name, "unknown");
     assert_eq!(stored_usage.model, "gpt-5.4");
-    assert_eq!(stored_usage.api_format.as_deref(), Some("claude:cli"));
+    assert_eq!(stored_usage.api_format.as_deref(), Some("claude:messages"));
     assert_eq!(
         stored_usage.endpoint_api_format.as_deref(),
-        Some("claude:cli")
+        Some("claude:messages")
     );
     assert_eq!(stored_usage.routing_key_name(), None);
     assert_eq!(stored_usage.routing_planner_kind(), Some("claude_cli_sync"));
@@ -1683,7 +1683,7 @@ async fn gateway_keeps_failed_usage_request_capture_lightweight_for_large_local_
             true,
             false,
             None,
-            Some(serde_json::json!(["claude:cli"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["gpt-5.4"])),
             api_key_id.to_string(),
             Some("default".to_string()),
@@ -1694,7 +1694,7 @@ async fn gateway_keeps_failed_usage_request_capture_lightweight_for_large_local_
             Some(5),
             Some(4_102_444_800),
             None,
-            Some(serde_json::json!(["claude:cli"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["gpt-5.4"])),
         )
         .expect("auth snapshot should build")

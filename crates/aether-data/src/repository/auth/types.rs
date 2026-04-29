@@ -913,7 +913,7 @@ mod tests {
             None,
             None,
             Some(serde_json::json!(["anthropic"])),
-            Some(serde_json::json!(["claude:chat"])),
+            Some(serde_json::json!(["claude:messages"])),
             Some(serde_json::json!(["claude-sonnet-4-5"])),
         )
         .expect("snapshot should build");
@@ -926,7 +926,7 @@ mod tests {
         );
         assert_eq!(
             resolved.effective_allowed_api_formats(),
-            Some(&["claude:chat".to_string()][..])
+            Some(&["claude:messages".to_string()][..])
         );
         assert_eq!(
             resolved.effective_allowed_models(),

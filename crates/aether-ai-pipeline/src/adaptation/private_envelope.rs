@@ -25,7 +25,6 @@ pub fn provider_private_response_allows_sync_finalize(report_context: &Value) ->
         .and_then(Value::as_str)
         .unwrap_or_default();
     provider_adaptation_allows_sync_finalize_envelope(envelope_name, provider_api_format)
-        || matches!(envelope_name, "claude:cli")
 }
 
 pub fn normalize_provider_private_report_context(report_context: Option<&Value>) -> Option<Value> {
@@ -63,7 +62,7 @@ pub fn normalize_provider_private_response_value(
         return Some(data);
     }
     let mut unwrapped = match report_context.get("envelope_name").and_then(Value::as_str) {
-        Some("claude:cli") | Some(KIRO_ENVELOPE_NAME) => data,
+        Some(KIRO_ENVELOPE_NAME) => data,
         Some(GEMINI_CLI_V1INTERNAL_ENVELOPE_NAME) => {
             if let Some(response) = data
                 .get("response")
@@ -345,7 +344,7 @@ mod tests {
         let report_context = json!({
             "has_envelope": true,
             "envelope_name": "antigravity:v1internal",
-            "provider_api_format": "gemini:cli",
+            "provider_api_format": "gemini:generate_content",
         });
         let normalized = normalize_provider_private_report_context(Some(&report_context))
             .expect("context should normalize");
@@ -357,7 +356,7 @@ mod tests {
     fn unwraps_antigravity_sync_response_and_injects_ids() {
         let report_context = json!({
             "has_envelope": true,
-            "provider_api_format": "gemini:cli",
+            "provider_api_format": "gemini:generate_content",
             "envelope_name": "antigravity:v1internal",
             "mapped_model": "claude-sonnet-4-5",
         });
@@ -390,8 +389,8 @@ mod tests {
     fn unwraps_antigravity_stream_line_and_injects_ids() {
         let report_context = json!({
             "has_envelope": true,
-            "provider_api_format": "gemini:cli",
-            "client_api_format": "gemini:cli",
+            "provider_api_format": "gemini:generate_content",
+            "client_api_format": "gemini:generate_content",
             "envelope_name": "antigravity:v1internal",
             "mapped_model": "claude-sonnet-4-5",
         });

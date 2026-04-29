@@ -26,10 +26,9 @@ pub use canonical::{
 };
 pub use context::{FormatContext, FormatError};
 pub use formats::{
-    is_openai_responses_compact_format, is_openai_responses_family_format,
-    is_openai_responses_format, legacy_openai_format_alias_matches,
-    normalize_legacy_openai_format_alias, openai_format_storage_aliases, FormatFamily, FormatId,
-    FormatProfile,
+    api_format_alias_matches, api_format_storage_aliases, is_openai_responses_compact_format,
+    is_openai_responses_family_format, is_openai_responses_format, normalize_api_format_alias,
+    FormatFamily, FormatId, FormatProfile,
 };
 pub use matrix::{
     request_candidate_api_format_preference, request_candidate_api_formats,

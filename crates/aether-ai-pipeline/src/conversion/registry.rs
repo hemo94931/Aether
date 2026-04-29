@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use aether_ai_formats::normalize_legacy_openai_format_alias;
+use aether_ai_formats::normalize_api_format_alias;
 use aether_provider_transport::auth::{
     resolve_local_gemini_auth, resolve_local_openai_bearer_auth, resolve_local_standard_auth,
 };
@@ -80,8 +80,8 @@ pub fn request_conversion_enabled_for_transport(
     client_api_format: &str,
     provider_api_format: &str,
 ) -> bool {
-    let client_api_format = normalize_legacy_openai_format_alias(client_api_format);
-    let provider_api_format = normalize_legacy_openai_format_alias(provider_api_format);
+    let client_api_format = normalize_api_format_alias(client_api_format);
+    let provider_api_format = normalize_api_format_alias(provider_api_format);
     if client_api_format == provider_api_format {
         return true;
     }
@@ -103,8 +103,8 @@ pub fn request_pair_allowed_for_transport(
     client_api_format: &str,
     provider_api_format: &str,
 ) -> bool {
-    let client_api_format = normalize_legacy_openai_format_alias(client_api_format);
-    let provider_api_format = normalize_legacy_openai_format_alias(provider_api_format);
+    let client_api_format = normalize_api_format_alias(client_api_format);
+    let provider_api_format = normalize_api_format_alias(provider_api_format);
     if client_api_format == provider_api_format {
         return true;
     }
@@ -116,7 +116,7 @@ pub fn request_pair_allowed_for_transport(
         .provider_type
         .trim()
         .eq_ignore_ascii_case("kiro")
-        && provider_api_format.eq_ignore_ascii_case("claude:cli")
+        && aether_ai_formats::api_format_alias_matches(&provider_api_format, "claude:messages")
     {
         return request_conversion_enabled_for_transport(
             transport,
@@ -148,16 +148,15 @@ pub fn request_conversion_transport_unsupported_reason(
         .provider_type
         .trim()
         .eq_ignore_ascii_case("kiro")
-        && transport
-            .endpoint
-            .api_format
-            .trim()
-            .eq_ignore_ascii_case("claude:cli")
+        && aether_ai_formats::api_format_alias_matches(
+            &transport.endpoint.api_format,
+            "claude:messages",
+        )
     {
         return local_kiro_request_transport_unsupported_reason_with_network(transport);
     }
 
-    match normalize_legacy_openai_format_alias(&transport.endpoint.api_format).as_str() {
+    match normalize_api_format_alias(&transport.endpoint.api_format).as_str() {
         "openai:chat" => local_openai_chat_transport_unsupported_reason(transport),
         "openai:responses" | "openai:responses:compact" => {
             local_standard_transport_unsupported_reason_with_network(
@@ -165,21 +164,16 @@ pub fn request_conversion_transport_unsupported_reason(
                 transport.endpoint.api_format.trim(),
             )
         }
-        "claude:chat" => {
-            local_standard_transport_unsupported_reason_with_network(transport, "claude:chat")
+        "claude:messages" => {
+            local_standard_transport_unsupported_reason_with_network(transport, "claude:messages")
         }
-        "claude:cli" => {
-            local_standard_transport_unsupported_reason_with_network(transport, "claude:cli")
-        }
-        "gemini:chat" | "gemini:cli" if is_vertex_api_key_transport_context(transport) => {
+        "gemini:generate_content" if is_vertex_api_key_transport_context(transport) => {
             local_vertex_api_key_gemini_transport_unsupported_reason_with_network(transport)
         }
-        "gemini:chat" => {
-            local_gemini_transport_unsupported_reason_with_network(transport, "gemini:chat")
-        }
-        "gemini:cli" => {
-            local_gemini_transport_unsupported_reason_with_network(transport, "gemini:cli")
-        }
+        "gemini:generate_content" => local_gemini_transport_unsupported_reason_with_network(
+            transport,
+            "gemini:generate_content",
+        ),
         _ => Some("transport_api_format_unsupported"),
     }
 }
@@ -188,11 +182,11 @@ pub fn request_conversion_direct_auth(
     transport: &GatewayProviderTransportSnapshot,
     _kind: RequestConversionKind,
 ) -> Option<(String, String)> {
-    match normalize_legacy_openai_format_alias(&transport.endpoint.api_format).as_str() {
+    match normalize_api_format_alias(&transport.endpoint.api_format).as_str() {
         "openai:chat" | "openai:responses" | "openai:responses:compact" => {
             resolve_local_openai_bearer_auth(transport)
         }
-        "gemini:chat" | "gemini:cli" => {
+        "gemini:generate_content" => {
             if is_vertex_api_key_transport_context(transport) {
                 resolve_local_vertex_api_key_query_auth(transport)
                     .map(|auth| (VERTEX_API_KEY_QUERY_PARAM.to_string(), auth.value))
@@ -200,7 +194,7 @@ pub fn request_conversion_direct_auth(
                 resolve_local_gemini_auth(transport)
             }
         }
-        "claude:chat" | "claude:cli" => resolve_local_standard_auth(transport),
+        "claude:messages" => resolve_local_standard_auth(transport),
         _ => None,
     }
 }
@@ -243,8 +237,9 @@ fn json_format_list_contains(value: &serde_json::Value, api_format: &str) -> boo
         return false;
     };
     items.iter().any(|item| {
-        item.as_str()
-            .is_some_and(|candidate| candidate.trim().eq_ignore_ascii_case(api_format))
+        item.as_str().is_some_and(|candidate| {
+            aether_ai_formats::api_format_alias_matches(candidate, api_format)
+        })
     })
 }
 
@@ -266,18 +261,16 @@ mod tests {
     const STANDARD_SURFACES: &[&str] = &[
         "openai:chat",
         "openai:responses",
-        "claude:chat",
-        "claude:cli",
-        "gemini:chat",
-        "gemini:cli",
+        "claude:messages",
+        "gemini:generate_content",
     ];
 
     fn expected_request_conversion_kind(provider_api_format: &str) -> RequestConversionKind {
         match provider_api_format {
             "openai:chat" => RequestConversionKind::ToOpenAIChat,
             "openai:responses" => RequestConversionKind::ToOpenAiResponses,
-            "claude:chat" | "claude:cli" => RequestConversionKind::ToClaudeStandard,
-            "gemini:chat" | "gemini:cli" => RequestConversionKind::ToGeminiStandard,
+            "claude:messages" => RequestConversionKind::ToClaudeStandard,
+            "gemini:generate_content" => RequestConversionKind::ToGeminiStandard,
             other => panic!("unexpected provider api format: {other}"),
         }
     }
@@ -289,7 +282,7 @@ mod tests {
             Some(RequestConversionKind::ToOpenAiResponses)
         );
         assert_eq!(
-            request_conversion_kind("openai:chat", "claude:cli"),
+            request_conversion_kind("openai:chat", "claude:messages"),
             Some(RequestConversionKind::ToClaudeStandard)
         );
         assert_eq!(
@@ -297,11 +290,11 @@ mod tests {
             Some(RequestConversionKind::ToOpenAIChat)
         );
         assert_eq!(
-            request_conversion_kind("openai:responses:compact", "gemini:cli"),
+            request_conversion_kind("openai:responses:compact", "gemini:generate_content"),
             None
         );
         assert_eq!(
-            request_conversion_kind("gemini:cli", "openai:responses:compact"),
+            request_conversion_kind("gemini:generate_content", "openai:responses:compact"),
             None
         );
         assert_eq!(
@@ -317,14 +310,14 @@ mod tests {
             None
         );
         assert_eq!(
-            request_conversion_kind("gemini:chat", "claude:chat"),
+            request_conversion_kind("gemini:generate_content", "claude:messages"),
             Some(RequestConversionKind::ToClaudeStandard)
         );
+        assert_eq!(request_conversion_kind("claude:chat", "claude:cli"), None);
         assert_eq!(
-            request_conversion_kind("claude:chat", "claude:cli"),
-            Some(RequestConversionKind::ToClaudeStandard)
+            request_conversion_kind("claude:messages", "claude:messages"),
+            None
         );
-        assert_eq!(request_conversion_kind("claude:chat", "claude:chat"), None);
     }
 
     #[test]
@@ -351,35 +344,35 @@ mod tests {
     #[test]
     fn sync_response_conversion_registry_supports_bidirectional_standard_matrix() {
         assert_eq!(
-            sync_chat_response_conversion_kind("openai:chat", "claude:chat"),
+            sync_chat_response_conversion_kind("openai:chat", "claude:messages"),
             Some(SyncChatResponseConversionKind::ToClaudeChat)
         );
         assert_eq!(
-            sync_chat_response_conversion_kind("claude:chat", "gemini:chat"),
+            sync_chat_response_conversion_kind("claude:messages", "gemini:generate_content"),
             Some(SyncChatResponseConversionKind::ToGeminiChat)
         );
         assert_eq!(
-            sync_chat_response_conversion_kind("gemini:chat", "openai:chat"),
+            sync_chat_response_conversion_kind("gemini:generate_content", "openai:chat"),
             Some(SyncChatResponseConversionKind::ToOpenAIChat)
         );
         assert_eq!(
-            sync_cli_response_conversion_kind("openai:responses", "gemini:cli"),
+            sync_cli_response_conversion_kind("openai:responses", "gemini:generate_content"),
             Some(SyncCliResponseConversionKind::ToGeminiCli)
         );
         assert_eq!(
-            sync_cli_response_conversion_kind("claude:chat", "openai:responses"),
+            sync_cli_response_conversion_kind("claude:messages", "openai:responses"),
             Some(SyncCliResponseConversionKind::ToOpenAiResponses)
         );
         assert_eq!(
-            sync_cli_response_conversion_kind("claude:cli", "openai:responses:compact"),
+            sync_cli_response_conversion_kind("claude:messages", "openai:responses:compact"),
             Some(SyncCliResponseConversionKind::ToOpenAiResponses)
         );
         assert_eq!(
-            sync_cli_response_conversion_kind("openai:responses:compact", "claude:cli"),
+            sync_cli_response_conversion_kind("openai:responses:compact", "claude:messages"),
             None
         );
         assert_eq!(
-            sync_cli_response_conversion_kind("gemini:cli", "claude:cli"),
+            sync_cli_response_conversion_kind("gemini:generate_content", "claude:messages"),
             Some(SyncCliResponseConversionKind::ToClaudeCli)
         );
         assert_eq!(
@@ -395,7 +388,7 @@ mod tests {
     #[test]
     fn sync_response_conversion_registry_covers_all_standard_surface_pairs() {
         for provider_api_format in STANDARD_SURFACES {
-            for client_api_format in ["openai:chat", "claude:chat", "gemini:chat"] {
+            for client_api_format in ["openai:chat", "claude:messages", "gemini:generate_content"] {
                 let actual =
                     sync_chat_response_conversion_kind(provider_api_format, client_api_format);
                 if *provider_api_format == client_api_format {
@@ -406,8 +399,8 @@ mod tests {
                 } else {
                     let expected = match client_api_format {
                         "openai:chat" => SyncChatResponseConversionKind::ToOpenAIChat,
-                        "claude:chat" => SyncChatResponseConversionKind::ToClaudeChat,
-                        "gemini:chat" => SyncChatResponseConversionKind::ToGeminiChat,
+                        "claude:messages" => SyncChatResponseConversionKind::ToClaudeChat,
+                        "gemini:generate_content" => SyncChatResponseConversionKind::ToGeminiChat,
                         other => panic!("unexpected chat client api format: {other}"),
                     };
                     assert_eq!(
@@ -418,7 +411,11 @@ mod tests {
                 }
             }
 
-            for client_api_format in ["openai:responses", "claude:cli", "gemini:cli"] {
+            for client_api_format in [
+                "openai:responses",
+                "claude:messages",
+                "gemini:generate_content",
+            ] {
                 let actual =
                     sync_cli_response_conversion_kind(provider_api_format, client_api_format);
                 if *provider_api_format == client_api_format {
@@ -429,8 +426,8 @@ mod tests {
                 } else {
                     let expected = match client_api_format {
                         "openai:responses" => SyncCliResponseConversionKind::ToOpenAiResponses,
-                        "claude:cli" => SyncCliResponseConversionKind::ToClaudeCli,
-                        "gemini:cli" => SyncCliResponseConversionKind::ToGeminiCli,
+                        "claude:messages" => SyncCliResponseConversionKind::ToClaudeCli,
+                        "gemini:generate_content" => SyncCliResponseConversionKind::ToGeminiCli,
                         other => panic!("unexpected cli client api format: {other}"),
                     };
                     assert_eq!(
@@ -449,49 +446,31 @@ mod tests {
             request_candidate_api_formats("openai:chat", false),
             vec![
                 "openai:chat",
-                "claude:chat",
-                "gemini:chat",
                 "openai:responses",
-                "claude:cli",
-                "gemini:cli",
+                "claude:messages",
+                "gemini:generate_content",
             ]
         );
         assert_eq!(
             request_candidate_api_formats("openai:responses", false),
             vec![
                 "openai:responses",
-                "claude:cli",
-                "gemini:cli",
                 "openai:chat",
-                "claude:chat",
-                "gemini:chat",
+                "claude:messages",
+                "gemini:generate_content",
             ]
         );
         assert_eq!(
             request_candidate_api_formats("openai:cli", false),
-            vec![
-                "openai:responses",
-                "claude:cli",
-                "gemini:cli",
-                "openai:chat",
-                "claude:chat",
-                "gemini:chat",
-            ]
+            Vec::<&'static str>::new()
         );
         assert_eq!(
             request_candidate_api_formats("claude:cli", false),
-            vec![
-                "claude:cli",
-                "openai:responses",
-                "gemini:cli",
-                "claude:chat",
-                "openai:chat",
-                "gemini:chat",
-            ]
+            Vec::<&'static str>::new()
         );
         assert_eq!(
             request_candidate_api_formats("openai:compact", false),
-            vec!["openai:responses:compact"]
+            Vec::<&'static str>::new()
         );
     }
 
@@ -499,21 +478,25 @@ mod tests {
     fn request_candidate_registry_prefers_same_kind_before_same_family_fallbacks() {
         assert_eq!(
             request_candidate_api_format_preference("claude:cli", "openai:responses"),
-            Some((1, 0))
+            None
         );
         assert_eq!(
             request_candidate_api_format_preference("claude:cli", "claude:chat"),
-            Some((2, 1))
+            None
         );
         assert_eq!(
             request_candidate_api_format_preference("claude:cli", "openai:chat"),
-            Some((3, 0))
+            None
         );
     }
 
     #[test]
     fn request_conversion_enable_flag_only_applies_to_real_data_format_conversions() {
         assert!(!request_conversion_requires_enable_flag(
+            "claude:messages",
+            "claude:messages"
+        ));
+        assert!(request_conversion_requires_enable_flag(
             "claude:chat",
             "claude:cli"
         ));
@@ -527,7 +510,7 @@ mod tests {
         ));
         assert!(request_conversion_requires_enable_flag(
             "openai:chat",
-            "gemini:chat"
+            "gemini:generate_content"
         ));
     }
 
@@ -627,7 +610,7 @@ mod tests {
                 config: None,
                 format_acceptance_config: Some(serde_json::json!({
                     "enabled": true,
-                    "accept_formats": ["claude:cli"],
+                    "accept_formats": ["claude:messages"],
                 })),
                 proxy: None,
             },
@@ -652,17 +635,17 @@ mod tests {
 
         assert!(request_conversion_enabled_for_transport(
             &transport,
-            "claude:cli",
+            "claude:messages",
             "openai:responses"
         ));
         assert!(request_pair_allowed_for_transport(
             &transport,
-            "claude:cli",
+            "claude:messages",
             "openai:responses"
         ));
         assert!(!request_pair_allowed_for_transport(
             &transport,
-            "gemini:cli",
+            "gemini:generate_content",
             "openai:responses"
         ));
     }
@@ -700,7 +683,7 @@ mod tests {
                 config: None,
                 format_acceptance_config: Some(serde_json::json!({
                     "enabled": true,
-                    "reject_formats": ["claude:cli"],
+                    "reject_formats": ["claude:messages"],
                 })),
                 proxy: None,
             },
@@ -725,7 +708,7 @@ mod tests {
 
         assert!(!request_conversion_enabled_for_transport(
             &transport,
-            "claude:cli",
+            "claude:messages",
             "openai:responses"
         ));
     }
@@ -751,9 +734,9 @@ mod tests {
             endpoint: GatewayProviderTransportEndpoint {
                 id: "endpoint-vertex".to_string(),
                 provider_id: "provider-vertex".to_string(),
-                api_format: "gemini:chat".to_string(),
+                api_format: "gemini:generate_content".to_string(),
                 api_family: Some("gemini".to_string()),
-                endpoint_kind: Some("chat".to_string()),
+                endpoint_kind: Some("generate_content".to_string()),
                 is_active: true,
                 base_url: "https://aiplatform.googleapis.com".to_string(),
                 header_rules: None,
@@ -770,7 +753,7 @@ mod tests {
                 name: "key".to_string(),
                 auth_type: "api_key".to_string(),
                 is_active: true,
-                api_formats: Some(vec!["gemini:chat".to_string()]),
+                api_formats: Some(vec!["gemini:generate_content".to_string()]),
                 allowed_models: None,
                 capabilities: None,
                 rate_multipliers: None,
@@ -794,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn kiro_claude_cli_transport_supports_cross_format_conversion_via_envelope() {
+    fn kiro_claude_messages_transport_supports_cross_format_conversion_via_envelope() {
         let transport = GatewayProviderTransportSnapshot {
             provider: GatewayProviderTransportProvider {
                 id: "provider-kiro".to_string(),
@@ -814,9 +797,9 @@ mod tests {
             endpoint: GatewayProviderTransportEndpoint {
                 id: "endpoint-kiro".to_string(),
                 provider_id: "provider-kiro".to_string(),
-                api_format: "claude:cli".to_string(),
+                api_format: "claude:messages".to_string(),
                 api_family: Some("claude".to_string()),
-                endpoint_kind: Some("cli".to_string()),
+                endpoint_kind: Some("messages".to_string()),
                 is_active: true,
                 base_url: "https://q.{region}.amazonaws.com".to_string(),
                 header_rules: None,
@@ -833,7 +816,7 @@ mod tests {
                 name: "key".to_string(),
                 auth_type: "bearer".to_string(),
                 is_active: true,
-                api_formats: Some(vec!["claude:cli".to_string()]),
+                api_formats: Some(vec!["claude:messages".to_string()]),
                 allowed_models: None,
                 capabilities: None,
                 rate_multipliers: None,
@@ -849,7 +832,7 @@ mod tests {
         assert!(request_pair_allowed_for_transport(
             &transport,
             "openai:chat",
-            "claude:cli"
+            "claude:messages"
         ));
         assert!(request_conversion_transport_supported(
             &transport,

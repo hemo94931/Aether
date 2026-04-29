@@ -607,7 +607,7 @@ mod tests {
         let payload = core_finalize_payload(
             "openai_chat_sync_finalize",
             "openai:chat",
-            "claude:chat",
+            "claude:messages",
             200,
             json!({
                 "type": "error",
@@ -647,8 +647,8 @@ mod tests {
     async fn maybe_build_local_core_error_response_infers_status_from_gemini_status_text() {
         let payload = core_finalize_payload(
             "gemini_chat_sync_finalize",
-            "gemini:chat",
-            "gemini:chat",
+            "gemini:generate_content",
+            "gemini:generate_content",
             200,
             json!({
                 "error": {

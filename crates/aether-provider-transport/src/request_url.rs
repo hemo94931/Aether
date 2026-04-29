@@ -60,9 +60,7 @@ pub fn build_transport_request_url(
         ));
     }
 
-    let url = match aether_ai_formats::normalize_legacy_openai_format_alias(&provider_api_format)
-        .as_str()
-    {
+    let url = match aether_ai_formats::normalize_api_format_alias(&provider_api_format).as_str() {
         "openai:chat" => Some(build_openai_chat_url(
             &transport.endpoint.base_url,
             params.request_query,
@@ -77,11 +75,11 @@ pub fn build_transport_request_url(
             params.request_query,
             true,
         )),
-        "claude:chat" | "claude:cli" => Some(build_claude_messages_url(
+        "claude:messages" => Some(build_claude_messages_url(
             &transport.endpoint.base_url,
             params.request_query,
         )),
-        "gemini:chat" | "gemini:cli" => build_gemini_content_url(
+        "gemini:generate_content" => build_gemini_content_url(
             &transport.endpoint.base_url,
             params.mapped_model?,
             params.upstream_is_stream,
@@ -325,7 +323,7 @@ mod tests {
     fn uses_vertex_hook_before_custom_path_for_custom_aiplatform_transport() {
         let transport = sample_transport(
             "custom",
-            "gemini:cli",
+            "gemini:generate_content",
             "https://aiplatform.googleapis.com",
             Some("/custom/{model}:{action}"),
         );
@@ -333,7 +331,7 @@ mod tests {
         let url = build_transport_request_url(
             &transport,
             TransportRequestUrlParams {
-                provider_api_format: "gemini:cli",
+                provider_api_format: "gemini:generate_content",
                 mapped_model: Some("gemini-3.1-pro-preview"),
                 upstream_is_stream: true,
                 request_query: Some("foo=bar"),
@@ -376,7 +374,7 @@ mod tests {
     fn expands_custom_path_templates_when_hook_does_not_apply() {
         let transport = sample_transport(
             "custom",
-            "gemini:chat",
+            "gemini:generate_content",
             "https://generativelanguage.googleapis.com",
             Some("/v1beta/models/{model}:{action}"),
         );
@@ -384,7 +382,7 @@ mod tests {
         let url = build_transport_request_url(
             &transport,
             TransportRequestUrlParams {
-                provider_api_format: "gemini:chat",
+                provider_api_format: "gemini:generate_content",
                 mapped_model: Some("gemini-2.5-pro"),
                 upstream_is_stream: false,
                 request_query: Some("key=client-key&foo=bar"),
@@ -403,7 +401,7 @@ mod tests {
     fn keeps_original_custom_path_when_template_params_are_missing() {
         let transport = sample_transport(
             "custom",
-            "claude:chat",
+            "claude:messages",
             "https://api.example.com",
             Some("/v1/messages/{model}"),
         );
@@ -411,7 +409,7 @@ mod tests {
         let url = build_transport_request_url(
             &transport,
             TransportRequestUrlParams {
-                provider_api_format: "claude:chat",
+                provider_api_format: "claude:messages",
                 mapped_model: None,
                 upstream_is_stream: false,
                 request_query: None,

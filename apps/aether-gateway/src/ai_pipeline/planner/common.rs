@@ -132,12 +132,15 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn forces_streaming_for_codex_openai_responses_and_alias() {
+    fn forces_streaming_for_codex_openai_responses() {
         assert!(force_upstream_streaming_for_provider(
             "codex",
             "openai:responses"
         ));
-        assert!(force_upstream_streaming_for_provider("codex", "openai:cli"));
+        assert!(!force_upstream_streaming_for_provider(
+            "codex",
+            "openai:responses:compact"
+        ));
     }
 
     #[test]
@@ -148,11 +151,11 @@ mod tests {
         ));
         assert!(!force_upstream_streaming_for_provider(
             "codex",
-            "openai:compact"
+            "openai:responses:compact"
         ));
         assert!(!force_upstream_streaming_for_provider(
             "openai",
-            "openai:cli"
+            "openai:responses"
         ));
     }
 

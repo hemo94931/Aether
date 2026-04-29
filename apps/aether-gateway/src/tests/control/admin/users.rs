@@ -462,7 +462,7 @@ async fn gateway_handles_admin_user_detail_routes_locally_with_trusted_admin_pri
             "username": "alice_updated",
             "role": "admin",
             "allowed_providers": ["openai", "anthropic"],
-            "allowed_api_formats": ["openai:chat", "gemini:chat"],
+            "allowed_api_formats": ["openai:chat", "gemini:generate_content"],
             "allowed_models": ["gpt-4.1", "gemini-2.5-pro"],
             "rate_limit": 120,
             "is_active": false,

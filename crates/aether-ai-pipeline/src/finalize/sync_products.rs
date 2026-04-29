@@ -176,10 +176,10 @@ pub fn maybe_build_openai_chat_cross_format_sync_product_from_normalized_payload
     };
 
     let Some(client_body_json) = (match provider_api_format.as_str() {
-        "claude:chat" | "claude:cli" => {
+        "claude:messages" => {
             convert_claude_canonical_response_to_openai_chat(&provider_body_json, report_context)
         }
-        "gemini:chat" | "gemini:cli" => {
+        "gemini:generate_content" => {
             convert_gemini_canonical_response_to_openai_chat(&provider_body_json, report_context)
         }
         "openai:responses" => {
@@ -248,10 +248,10 @@ pub fn maybe_build_openai_responses_cross_format_sync_product_from_normalized_pa
         normalize_openai_responses_family_api_format(&provider_api_format);
     let Some(client_body_json) = (match normalized_provider_api_format.as_str() {
         "openai:responses" | "openai:responses:compact" => Some(provider_body_json.clone()),
-        "claude:chat" | "claude:cli" => {
+        "claude:messages" => {
             convert_claude_response_to_openai_responses(&provider_body_json, report_context)
         }
-        "gemini:chat" | "gemini:cli" => convert_gemini_canonical_response_to_openai_responses(
+        "gemini:generate_content" => convert_gemini_canonical_response_to_openai_responses(
             &provider_body_json,
             report_context,
             normalized_client_api_format == "openai:responses:compact",
@@ -541,8 +541,8 @@ fn maybe_build_openai_cross_format_provider_body_from_normalized_payload(
             let normalized_provider_api_format =
                 normalize_openai_responses_family_api_format(provider_api_format);
             match normalized_provider_api_format.as_str() {
-                "claude:chat" | "claude:cli" => aggregate_claude_stream_sync_response(&body_bytes),
-                "gemini:chat" | "gemini:cli" => aggregate_gemini_stream_sync_response(&body_bytes),
+                "claude:messages" => aggregate_claude_stream_sync_response(&body_bytes),
+                "gemini:generate_content" => aggregate_gemini_stream_sync_response(&body_bytes),
                 "openai:responses" | "openai:responses:compact" => {
                     aggregate_openai_responses_stream_sync_response(&body_bytes)
                 }
@@ -622,13 +622,13 @@ pub fn aggregate_standard_chat_stream_sync_response(
     body: &[u8],
     provider_api_format: &str,
 ) -> Option<Value> {
-    match aether_ai_formats::normalize_legacy_openai_format_alias(provider_api_format).as_str() {
+    match aether_ai_formats::normalize_api_format_alias(provider_api_format).as_str() {
         "openai:chat" => aggregate_openai_chat_stream_sync_response(body),
         "openai:responses" | "openai:responses:compact" => {
             aggregate_openai_responses_stream_sync_response(body)
         }
-        "claude:chat" | "claude:cli" => aggregate_claude_stream_sync_response(body),
-        "gemini:chat" | "gemini:cli" => aggregate_gemini_stream_sync_response(body),
+        "claude:messages" => aggregate_claude_stream_sync_response(body),
+        "gemini:generate_content" => aggregate_gemini_stream_sync_response(body),
         _ => None,
     }
 }
@@ -660,7 +660,7 @@ pub fn convert_standard_chat_response(
     }
     if matches!(
         provider_api_format.trim().to_ascii_lowercase().as_str(),
-        "claude:chat" | "claude:cli"
+        "claude:messages"
     ) {
         return convert_claude_canonical_chat_response(
             body_json,
@@ -670,7 +670,7 @@ pub fn convert_standard_chat_response(
     }
     if matches!(
         provider_api_format.trim().to_ascii_lowercase().as_str(),
-        "gemini:chat" | "gemini:cli"
+        "gemini:generate_content"
     ) {
         return convert_gemini_canonical_chat_response(
             body_json,
@@ -725,13 +725,13 @@ pub fn convert_standard_cli_response(
     }
     if matches!(
         provider_api_format.trim().to_ascii_lowercase().as_str(),
-        "claude:chat" | "claude:cli"
+        "claude:messages"
     ) {
         return convert_claude_canonical_cli_response(body_json, client_api_format, report_context);
     }
     if matches!(
         provider_api_format.trim().to_ascii_lowercase().as_str(),
-        "gemini:chat" | "gemini:cli"
+        "gemini:generate_content"
     ) {
         return convert_gemini_canonical_cli_response(body_json, client_api_format, report_context);
     }
@@ -760,8 +760,12 @@ pub fn convert_standard_cli_response(
         "openai:responses:compact" => {
             convert_openai_chat_response_to_openai_responses(&canonical, report_context, true)
         }
-        "claude:cli" => convert_openai_chat_response_to_claude_chat(&canonical, report_context),
-        "gemini:cli" => convert_openai_chat_response_to_gemini_chat(&canonical, report_context),
+        "claude:messages" => {
+            convert_openai_chat_response_to_claude_chat(&canonical, report_context)
+        }
+        "gemini:generate_content" => {
+            convert_openai_chat_response_to_gemini_chat(&canonical, report_context)
+        }
         _ => None,
     }
 }
@@ -787,19 +791,23 @@ fn convert_openai_chat_canonical_chat_response(
     if !openai_chat_response_can_use_single_response_canonical(body_json) {
         return match client_api_format.trim().to_ascii_lowercase().as_str() {
             "openai:chat" => Some(body_json.clone()),
-            "claude:chat" => convert_openai_chat_response_to_claude_chat(body_json, report_context),
-            "gemini:chat" => convert_openai_chat_response_to_gemini_chat(body_json, report_context),
+            "claude:messages" => {
+                convert_openai_chat_response_to_claude_chat(body_json, report_context)
+            }
+            "gemini:generate_content" => {
+                convert_openai_chat_response_to_gemini_chat(body_json, report_context)
+            }
             _ => None,
         };
     }
     match client_api_format.trim().to_ascii_lowercase().as_str() {
         "openai:chat" => Some(body_json.clone()),
-        "claude:chat" => {
+        "claude:messages" => {
             let openai_chat =
                 convert_openai_chat_canonical_response_to_openai_chat(body_json, report_context)?;
             convert_openai_chat_response_to_claude_chat(&openai_chat, report_context)
         }
-        "gemini:chat" => {
+        "gemini:generate_content" => {
             let openai_chat =
                 convert_openai_chat_canonical_response_to_openai_chat(body_json, report_context)?;
             convert_openai_chat_response_to_gemini_chat(&openai_chat, report_context)
@@ -821,8 +829,12 @@ fn convert_openai_chat_canonical_cli_response(
             "openai:responses:compact" => {
                 convert_openai_chat_response_to_openai_responses(body_json, report_context, true)
             }
-            "claude:cli" => convert_openai_chat_response_to_claude_chat(body_json, report_context),
-            "gemini:cli" => convert_openai_chat_response_to_gemini_chat(body_json, report_context),
+            "claude:messages" => {
+                convert_openai_chat_response_to_claude_chat(body_json, report_context)
+            }
+            "gemini:generate_content" => {
+                convert_openai_chat_response_to_gemini_chat(body_json, report_context)
+            }
             _ => None,
         };
     }
@@ -835,8 +847,12 @@ fn convert_openai_chat_canonical_cli_response(
         "openai:responses:compact" => {
             convert_openai_chat_response_to_openai_responses(&openai_chat, report_context, true)
         }
-        "claude:cli" => convert_openai_chat_response_to_claude_chat(&openai_chat, report_context),
-        "gemini:cli" => convert_openai_chat_response_to_gemini_chat(&openai_chat, report_context),
+        "claude:messages" => {
+            convert_openai_chat_response_to_claude_chat(&openai_chat, report_context)
+        }
+        "gemini:generate_content" => {
+            convert_openai_chat_response_to_gemini_chat(&openai_chat, report_context)
+        }
         _ => None,
     }
 }
@@ -873,7 +889,7 @@ fn convert_openai_responses_canonical_chat_response(
             .or_else(|| {
                 convert_openai_responses_response_to_openai_chat(body_json, report_context)
             }),
-        "claude:chat" => canonical
+        "claude:messages" => canonical
             .as_ref()
             .map(canonical_to_claude_response)
             .or_else(|| {
@@ -881,7 +897,7 @@ fn convert_openai_responses_canonical_chat_response(
                     convert_openai_responses_response_to_openai_chat(body_json, report_context)?;
                 convert_openai_chat_response_to_claude_chat(&openai_chat, report_context)
             }),
-        "gemini:chat" => canonical
+        "gemini:generate_content" => canonical
             .as_ref()
             .and_then(|canonical| canonical_to_gemini_response(canonical, report_context))
             .or_else(|| {
@@ -921,7 +937,7 @@ fn convert_openai_responses_canonical_responses_response(
                 convert_openai_chat_response_to_openai_responses(&openai_chat, report_context, true)
             })
         }
-        "claude:cli" => {
+        "claude:messages" => {
             let canonical =
                 from_openai_responses_to_canonical_response(body_json).map(|mut canonical| {
                     apply_report_context_model_fallback(&mut canonical.model, report_context);
@@ -938,7 +954,7 @@ fn convert_openai_responses_canonical_responses_response(
                     convert_openai_chat_response_to_claude_chat(&openai_chat, report_context)
                 })
         }
-        "gemini:cli" => {
+        "gemini:generate_content" => {
             let canonical =
                 from_openai_responses_to_canonical_response(body_json).map(|mut canonical| {
                     apply_report_context_model_fallback(&mut canonical.model, report_context);
@@ -982,8 +998,8 @@ fn convert_claude_canonical_chat_response(
         "openai:chat" => {
             convert_claude_canonical_response_to_openai_chat(body_json, report_context)
         }
-        "claude:chat" => convert_claude_canonical_response_to_claude(body_json, report_context),
-        "gemini:chat" => {
+        "claude:messages" => convert_claude_canonical_response_to_claude(body_json, report_context),
+        "gemini:generate_content" => {
             let openai_chat =
                 convert_claude_canonical_response_to_openai_chat(body_json, report_context)?;
             convert_openai_chat_response_to_gemini_chat(&openai_chat, report_context)
@@ -1008,8 +1024,8 @@ fn convert_claude_canonical_cli_response(
                 convert_claude_canonical_response_to_openai_chat(body_json, report_context)?;
             convert_openai_chat_response_to_openai_responses(&openai_chat, report_context, true)
         }
-        "claude:cli" => convert_claude_canonical_response_to_claude(body_json, report_context),
-        "gemini:cli" => {
+        "claude:messages" => convert_claude_canonical_response_to_claude(body_json, report_context),
+        "gemini:generate_content" => {
             let openai_chat =
                 convert_claude_canonical_response_to_openai_chat(body_json, report_context)?;
             convert_openai_chat_response_to_gemini_chat(&openai_chat, report_context)
@@ -1054,10 +1070,10 @@ fn convert_gemini_canonical_chat_response(
         let openai_chat = convert_gemini_chat_response_to_openai_chat(body_json, report_context)?;
         return match client_api_format.trim().to_ascii_lowercase().as_str() {
             "openai:chat" => Some(openai_chat),
-            "claude:chat" => {
+            "claude:messages" => {
                 convert_openai_chat_response_to_claude_chat(&openai_chat, report_context)
             }
-            "gemini:chat" => {
+            "gemini:generate_content" => {
                 convert_openai_chat_response_to_gemini_chat(&openai_chat, report_context)
             }
             _ => None,
@@ -1067,12 +1083,14 @@ fn convert_gemini_canonical_chat_response(
         "openai:chat" => {
             convert_gemini_canonical_response_to_openai_chat(body_json, report_context)
         }
-        "claude:chat" => {
+        "claude:messages" => {
             let openai_chat =
                 convert_gemini_canonical_response_to_openai_chat(body_json, report_context)?;
             convert_openai_chat_response_to_claude_chat(&openai_chat, report_context)
         }
-        "gemini:chat" => convert_gemini_canonical_response_to_gemini(body_json, report_context),
+        "gemini:generate_content" => {
+            convert_gemini_canonical_response_to_gemini(body_json, report_context)
+        }
         _ => None,
     }
 }
@@ -1093,10 +1111,10 @@ fn convert_gemini_canonical_cli_response(
             "openai:responses:compact" => {
                 convert_openai_chat_response_to_openai_responses(&openai_chat, report_context, true)
             }
-            "claude:cli" => {
+            "claude:messages" => {
                 convert_openai_chat_response_to_claude_chat(&openai_chat, report_context)
             }
-            "gemini:cli" => {
+            "gemini:generate_content" => {
                 convert_openai_chat_response_to_gemini_chat(&openai_chat, report_context)
             }
             _ => None,
@@ -1109,12 +1127,14 @@ fn convert_gemini_canonical_cli_response(
         "openai:responses:compact" => {
             convert_gemini_canonical_response_to_openai_responses(body_json, report_context, true)
         }
-        "claude:cli" => {
+        "claude:messages" => {
             let openai_chat =
                 convert_gemini_canonical_response_to_openai_chat(body_json, report_context)?;
             convert_openai_chat_response_to_claude_chat(&openai_chat, report_context)
         }
-        "gemini:cli" => convert_gemini_canonical_response_to_gemini(body_json, report_context),
+        "gemini:generate_content" => {
+            convert_gemini_canonical_response_to_gemini(body_json, report_context)
+        }
         _ => None,
     }
 }
@@ -1230,10 +1250,10 @@ fn is_openai_responses_finalize_kind(report_kind: &str) -> bool {
 fn standard_same_format_api_format(report_kind: &str) -> Option<&'static str> {
     match report_kind {
         "openai_chat_sync_finalize" => Some("openai:chat"),
-        "claude_chat_sync_finalize" => Some("claude:chat"),
-        "gemini_chat_sync_finalize" => Some("gemini:chat"),
-        "claude_cli_sync_finalize" => Some("claude:cli"),
-        "gemini_cli_sync_finalize" => Some("gemini:cli"),
+        "claude_chat_sync_finalize" => Some("claude:messages"),
+        "gemini_chat_sync_finalize" => Some("gemini:generate_content"),
+        "claude_cli_sync_finalize" => Some("claude:messages"),
+        "gemini_cli_sync_finalize" => Some("gemini:generate_content"),
         _ => None,
     }
 }
@@ -1241,8 +1261,8 @@ fn standard_same_format_api_format(report_kind: &str) -> Option<&'static str> {
 fn aggregate_same_format_stream_sync_response(api_format: &str, body: &[u8]) -> Option<Value> {
     match api_format {
         "openai:chat" => aggregate_openai_chat_stream_sync_response(body),
-        "claude:chat" | "claude:cli" => aggregate_claude_stream_sync_response(body),
-        "gemini:chat" | "gemini:cli" => aggregate_gemini_stream_sync_response(body),
+        "claude:messages" => aggregate_claude_stream_sync_response(body),
+        "gemini:generate_content" => aggregate_gemini_stream_sync_response(body),
         _ => None,
     }
 }
@@ -1255,7 +1275,7 @@ fn is_openai_responses_family_api_format(api_format: &str) -> bool {
 }
 
 fn normalize_openai_responses_family_api_format(api_format: &str) -> String {
-    aether_ai_formats::normalize_legacy_openai_format_alias(api_format)
+    aether_ai_formats::normalize_api_format_alias(api_format)
 }
 
 fn parse_stream_json_events(body: &[u8]) -> Option<Vec<Value>> {
@@ -2945,7 +2965,7 @@ mod tests {
             "data: {\"responseId\":\"resp_gem_stream_456\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":4,\"candidatesTokenCount\":2,\"totalTokenCount\":6}}\n\n",
         );
         let report_context = json!({
-            "provider_api_format": "gemini:chat",
+            "provider_api_format": "gemini:generate_content",
             "client_api_format": "openai:chat",
             "mapped_model": "gemini-2.5-pro",
         });
@@ -2992,7 +3012,7 @@ mod tests {
         );
         let report_context = json!({
             "provider_api_format": "openai:chat",
-            "client_api_format": "claude:chat",
+            "client_api_format": "claude:messages",
         });
 
         let product = maybe_build_standard_cross_format_sync_product_from_normalized_payload(
@@ -3049,7 +3069,7 @@ mod tests {
     fn falls_back_to_body_json_when_stream_aggregation_returns_none() {
         let report_context = json!({
             "provider_api_format": "openai:chat",
-            "client_api_format": "claude:chat",
+            "client_api_format": "claude:messages",
         });
         let provider_body_json = json!({
             "id": "chatcmpl_123",
@@ -3103,8 +3123,8 @@ mod tests {
             "data: {\"type\":\"message_stop\"}\n\n",
         );
         let report_context = json!({
-            "provider_api_format": "claude:chat",
-            "client_api_format": "claude:chat",
+            "provider_api_format": "claude:messages",
+            "client_api_format": "claude:messages",
             "needs_conversion": false,
         });
 
@@ -3129,8 +3149,8 @@ mod tests {
     #[test]
     fn falls_back_to_body_json_for_standard_same_format_sync_payload() {
         let report_context = json!({
-            "provider_api_format": "gemini:cli",
-            "client_api_format": "gemini:cli",
+            "provider_api_format": "gemini:generate_content",
+            "client_api_format": "gemini:generate_content",
             "needs_conversion": false,
         });
         let provider_body_json = json!({
@@ -3181,8 +3201,8 @@ mod tests {
     #[test]
     fn rejects_standard_same_format_error_body_json() {
         let report_context = json!({
-            "provider_api_format": "claude:chat",
-            "client_api_format": "claude:chat",
+            "provider_api_format": "claude:messages",
+            "client_api_format": "claude:messages",
             "needs_conversion": false,
         });
         let provider_body_json = json!({
@@ -3476,7 +3496,7 @@ mod tests {
     #[test]
     fn builds_openai_chat_cross_format_sync_product_from_claude_body_json() {
         let report_context = json!({
-            "provider_api_format": "claude:chat",
+            "provider_api_format": "claude:messages",
             "client_api_format": "openai:chat",
             "model": "gpt-5",
             "mapped_model": "claude-sonnet-4",
@@ -3514,7 +3534,7 @@ mod tests {
     #[test]
     fn claude_canonical_response_route_matches_legacy_outputs_for_existing_clients() {
         let report_context = json!({
-            "provider_api_format": "claude:chat",
+            "provider_api_format": "claude:messages",
             "client_api_format": "openai:chat",
             "model": "gpt-5",
             "mapped_model": "claude-sonnet-4",
@@ -3551,7 +3571,7 @@ mod tests {
                 .expect("legacy claude -> openai chat");
         let converted_openai = convert_standard_chat_response(
             &provider_body_json,
-            "claude:chat",
+            "claude:messages",
             "openai:chat",
             &report_context,
         )
@@ -3563,8 +3583,8 @@ mod tests {
                 .expect("legacy claude -> openai chat -> claude");
         let converted_claude = convert_standard_chat_response(
             &provider_body_json,
-            "claude:chat",
-            "claude:chat",
+            "claude:messages",
+            "claude:messages",
             &report_context,
         )
         .expect("canonical claude -> claude");
@@ -3578,7 +3598,7 @@ mod tests {
         .expect("legacy claude -> openai responses");
         let converted_openai_responses = convert_standard_cli_response(
             &provider_body_json,
-            "claude:chat",
+            "claude:messages",
             "openai:responses",
             &report_context,
         )
@@ -3589,7 +3609,7 @@ mod tests {
     #[test]
     fn gemini_canonical_response_route_matches_legacy_outputs_for_single_candidate() {
         let report_context = json!({
-            "provider_api_format": "gemini:chat",
+            "provider_api_format": "gemini:generate_content",
             "client_api_format": "openai:chat",
             "model": "gpt-5",
             "mapped_model": "gemini-2.5-pro",
@@ -3628,7 +3648,7 @@ mod tests {
                 .expect("legacy gemini -> openai chat");
         let converted_openai = convert_standard_chat_response(
             &provider_body_json,
-            "gemini:chat",
+            "gemini:generate_content",
             "openai:chat",
             &report_context,
         )
@@ -3640,8 +3660,8 @@ mod tests {
                 .expect("legacy gemini -> openai chat -> claude");
         let converted_claude = convert_standard_chat_response(
             &provider_body_json,
-            "gemini:chat",
-            "claude:chat",
+            "gemini:generate_content",
+            "claude:messages",
             &report_context,
         )
         .expect("canonical gemini -> claude");
@@ -3655,7 +3675,7 @@ mod tests {
         .expect("legacy gemini -> openai responses");
         let converted_openai_responses = convert_standard_cli_response(
             &provider_body_json,
-            "gemini:chat",
+            "gemini:generate_content",
             "openai:responses",
             &report_context,
         )
@@ -3667,7 +3687,7 @@ mod tests {
     fn openai_chat_canonical_response_route_matches_legacy_outputs_for_single_choice() {
         let report_context = json!({
             "provider_api_format": "openai:chat",
-            "client_api_format": "claude:chat",
+            "client_api_format": "claude:messages",
             "model": "gpt-5",
             "mapped_model": "gpt-5",
         });
@@ -3712,7 +3732,7 @@ mod tests {
         let converted_claude = convert_standard_chat_response(
             &provider_body_json,
             "openai:chat",
-            "claude:chat",
+            "claude:messages",
             &report_context,
         )
         .expect("canonical openai chat -> claude");
@@ -3724,7 +3744,7 @@ mod tests {
         let converted_gemini = convert_standard_chat_response(
             &provider_body_json,
             "openai:chat",
-            "gemini:chat",
+            "gemini:generate_content",
             &report_context,
         )
         .expect("canonical openai chat -> gemini");
@@ -3818,7 +3838,7 @@ mod tests {
         let converted_claude = convert_standard_chat_response(
             &provider_body_json,
             "openai:responses",
-            "claude:chat",
+            "claude:messages",
             &report_context,
         )
         .expect("canonical openai responses -> claude");
@@ -3832,7 +3852,7 @@ mod tests {
         let converted_gemini = convert_standard_chat_response(
             &provider_body_json,
             "openai:responses",
-            "gemini:chat",
+            "gemini:generate_content",
             &report_context,
         )
         .expect("canonical openai responses -> gemini");
@@ -3866,7 +3886,7 @@ mod tests {
     #[test]
     fn builds_openai_chat_cross_format_sync_product_from_gemini_body_json() {
         let report_context = json!({
-            "provider_api_format": "gemini:chat",
+            "provider_api_format": "gemini:generate_content",
             "client_api_format": "openai:chat",
             "model": "gpt-5",
             "mapped_model": "gemini-2.5-pro",
@@ -3957,7 +3977,7 @@ mod tests {
             "data: {\"responseId\":\"resp_cli_stream_123\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello Gemini CLI\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}],\"modelVersion\":\"gemini-2.5-pro-upstream\",\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":3,\"totalTokenCount\":5}}\n\n",
         );
         let report_context = json!({
-            "provider_api_format": "gemini:cli",
+            "provider_api_format": "gemini:generate_content",
             "client_api_format": "openai:responses",
             "model": "gpt-5",
             "mapped_model": "gemini-2.5-pro-upstream",
@@ -4155,7 +4175,7 @@ mod tests {
     #[test]
     fn standard_sync_finalize_product_handles_openai_chat_cross_format() {
         let report_context = json!({
-            "provider_api_format": "claude:chat",
+            "provider_api_format": "claude:messages",
             "client_api_format": "openai:chat",
             "model": "gpt-5",
             "mapped_model": "claude-sonnet-4",
@@ -4192,7 +4212,7 @@ mod tests {
             "data: {\"responseId\":\"resp_cli_stream_123\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello Gemini CLI\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}],\"modelVersion\":\"gemini-2.5-pro-upstream\",\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":3,\"totalTokenCount\":5}}\n\n",
         );
         let report_context = json!({
-            "provider_api_format": "gemini:cli",
+            "provider_api_format": "gemini:generate_content",
             "client_api_format": "openai:responses",
             "model": "gpt-5",
             "mapped_model": "gemini-2.5-pro-upstream",
@@ -4218,7 +4238,7 @@ mod tests {
     fn standard_sync_finalize_product_falls_back_to_generic_standard_cross_format() {
         let report_context = json!({
             "provider_api_format": "openai:chat",
-            "client_api_format": "claude:chat",
+            "client_api_format": "claude:messages",
         });
         let provider_body_json = json!({
             "id": "chatcmpl_123",
@@ -4255,7 +4275,7 @@ mod tests {
     fn multi_choice_openai_chat_response_keeps_legacy_fallback_route() {
         let report_context = json!({
             "provider_api_format": "openai:chat",
-            "client_api_format": "claude:chat",
+            "client_api_format": "claude:messages",
             "model": "gpt-5",
             "mapped_model": "gpt-5-upstream",
         });
@@ -4288,7 +4308,7 @@ mod tests {
         let converted = convert_standard_chat_response(
             &provider_body_json,
             "openai:chat",
-            "claude:chat",
+            "claude:messages",
             &report_context,
         )
         .expect("fallback route");
@@ -4298,7 +4318,7 @@ mod tests {
     #[test]
     fn multi_candidate_gemini_response_keeps_legacy_fallback_route() {
         let report_context = json!({
-            "provider_api_format": "gemini:chat",
+            "provider_api_format": "gemini:generate_content",
             "client_api_format": "openai:chat",
             "model": "gemini-2.5-pro",
             "mapped_model": "gemini-upstream",
@@ -4330,7 +4350,7 @@ mod tests {
                 .expect("legacy multi candidate route");
         let converted = convert_standard_chat_response(
             &provider_body_json,
-            "gemini:chat",
+            "gemini:generate_content",
             "openai:chat",
             &report_context,
         )

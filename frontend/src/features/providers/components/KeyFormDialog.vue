@@ -350,7 +350,7 @@ import {
   type CapabilityDefinition,
   type ProviderType
 } from '@/api/endpoints'
-import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import { formatApiFormat, normalizeApiFormatAlias } from '@/api/endpoints/types/api-format'
 
 const props = defineProps<{
   open: boolean
@@ -370,13 +370,13 @@ const { success, error: showError } = useToast()
 
 function getVertexAllowedFormatsByAuth(authType: 'api_key' | 'service_account'): Set<string> {
   if (authType === 'api_key') {
-    return new Set(['gemini:chat'])
+    return new Set(['gemini:generate_content'])
   }
-  return new Set(['gemini:chat', 'claude:chat'])
+  return new Set(['gemini:generate_content', 'claude:messages'])
 }
 
 function normalizeApiFormat(format: string): string {
-  return String(format || '').trim().toLowerCase()
+  return normalizeApiFormatAlias(format).trim().toLowerCase()
 }
 
 function getAvailableApiFormatSet(): Set<string> {

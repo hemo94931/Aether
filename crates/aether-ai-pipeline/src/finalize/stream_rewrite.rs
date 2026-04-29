@@ -41,7 +41,7 @@ pub fn resolve_finalize_stream_rewrite_mode(
 
     if needs_conversion
         && envelope_name.eq_ignore_ascii_case(KIRO_ENVELOPE_NAME)
-        && provider_api_format == "claude:cli"
+        && provider_api_format == "claude:messages"
     {
         return supports_standard_stream_rewrite(
             provider_api_format.as_str(),
@@ -63,7 +63,8 @@ pub fn resolve_finalize_stream_rewrite_mode(
     }
 
     if envelope_name.eq_ignore_ascii_case(KIRO_ENVELOPE_NAME) {
-        return (provider_api_format == "claude:cli" && client_api_format == "claude:cli")
+        return (provider_api_format == "claude:messages"
+            && client_api_format == "claude:messages")
             .then_some(FinalizeStreamRewriteMode::KiroToClaudeCli);
     }
 
@@ -83,25 +84,29 @@ fn supports_standard_stream_rewrite(provider_api_format: &str, client_api_format
 
 fn is_standard_provider_api_format(api_format: &str) -> bool {
     matches!(
-        aether_ai_formats::normalize_legacy_openai_format_alias(api_format).as_str(),
+        aether_ai_formats::normalize_api_format_alias(api_format).as_str(),
         "openai:chat"
             | "openai:responses"
             | "openai:responses:compact"
-            | "claude:chat"
-            | "claude:cli"
-            | "gemini:chat"
-            | "gemini:cli"
+            | "claude:messages"
+            | "gemini:generate_content"
     )
 }
 
 fn is_standard_chat_client_api_format(api_format: &str) -> bool {
-    matches!(api_format, "openai:chat" | "claude:chat" | "gemini:chat")
+    matches!(
+        api_format,
+        "openai:chat" | "claude:messages" | "gemini:generate_content"
+    )
 }
 
 fn is_standard_cli_client_api_format(api_format: &str) -> bool {
     matches!(
-        aether_ai_formats::normalize_legacy_openai_format_alias(api_format).as_str(),
-        "openai:responses" | "openai:responses:compact" | "claude:cli" | "gemini:cli"
+        aether_ai_formats::normalize_api_format_alias(api_format).as_str(),
+        "openai:responses"
+            | "openai:responses:compact"
+            | "claude:messages"
+            | "gemini:generate_content"
     )
 }
 
@@ -114,7 +119,7 @@ mod tests {
     #[test]
     fn resolves_standard_mode_for_cross_format_standard_streams() {
         let report_context = json!({
-            "provider_api_format": "claude:chat",
+            "provider_api_format": "claude:messages",
             "client_api_format": "openai:chat",
             "needs_conversion": true,
         });
@@ -127,8 +132,8 @@ mod tests {
     #[test]
     fn resolves_envelope_unwrap_for_same_format_private_envelopes() {
         let report_context = json!({
-            "provider_api_format": "gemini:cli",
-            "client_api_format": "gemini:cli",
+            "provider_api_format": "gemini:generate_content",
+            "client_api_format": "gemini:generate_content",
             "envelope_name": "antigravity:v1internal",
             "needs_conversion": false,
         });
@@ -141,8 +146,8 @@ mod tests {
     #[test]
     fn resolves_kiro_same_format_streams_to_kiro_mode() {
         let report_context = json!({
-            "provider_api_format": "claude:cli",
-            "client_api_format": "claude:cli",
+            "provider_api_format": "claude:messages",
+            "client_api_format": "claude:messages",
             "envelope_name": "kiro:generateAssistantResponse",
             "needs_conversion": false,
         });

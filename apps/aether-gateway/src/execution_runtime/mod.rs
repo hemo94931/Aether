@@ -272,17 +272,17 @@ mod tests {
     #[test]
     fn execution_contract_helper_appends_unified_fields() {
         let value = append_execution_contract_fields_to_value(
-            json!({"provider_api_format": "gemini:chat"}),
+            json!({"provider_api_format": "gemini:generate_content"}),
             ExecutionStrategy::LocalCrossFormat,
             ConversionMode::Bidirectional,
             "openai:chat",
-            "gemini:chat",
+            "gemini:generate_content",
         );
 
         assert_eq!(value["execution_strategy"], "local_cross_format");
         assert_eq!(value["conversion_mode"], "bidirectional");
         assert_eq!(value["client_contract"], "openai:chat");
-        assert_eq!(value["provider_contract"], "gemini:chat");
-        assert_eq!(value["provider_api_format"], "gemini:chat");
+        assert_eq!(value["provider_contract"], "gemini:generate_content");
+        assert_eq!(value["provider_api_format"], "gemini:generate_content");
     }
 }
