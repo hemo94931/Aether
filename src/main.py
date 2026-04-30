@@ -17,11 +17,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.admin import router as admin_router
+from src.api.analytics import router as analytics_router
 from src.api.announcements import router as announcement_router
 
 # API路由
 from src.api.auth import router as auth_router
-from src.api.dashboard import router as dashboard_router
 from src.api.internal import router as internal_router
 from src.api.monitoring import router as monitoring_router
 from src.api.payment import router as payment_router
@@ -802,7 +802,7 @@ app.include_router(me_router)  # 用户个人端点
 app.include_router(wallet_router)  # 钱包端点
 app.include_router(payment_router)  # 支付回调端点
 app.include_router(announcement_router)  # 公告系统
-app.include_router(dashboard_router)  # 仪表盘端点
+app.include_router(analytics_router)  # 新分析域
 app.include_router(public_router)  # 公开API端点（用户可查看提供商和模型）
 app.include_router(monitoring_router)  # 监控端点
 app.include_router(internal_router)  # Hub 本地控制面端点

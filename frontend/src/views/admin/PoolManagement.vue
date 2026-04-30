@@ -1155,6 +1155,7 @@ import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
 import { useCountdownTimer, getCodexResetCountdown } from '@/composables/useCountdownTimer'
 import { useConfirm } from '@/composables/useConfirm'
+import { useRouteQuery } from '@/composables/useRouteQuery'
 import { parseApiError } from '@/utils/errorParser'
 import {
   getPoolOverview,
@@ -1209,6 +1210,7 @@ const { confirm } = useConfirm()
 const { copyToClipboard } = useClipboard()
 const { tick: countdownTick, start: startCountdownTimer } = useCountdownTimer()
 const proxyNodesStore = useProxyNodesStore()
+const { getQueryValue, patchQuery } = useRouteQuery()
 
 // --- Overview ---
 const poolProviders = ref<PoolOverviewItem[]>([])
@@ -1430,7 +1432,7 @@ const desktopColumnWidths = computed(() => {
   }
 })
 
-async function selectProvider(id: string) {
+async function selectProvider(id: string, options: { preserveSearch?: boolean } = {}) {
   const requestId = ++selectProviderRequestId
   selectedProviderId.value = id
   selectedProviderData.value = null
@@ -1444,7 +1446,9 @@ async function selectProvider(id: string) {
   proxyMobilePopoverOpenKeyId.value = null
   suppressFiltersWatch = true
   currentPage.value = 1
-  searchQuery.value = ''
+  if (!options.preserveSearch) {
+    searchQuery.value = ''
+  }
   statusFilter.value = 'all'
   suppressFiltersWatch = false
   if (keysSearchDebounceTimer !== null) {
@@ -1503,6 +1507,32 @@ const keyPermissionsDialogOpen = ref(false)
 const keyFormDialogOpen = ref(false)
 const oauthKeyEditDialogOpen = ref(false)
 const editingKeyDetail = ref<PoolKeyDetail | null>(null)
+
+watch(
+  () => getQueryValue('search') ?? '',
+  (value) => {
+    if (searchQuery.value === value) return
+    searchQuery.value = value
+  },
+  { immediate: true },
+)
+
+watch(searchQuery, (value) => {
+  patchQuery({ search: value.trim() || undefined })
+})
+
+watch(
+  () => getQueryValue('providerId'),
+  (value) => {
+    if (!value || value === selectedProviderId.value) return
+    void selectProvider(value, { preserveSearch: true })
+  },
+  { immediate: true },
+)
+
+watch(selectedProviderId, (value) => {
+  patchQuery({ providerId: value || undefined })
+})
 
 interface QuotaProgressItem {
   label: string
