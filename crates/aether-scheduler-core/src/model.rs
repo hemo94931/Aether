@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use aether_data_contracts::repository::candidate_selection::{
@@ -11,36 +12,49 @@ pub fn resolve_requested_global_model_name(
     requested_model_name: &str,
     api_format: &str,
 ) -> Option<String> {
-    resolve_global_model_name_by(rows, |row| row.global_model_name == requested_model_name)
-        .or_else(|| {
-            resolve_global_model_name_by(rows, |row| {
-                row.model_provider_model_name == requested_model_name
-            })
-        })
-        .or_else(|| {
-            resolve_global_model_name_by(rows, |row| {
-                row.model_provider_model_mappings
-                    .as_ref()
-                    .is_some_and(|mappings| {
-                        mappings.iter().any(|mapping| {
-                            mapping_scope_matches(mapping, api_format)
-                                && mapping.name == requested_model_name
-                        })
-                    })
-            })
-        })
-        .or_else(|| {
-            resolve_global_model_name_by(rows, |row| {
-                row.global_model_mappings.as_ref().is_some_and(|patterns| {
-                    patterns
-                        .iter()
-                        .any(|pattern| matches_model_mapping(pattern, requested_model_name))
+    requested_model_name_candidates(requested_model_name).find_map(|requested_model_name| {
+        let requested_model_name = requested_model_name.as_ref();
+        resolve_global_model_name_by(rows, |row| row.global_model_name == requested_model_name)
+            .or_else(|| {
+                resolve_global_model_name_by(rows, |row| {
+                    row.model_provider_model_name == requested_model_name
                 })
             })
-        })
+            .or_else(|| {
+                resolve_global_model_name_by(rows, |row| {
+                    row.model_provider_model_mappings
+                        .as_ref()
+                        .is_some_and(|mappings| {
+                            mappings.iter().any(|mapping| {
+                                mapping_scope_matches(mapping, api_format)
+                                    && mapping.name == requested_model_name
+                            })
+                        })
+                })
+            })
+            .or_else(|| {
+                resolve_global_model_name_by(rows, |row| {
+                    row.global_model_mappings.as_ref().is_some_and(|patterns| {
+                        patterns
+                            .iter()
+                            .any(|pattern| matches_model_mapping(pattern, requested_model_name))
+                    })
+                })
+            })
+    })
 }
 
 pub fn row_supports_requested_model(
+    row: &StoredMinimalCandidateSelectionRow,
+    requested_model_name: &str,
+    api_format: &str,
+) -> bool {
+    requested_model_name_candidates(requested_model_name).any(|requested_model_name| {
+        row_supports_requested_model_exact(row, requested_model_name.as_ref(), api_format)
+    })
+}
+
+fn row_supports_requested_model_exact(
     row: &StoredMinimalCandidateSelectionRow,
     requested_model_name: &str,
     api_format: &str,
@@ -101,6 +115,14 @@ pub fn resolve_provider_model_name(
         .any(|value| value == requested_model_name)
     {
         return Some((selected_provider_model_name, None));
+    }
+
+    if let Some(base_model) =
+        aether_ai_formats::planner::openai::auto_reasoning_effort_base_model(requested_model_name)
+    {
+        if key_allowed_models.iter().any(|value| value == &base_model) {
+            return Some((selected_provider_model_name, Some(base_model)));
+        }
     }
 
     let mut sorted_allowed_models = key_allowed_models
@@ -302,9 +324,22 @@ fn api_format_matches(left: &str, right: &str) -> bool {
     normalize_api_format(left) == normalize_api_format(right)
 }
 
+fn requested_model_name_candidates(
+    requested_model_name: &str,
+) -> impl Iterator<Item = Cow<'_, str>> {
+    let requested_model_name = requested_model_name.trim();
+    let base_model =
+        aether_ai_formats::planner::openai::auto_reasoning_effort_base_model(requested_model_name);
+    std::iter::once(Cow::Borrowed(requested_model_name)).chain(base_model.map(Cow::Owned))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::matches_model_mapping;
+    use super::{
+        matches_model_mapping, resolve_provider_model_name, resolve_requested_global_model_name,
+        row_supports_requested_model,
+    };
+    use aether_data_contracts::repository::candidate_selection::StoredMinimalCandidateSelectionRow;
 
     #[test]
     fn model_mapping_match_is_case_insensitive() {
@@ -321,5 +356,81 @@ mod tests {
     #[test]
     fn invalid_model_mapping_pattern_returns_false() {
         assert!(!matches_model_mapping("([a-z", "gpt-4o"));
+    }
+
+    #[test]
+    fn auto_reasoning_effort_suffix_matches_base_model_as_fallback() {
+        let row = sample_row("gpt-5.4", "gpt-5.4-upstream");
+
+        assert!(row_supports_requested_model(
+            &row,
+            "gpt-5.4-xhigh",
+            "openai:chat"
+        ));
+        assert_eq!(
+            resolve_requested_global_model_name(&[row], "gpt-5.4-xhigh", "openai:chat").as_deref(),
+            Some("gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn auto_reasoning_effort_suffix_prefers_exact_model_before_base_fallback() {
+        let exact = sample_row("gpt-5.4-high", "gpt-5.4-high-upstream");
+        let base = sample_row("gpt-5.4", "gpt-5.4-upstream");
+
+        assert_eq!(
+            resolve_requested_global_model_name(&[base, exact], "gpt-5.4-high", "openai:chat")
+                .as_deref(),
+            Some("gpt-5.4-high")
+        );
+    }
+
+    #[test]
+    fn auto_reasoning_effort_base_model_satisfies_key_allowed_models() {
+        let mut row = sample_row("gpt-5.4", "gpt-5.4-upstream");
+        row.key_allowed_models = Some(vec!["gpt-5.4".to_string()]);
+
+        let resolved = resolve_provider_model_name(&row, "gpt-5.4-max", "openai:chat")
+            .expect("base model should satisfy key allowed models");
+
+        assert_eq!(resolved.0, "gpt-5.4-upstream");
+        assert_eq!(resolved.1.as_deref(), Some("gpt-5.4"));
+    }
+
+    fn sample_row(
+        global_model_name: &str,
+        model_provider_model_name: &str,
+    ) -> StoredMinimalCandidateSelectionRow {
+        StoredMinimalCandidateSelectionRow {
+            provider_id: "provider-1".to_string(),
+            provider_name: "Provider".to_string(),
+            provider_type: "openai".to_string(),
+            provider_priority: 0,
+            provider_is_active: true,
+            endpoint_id: "endpoint-1".to_string(),
+            endpoint_api_format: "openai:chat".to_string(),
+            endpoint_api_family: None,
+            endpoint_kind: None,
+            endpoint_is_active: true,
+            key_id: "key-1".to_string(),
+            key_name: "Key".to_string(),
+            key_auth_type: "api_key".to_string(),
+            key_is_active: true,
+            key_api_formats: None,
+            key_allowed_models: None,
+            key_capabilities: None,
+            key_internal_priority: 0,
+            key_global_priority_by_format: None,
+            model_id: format!("model-{global_model_name}"),
+            global_model_id: format!("global-{global_model_name}"),
+            global_model_name: global_model_name.to_string(),
+            global_model_mappings: None,
+            global_model_supports_streaming: Some(true),
+            model_provider_model_name: model_provider_model_name.to_string(),
+            model_provider_model_mappings: None,
+            model_supports_streaming: Some(true),
+            model_is_active: true,
+            model_is_available: true,
+        }
     }
 }

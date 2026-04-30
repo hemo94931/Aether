@@ -68,6 +68,12 @@ pub(crate) async fn request_model_local_rejection(
     if contains_string(allowed_models, &requested_model) {
         return Ok(None);
     }
+    if crate::ai_pipeline::auto_reasoning_effort_base_model(&requested_model)
+        .as_deref()
+        .is_some_and(|base_model| contains_string(allowed_models, base_model))
+    {
+        return Ok(None);
+    }
     if request_model_resolves_to_allowed_model(state, decision, &requested_model, allowed_models)
         .await?
     {

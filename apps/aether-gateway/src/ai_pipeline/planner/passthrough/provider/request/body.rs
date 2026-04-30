@@ -4,10 +4,12 @@ use super::super::{
     apply_local_body_rules, build_kiro_provider_request_body, sanitize_claude_code_request_body,
     LocalSameFormatProviderFamily, LocalSameFormatProviderSpec,
 };
+use crate::ai_pipeline::apply_auto_reasoning_effort_from_model;
 
 pub(crate) fn build_same_format_provider_request_body(
     body_json: &Value,
     mapped_model: &str,
+    source_model: Option<&str>,
     spec: LocalSameFormatProviderSpec,
     body_rules: Option<&Value>,
     upstream_is_stream: bool,
@@ -44,6 +46,13 @@ pub(crate) fn build_same_format_provider_request_body(
     let mut provider_request_body = Value::Object(provider_request_body);
     if is_claude_code {
         sanitize_claude_code_request_body(&mut provider_request_body);
+    }
+    if let Some(source_model) = source_model {
+        apply_auto_reasoning_effort_from_model(
+            &mut provider_request_body,
+            spec.api_format,
+            source_model,
+        );
     }
     if !apply_local_body_rules(&mut provider_request_body, body_rules, Some(body_json)) {
         return None;

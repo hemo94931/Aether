@@ -6,6 +6,7 @@ use crate::conversion::request::{
     normalize_openai_responses_request_to_openai_chat_request,
 };
 use crate::conversion::{request_conversion_kind, RequestConversionKind};
+use crate::planner::openai::apply_auto_reasoning_effort_from_request_model;
 
 pub fn build_local_openai_chat_request_body(
     body_json: &Value,
@@ -35,7 +36,11 @@ pub fn build_local_openai_chat_request_body(
             }
         }
     }
-    Some(Value::Object(provider_request_body))
+    Some(with_auto_reasoning_effort(
+        Value::Object(provider_request_body),
+        "openai:chat",
+        body_json,
+    ))
 }
 
 pub fn build_cross_format_openai_chat_request_body(
@@ -46,23 +51,42 @@ pub fn build_cross_format_openai_chat_request_body(
 ) -> Option<Value> {
     let conversion_kind = request_conversion_kind("openai:chat", provider_api_format)?;
     match conversion_kind {
-        RequestConversionKind::ToClaudeStandard => convert_openai_chat_request_to_claude_request(
-            body_json,
-            mapped_model,
-            upstream_is_stream,
-        ),
-        RequestConversionKind::ToGeminiStandard => convert_openai_chat_request_to_gemini_request(
-            body_json,
-            mapped_model,
-            upstream_is_stream,
-        ),
+        RequestConversionKind::ToClaudeStandard => {
+            let provider_request_body = convert_openai_chat_request_to_claude_request(
+                body_json,
+                mapped_model,
+                upstream_is_stream,
+            )?;
+            Some(with_auto_reasoning_effort(
+                provider_request_body,
+                provider_api_format,
+                body_json,
+            ))
+        }
+        RequestConversionKind::ToGeminiStandard => {
+            let provider_request_body = convert_openai_chat_request_to_gemini_request(
+                body_json,
+                mapped_model,
+                upstream_is_stream,
+            )?;
+            Some(with_auto_reasoning_effort(
+                provider_request_body,
+                provider_api_format,
+                body_json,
+            ))
+        }
         RequestConversionKind::ToOpenAiResponses => {
-            convert_openai_chat_request_to_openai_responses_request(
+            let provider_request_body = convert_openai_chat_request_to_openai_responses_request(
                 body_json,
                 mapped_model,
                 upstream_is_stream,
                 false,
-            )
+            )?;
+            Some(with_auto_reasoning_effort(
+                provider_request_body,
+                provider_api_format,
+                body_json,
+            ))
         }
         _ => None,
     }
@@ -83,7 +107,11 @@ pub fn build_local_openai_responses_request_body(
     if require_streaming {
         provider_request_body.insert("stream".to_string(), Value::Bool(true));
     }
-    Some(Value::Object(provider_request_body))
+    Some(with_auto_reasoning_effort(
+        Value::Object(provider_request_body),
+        "openai:responses",
+        body_json,
+    ))
 }
 
 pub fn build_cross_format_openai_responses_request_body(
@@ -96,36 +124,77 @@ pub fn build_cross_format_openai_responses_request_body(
     let chat_like_request = normalize_openai_responses_request_to_openai_chat_request(body_json)?;
     let conversion_kind = request_conversion_kind(client_api_format, provider_api_format)?;
     match conversion_kind {
-        RequestConversionKind::ToOpenAIChat => build_local_openai_chat_request_body(
-            &chat_like_request,
-            mapped_model,
-            upstream_is_stream,
-        ),
+        RequestConversionKind::ToOpenAIChat => {
+            let provider_request_body = build_local_openai_chat_request_body(
+                &chat_like_request,
+                mapped_model,
+                upstream_is_stream,
+            )?;
+            Some(with_auto_reasoning_effort(
+                provider_request_body,
+                provider_api_format,
+                body_json,
+            ))
+        }
         RequestConversionKind::ToOpenAiResponses => {
-            convert_openai_chat_request_to_openai_responses_request(
+            let provider_request_body = convert_openai_chat_request_to_openai_responses_request(
                 &chat_like_request,
                 mapped_model,
                 upstream_is_stream,
                 false,
-            )
+            )?;
+            Some(with_auto_reasoning_effort(
+                provider_request_body,
+                provider_api_format,
+                body_json,
+            ))
         }
-        RequestConversionKind::ToClaudeStandard => convert_openai_chat_request_to_claude_request(
-            &chat_like_request,
-            mapped_model,
-            upstream_is_stream,
-        ),
-        RequestConversionKind::ToGeminiStandard => convert_openai_chat_request_to_gemini_request(
-            &chat_like_request,
-            mapped_model,
-            upstream_is_stream,
-        ),
+        RequestConversionKind::ToClaudeStandard => {
+            let provider_request_body = convert_openai_chat_request_to_claude_request(
+                &chat_like_request,
+                mapped_model,
+                upstream_is_stream,
+            )?;
+            Some(with_auto_reasoning_effort(
+                provider_request_body,
+                provider_api_format,
+                body_json,
+            ))
+        }
+        RequestConversionKind::ToGeminiStandard => {
+            let provider_request_body = convert_openai_chat_request_to_gemini_request(
+                &chat_like_request,
+                mapped_model,
+                upstream_is_stream,
+            )?;
+            Some(with_auto_reasoning_effort(
+                provider_request_body,
+                provider_api_format,
+                body_json,
+            ))
+        }
     }
+}
+
+fn with_auto_reasoning_effort(
+    mut provider_request_body: Value,
+    provider_api_format: &str,
+    body_json: &Value,
+) -> Value {
+    apply_auto_reasoning_effort_from_request_model(
+        &mut provider_request_body,
+        provider_api_format,
+        body_json,
+        None,
+    );
+    provider_request_body
 }
 
 #[cfg(test)]
 mod tests {
     use super::build_local_openai_responses_request_body;
     use super::{
+        build_cross_format_openai_chat_request_body,
         build_cross_format_openai_responses_request_body, build_local_openai_chat_request_body,
     };
     use serde_json::{json, Value};
@@ -203,6 +272,66 @@ mod tests {
             provider_request_body["stream_options"]["include_usage"],
             true
         );
+    }
+
+    #[test]
+    fn local_openai_chat_request_body_applies_reasoning_effort_suffix() {
+        let body_json = json!({
+            "model": "gpt-5.4-xhigh",
+            "messages": [{
+                "role": "user",
+                "content": "hello"
+            }],
+            "reasoning_effort": "low"
+        });
+
+        let provider_request_body =
+            build_local_openai_chat_request_body(&body_json, "gpt-5-upstream", false)
+                .expect("openai chat body should build");
+
+        assert_eq!(provider_request_body["model"], "gpt-5-upstream");
+        assert_eq!(provider_request_body["reasoning_effort"], "xhigh");
+    }
+
+    #[test]
+    fn local_openai_responses_request_body_applies_reasoning_effort_suffix() {
+        let body_json = json!({
+            "model": "gpt-5.4-max",
+            "input": "hello",
+            "reasoning": {"effort": "low", "summary": "auto"}
+        });
+
+        let provider_request_body =
+            build_local_openai_responses_request_body(&body_json, "gpt-5-upstream", false)
+                .expect("openai responses body should build");
+
+        assert_eq!(provider_request_body["model"], "gpt-5-upstream");
+        assert_eq!(provider_request_body["reasoning"]["summary"], "auto");
+        assert_eq!(provider_request_body["reasoning"]["effort"], "xhigh");
+    }
+
+    #[test]
+    fn cross_format_request_body_applies_reasoning_effort_suffix() {
+        let body_json = json!({
+            "model": "gpt-5.4-high",
+            "messages": [{
+                "role": "user",
+                "content": "hello"
+            }],
+            "reasoning_effort": "low"
+        });
+
+        let provider_request_body = build_cross_format_openai_chat_request_body(
+            &body_json,
+            "claude-sonnet",
+            "claude:messages",
+            false,
+        )
+        .expect("claude body should build");
+
+        assert_eq!(provider_request_body["model"], "claude-sonnet");
+        assert_eq!(provider_request_body["output_config"]["effort"], "high");
+        assert_eq!(provider_request_body["thinking"]["budget_tokens"], 4096);
     }
 
     #[test]

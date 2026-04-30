@@ -115,6 +115,7 @@ pub(crate) async fn resolve_local_same_format_provider_candidate_payload_parts(
         super::super::request::build_same_format_provider_request_body(
             body_json,
             &prepared.mapped_model,
+            Some(input.requested_model.as_str()),
             spec,
             prepared.transport.endpoint.body_rules.as_ref(),
             prepared.upstream_is_stream,

@@ -2499,7 +2499,8 @@ pub(crate) fn claude_output_effort_to_openai_reasoning_effort(value: &str) -> Op
         "low" => Some("low"),
         "medium" => Some("medium"),
         "high" => Some("high"),
-        "max" | "xhigh" => Some("xhigh"),
+        "xhigh" => Some("xhigh"),
+        "max" => Some("max"),
         _ => None,
     }
 }
@@ -4126,13 +4127,42 @@ mod tests {
         canonical_to_gemini_response, canonical_to_openai_chat_request,
         canonical_to_openai_chat_response, canonical_to_openai_responses_request,
         canonical_to_openai_responses_response, canonical_unknown_block_count,
-        from_claude_to_canonical_request, from_claude_to_canonical_response,
-        from_gemini_to_canonical_request, from_gemini_to_canonical_response,
-        from_openai_chat_to_canonical_request, from_openai_chat_to_canonical_response,
-        from_openai_responses_to_canonical_request, from_openai_responses_to_canonical_response,
-        CanonicalContentBlock, CanonicalRole,
+        claude_output_effort_to_openai_reasoning_effort, from_claude_to_canonical_request,
+        from_claude_to_canonical_response, from_gemini_to_canonical_request,
+        from_gemini_to_canonical_response, from_openai_chat_to_canonical_request,
+        from_openai_chat_to_canonical_response, from_openai_responses_to_canonical_request,
+        from_openai_responses_to_canonical_response, CanonicalContentBlock, CanonicalRole,
     };
     use serde_json::{json, Value};
+
+    #[test]
+    fn claude_effort_conversion_preserves_xhigh_and_max() {
+        assert_eq!(
+            claude_output_effort_to_openai_reasoning_effort("xhigh"),
+            Some("xhigh")
+        );
+        assert_eq!(
+            claude_output_effort_to_openai_reasoning_effort("max"),
+            Some("max")
+        );
+    }
+
+    #[test]
+    fn canonical_to_claude_uses_adaptive_thinking_for_new_effort_models() {
+        let request = json!({
+            "model": "gpt-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "reasoning_effort": "xhigh"
+        });
+
+        let canonical = from_openai_chat_to_canonical_request(&request).expect("canonical request");
+        let rebuilt =
+            canonical_to_claude_request(&canonical, "claude-opus-4-7", false).expect("claude");
+
+        assert_eq!(rebuilt["output_config"]["effort"], "xhigh");
+        assert_eq!(rebuilt["thinking"]["type"], "adaptive");
+        assert!(rebuilt["thinking"].get("budget_tokens").is_none());
+    }
 
     #[test]
     fn canonical_request_preserves_openai_multimodal_tools_and_extensions() {

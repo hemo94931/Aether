@@ -139,6 +139,17 @@ fn select_requested_model_capabilities<'a>(
         .filter(|value| !value.is_empty())?;
     let settings = settings?.as_object()?;
 
+    find_model_capabilities(settings, requested_model).or_else(|| {
+        crate::ai_pipeline::auto_reasoning_effort_base_model(requested_model)
+            .as_deref()
+            .and_then(|base_model| find_model_capabilities(settings, base_model))
+    })
+}
+
+fn find_model_capabilities<'a>(
+    settings: &'a serde_json::Map<String, Value>,
+    requested_model: &str,
+) -> Option<&'a Value> {
     settings.get(requested_model).or_else(|| {
         settings.iter().find_map(|(model_name, capabilities)| {
             model_name

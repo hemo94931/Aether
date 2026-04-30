@@ -363,6 +363,8 @@ fn transport_key_allows_candidate_model(
     };
 
     let requested_model = requested_model.trim();
+    let requested_base_model =
+        crate::ai_pipeline::auto_reasoning_effort_base_model(requested_model);
     let global_model_name = candidate.global_model_name.trim();
     let selected_provider_model_name = candidate.selected_provider_model_name.trim();
     let mapping_matched_model = candidate
@@ -376,6 +378,9 @@ fn transport_key_allows_candidate_model(
             continue;
         }
         if allowed_model == requested_model
+            || requested_base_model
+                .as_deref()
+                .is_some_and(|base_model| allowed_model == base_model)
             || allowed_model == global_model_name
             || allowed_model == selected_provider_model_name
             || mapping_matched_model.is_some_and(|value| value == allowed_model)

@@ -19,6 +19,7 @@ use crate::conversion::request::{
     normalize_gemini_request_to_openai_chat_request,
     normalize_openai_responses_request_to_openai_chat_request,
 };
+use crate::planner::openai::apply_auto_reasoning_effort_from_request_model;
 
 #[allow(clippy::too_many_arguments)]
 pub fn build_standard_request_body(
@@ -43,6 +44,13 @@ pub fn build_standard_request_body(
         &format_context,
     )
     .ok()?;
+
+    apply_auto_reasoning_effort_from_request_model(
+        &mut provider_request_body,
+        provider_api_format,
+        body_json,
+        Some(request_path),
+    );
 
     if !apply_local_body_rules(&mut provider_request_body, body_rules, Some(body_json)) {
         return None;
@@ -361,6 +369,61 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn standard_request_body_applies_auto_reasoning_effort_suffix_to_claude_target() {
+        let request = json!({
+            "model": "gpt-5.4-max",
+            "messages": [{
+                "role": "user",
+                "content": "Need high effort"
+            }],
+            "reasoning_effort": "low"
+        });
+
+        let converted = build_standard_request_body(
+            &request,
+            "openai:chat",
+            "claude-sonnet-4-5",
+            "anthropic",
+            "claude:messages",
+            "/v1/chat/completions",
+            false,
+            None,
+            None,
+        )
+        .expect("openai chat should convert to claude chat");
+
+        assert_eq!(converted["model"], "claude-sonnet-4-5");
+        assert_eq!(converted["output_config"]["effort"], "max");
+        assert_eq!(converted["thinking"]["budget_tokens"], 8192);
+    }
+
+    #[test]
+    fn standard_request_body_applies_auto_reasoning_effort_suffix_from_gemini_path() {
+        let request = json!({
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": "Need high effort"}]
+            }]
+        });
+
+        let converted = build_standard_request_body(
+            &request,
+            "gemini:generate_content",
+            "gpt-5.4",
+            "openai",
+            "openai:chat",
+            "/v1beta/models/gemini-2.5-pro-high:generateContent",
+            false,
+            None,
+            None,
+        )
+        .expect("gemini should convert to openai chat");
+
+        assert_eq!(converted["model"], "gpt-5.4");
+        assert_eq!(converted["reasoning_effort"], "high");
     }
 
     #[test]

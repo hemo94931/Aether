@@ -137,9 +137,12 @@ pub use crate::planner::common::{
 };
 pub use crate::planner::matrix::build_standard_request_body_from_canonical;
 pub use crate::planner::openai::{
-    copy_request_number_field, copy_request_number_field_as,
+    apply_auto_reasoning_effort_from_model, apply_auto_reasoning_effort_from_request_model,
+    auto_reasoning_effort_base_model, copy_request_number_field, copy_request_number_field_as,
     map_openai_reasoning_effort_to_claude_output, map_openai_reasoning_effort_to_gemini_budget,
-    parse_openai_stop_sequences, resolve_openai_chat_max_tokens, value_as_u64,
+    normalize_auto_reasoning_effort_model, parse_openai_stop_sequences,
+    resolve_openai_chat_max_tokens, split_auto_reasoning_effort_model, value_as_u64,
+    AutoReasoningEffortModel,
 };
 pub use crate::planner::passthrough::provider::{
     resolve_stream_spec as resolve_local_same_format_stream_spec,
