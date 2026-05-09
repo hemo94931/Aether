@@ -5,6 +5,8 @@ use crate::state::AppState;
 
 pub(crate) const ENABLE_MODEL_DIRECTIVES_CONFIG_KEY: &str = "enable_model_directives";
 pub(crate) const MODEL_DIRECTIVES_CONFIG_KEY: &str = "model_directives";
+pub(crate) const AMP_PROXY_CONFIG_KEY: &str = "amp_proxy";
+pub(crate) const AMP_PROXY_ENABLED_CONFIG_KEY: &str = "module.amp_proxy.enabled";
 const REASONING_EFFORT_DIRECTIVE_KEY: &str = "reasoning_effort";
 
 pub(crate) async fn model_directives_enabled(state: &AppState) -> bool {

@@ -59,8 +59,10 @@ use crate::{
     GatewayFallbackReason, LocalExecutionRuntimeMissDiagnostic,
 };
 use axum::body::{to_bytes, Body, Bytes};
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
 use axum::http::{self, header::HeaderName, header::HeaderValue, Response};
+use axum::response::IntoResponse;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, time::Instant};
 use tracing::{debug, info, warn};
@@ -101,6 +103,29 @@ fn local_execution_outcome_label(outcome: &LocalExecutionRequestOutcome) -> &'st
 fn request_hits_execution_loop_guard(parts: &http::request::Parts) -> bool {
     request_has_execution_runtime_loop_guard(&parts.headers)
         && frontdoor_self_loop_public_ai_path(parts.uri.path())
+}
+
+fn apply_canonical_amp_provider_alias_uri(
+    parts: &mut http::request::Parts,
+) -> Result<(), GatewayError> {
+    let Some(canonical_path) = crate::control::canonical_amp_provider_alias_path(parts.uri.path())
+    else {
+        return Ok(());
+    };
+
+    let path_and_query = if let Some(query) = parts.uri.query().filter(|value| !value.is_empty()) {
+        format!("{canonical_path}?{query}")
+    } else {
+        canonical_path
+    };
+    let path_and_query = path_and_query
+        .parse::<http::uri::PathAndQuery>()
+        .map_err(|err| GatewayError::Internal(err.to_string()))?;
+    let mut uri_parts = parts.uri.clone().into_parts();
+    uri_parts.path_and_query = Some(path_and_query);
+    parts.uri =
+        http::Uri::from_parts(uri_parts).map_err(|err| GatewayError::Internal(err.to_string()))?;
+    Ok(())
 }
 
 fn execution_runtime_candidate_header_value(decision: &GatewayControlDecision) -> &'static str {
@@ -741,6 +766,7 @@ pub(crate) async fn proxy_request(
             &remote_addr,
         ));
     let trace_id = extract_or_generate_trace_id(&parts.headers);
+    apply_canonical_amp_provider_alias_uri(&mut parts)?;
     state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
     if request_hits_execution_loop_guard(&parts) {
         warn!(
@@ -819,6 +845,45 @@ pub(crate) async fn proxy_request(
             request_context_ms,
             "measured admin api keys route pre-handler timing"
         );
+    }
+    if crate::handlers::amp_proxy::is_amp_management_websocket_upgrade(
+        &request_context,
+        &parts.headers,
+    ) {
+        let headers = parts.headers.clone();
+        let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
+            Ok(ws) => ws,
+            Err(rejection) => {
+                let response = rejection.into_response();
+                return Ok(finalize_gateway_response_with_context(
+                    &state,
+                    response,
+                    &remote_addr,
+                    &request_context,
+                    EXECUTION_PATH_PUBLIC_PROXY_PASSTHROUGH,
+                    &started_at,
+                    request_permit.take(),
+                ));
+            }
+        };
+        let response = crate::handlers::amp_proxy::build_local_amp_management_websocket_response(
+            &state,
+            &request_context,
+            &headers,
+            ws,
+        )
+        .await;
+        let execution_path =
+            resolve_local_proxy_execution_path(&response, EXECUTION_PATH_PUBLIC_PROXY_PASSTHROUGH);
+        return Ok(finalize_gateway_response_with_context(
+            &state,
+            response,
+            &remote_addr,
+            &request_context,
+            execution_path,
+            &started_at,
+            request_permit.take(),
+        ));
     }
     let mut request_body = Some(body);
     let local_proxy_body = if local_proxy_route_requires_buffered_body(&request_context) {
@@ -1374,6 +1439,25 @@ pub(crate) async fn proxy_request(
                 .unwrap_or_default(),
             local_execution_failure_log
         );
+        if let Some(response) =
+            crate::handlers::amp_proxy::maybe_build_amp_provider_model_fallback_response(
+                &state,
+                &parts,
+                local_execution_runtime_miss_diagnostic.as_ref(),
+                buffered_body,
+            )
+            .await
+        {
+            return Ok(finalize_gateway_response_with_context(
+                &state,
+                response,
+                &remote_addr,
+                &request_context,
+                EXECUTION_PATH_PUBLIC_PROXY_PASSTHROUGH,
+                &started_at,
+                request_permit.take(),
+            ));
+        }
         if let Some(exhaustion) = local_execution_exhaustion {
             record_failed_usage_for_exhausted_request(
                 &state,

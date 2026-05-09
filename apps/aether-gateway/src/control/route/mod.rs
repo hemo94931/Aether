@@ -165,6 +165,8 @@ pub(crate) fn classify_control_route(
     };
 
     let public_models_auth_signature = detect_public_models_auth_signature(uri, headers);
+    let ai_public_path = canonical_amp_provider_alias_path(&normalized_path)
+        .unwrap_or_else(|| normalized_path.clone());
 
     let classified = public_support::classify_public_support_route(
         method,
@@ -174,9 +176,104 @@ pub(crate) fn classify_control_route(
     .or_else(|| oauth::classify_oauth_route(method, &normalized_path))
     .or_else(|| admin::classify_admin_route(method, &normalized_path))
     .or_else(|| internal::classify_internal_route(method, &normalized_path))
-    .or_else(|| ai::classify_ai_public_route(method, &normalized_path, headers))?;
+    .or_else(|| ai::classify_ai_public_route(method, &ai_public_path, headers))?;
 
     Some(classified.into_decision(normalized_path))
+}
+
+pub(crate) fn canonical_amp_provider_alias_path(path: &str) -> Option<String> {
+    let normalized_path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    let remainder = normalized_path.strip_prefix("/api/provider/")?;
+    let (provider, raw_provider_path) = remainder.split_once('/')?;
+    let provider = provider.trim().to_ascii_lowercase();
+    let provider_path = format!("/{}", raw_provider_path.trim_start_matches('/'));
+
+    match provider.as_str() {
+        "openai" => canonical_amp_openai_provider_path(&provider_path),
+        "anthropic" | "claude" => canonical_amp_anthropic_provider_path(&provider_path),
+        "google" | "gemini" => canonical_amp_google_provider_path(&provider_path),
+        _ => canonical_amp_openai_compatible_provider_path(&provider_path),
+    }
+}
+
+fn canonical_amp_openai_provider_path(path: &str) -> Option<String> {
+    match path {
+        "/v1/models" | "/models" => Some("/v1/models".to_string()),
+        "/v1/chat/completions" | "/chat/completions" => Some("/v1/chat/completions".to_string()),
+        "/v1/responses" | "/responses" => Some("/v1/responses".to_string()),
+        "/v1/responses/compact" | "/responses/compact" => Some("/v1/responses/compact".to_string()),
+        "/v1/embeddings" | "/embeddings" => Some("/v1/embeddings".to_string()),
+        "/v1/rerank" | "/rerank" => Some("/v1/rerank".to_string()),
+        _ => None,
+    }
+}
+
+fn canonical_amp_openai_compatible_provider_path(path: &str) -> Option<String> {
+    match path {
+        "/v1/chat/completions" | "/chat/completions" => Some("/v1/chat/completions".to_string()),
+        _ => None,
+    }
+}
+
+fn canonical_amp_anthropic_provider_path(path: &str) -> Option<String> {
+    match path {
+        "/v1/models" | "/models" => Some("/v1/models".to_string()),
+        "/v1/messages" | "/messages" => Some("/v1/messages".to_string()),
+        "/v1/messages/count_tokens" | "/messages/count_tokens" => {
+            Some("/v1/messages/count_tokens".to_string())
+        }
+        _ => None,
+    }
+}
+
+fn canonical_amp_google_provider_path(path: &str) -> Option<String> {
+    let path = canonical_amp_google_publisher_model_path(path).unwrap_or_else(|| path.to_string());
+    if path == "/models"
+        || path == "/v1/models"
+        || path == "/v1beta/models"
+        || path == "/v1beta1/models"
+    {
+        Some("/v1beta/models".to_string())
+    } else if let Some(rest) = path.strip_prefix("/v1beta1/models/") {
+        Some(format!("/v1beta/models/{rest}"))
+    } else if is_gemini_models_route(&path)
+        || is_gemini_operation_route(&path)
+        || path == "/upload/v1beta/files"
+        || path.starts_with("/v1beta/files")
+    {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn canonical_amp_google_publisher_model_path(path: &str) -> Option<String> {
+    for prefix in [
+        "/v1/publishers/google/models/",
+        "/v1beta/publishers/google/models/",
+        "/v1beta1/publishers/google/models/",
+        "/v1/models/publishers/google/models/",
+        "/v1beta/models/publishers/google/models/",
+        "/v1beta1/models/publishers/google/models/",
+    ] {
+        if let Some(suffix) = path.strip_prefix(prefix) {
+            let version = prefix
+                .strip_prefix('/')
+                .and_then(|value| value.split_once('/'))
+                .map(|(version, _)| version)?;
+            let version = if version == "v1beta1" {
+                "v1beta"
+            } else {
+                version
+            };
+            return Some(format!("/{version}/models/{suffix}"));
+        }
+    }
+    None
 }
 
 pub(super) fn detect_public_models_auth_signature(uri: &Uri, headers: &http::HeaderMap) -> String {

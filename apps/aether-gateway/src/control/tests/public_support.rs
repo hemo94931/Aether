@@ -659,6 +659,44 @@ fn classifies_auth_routes_as_public_support_route() {
 }
 
 #[test]
+fn classifies_amp_management_routes_without_hijacking_existing_auth_routes() {
+    for (method, path) in [
+        (http::Method::GET, "/api/auth/cli-login"),
+        (http::Method::GET, "/api/internal"),
+        (http::Method::POST, "/api/threads"),
+        (http::Method::GET, "/auth/callback"),
+        (http::Method::GET, "/docs"),
+    ] {
+        let headers = headers(&[]);
+        let uri: Uri = path.parse().expect("uri should parse");
+        let decision =
+            classify_control_route(&method, &uri, &headers).expect("route should classify");
+
+        assert_eq!(decision.route_class.as_deref(), Some("public_support"));
+        assert_eq!(decision.route_family.as_deref(), Some("amp_proxy"));
+        assert_eq!(decision.route_kind.as_deref(), Some("management"));
+        assert_eq!(
+            decision.auth_endpoint_signature.as_deref(),
+            Some("openai:chat")
+        );
+        assert!(!decision.is_execution_runtime_candidate());
+    }
+
+    let headers = headers(&[]);
+    let login_uri: Uri = "/api/auth/login".parse().expect("uri should parse");
+    let login_decision = classify_control_route(&http::Method::POST, &login_uri, &headers)
+        .expect("route should classify");
+    assert_eq!(login_decision.route_family.as_deref(), Some("auth"));
+
+    let oauth_uri: Uri = "/api/user/oauth/bindable-providers"
+        .parse()
+        .expect("uri should parse");
+    let oauth_decision = classify_control_route(&http::Method::GET, &oauth_uri, &headers)
+        .expect("route should classify");
+    assert_eq!(oauth_decision.route_family.as_deref(), Some("oauth"));
+}
+
+#[test]
 fn classifies_oauth_public_providers_route() {
     let headers = headers(&[]);
     let uri: Uri = "/api/oauth/providers".parse().expect("uri should parse");

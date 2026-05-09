@@ -2,7 +2,10 @@ use axum::routing::{any, post};
 use axum::Router;
 
 use super::{claude, doubao, gemini, jina, openai};
-use crate::{handlers::proxy::proxy_request, state::AppState};
+use crate::{
+    handlers::amp_proxy::amp_provider_proxy_request, handlers::proxy::proxy_request,
+    state::AppState,
+};
 
 // Router registration patterns live here so AI public ingress has a single mount registry.
 // They intentionally stay separate from manifest-facing route inventories in constants.rs,
@@ -33,6 +36,10 @@ const AI_ANY_ROUTE_PATTERNS: &[&str] = &[
 ];
 
 pub(crate) fn mount_ai_routes(mut router: Router<AppState>) -> Router<AppState> {
+    router = router.route(
+        "/api/provider/{provider}/{*amp_provider_path}",
+        any(amp_provider_proxy_request),
+    );
     for path in AI_POST_ROUTE_PATTERNS {
         router = router.route(path, post(proxy_request));
     }

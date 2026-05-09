@@ -103,6 +103,18 @@ pub(crate) const ADMIN_MODULE_DEFINITIONS: &[AdminModuleDefinition] = &[
         admin_menu_group: Some("system"),
         admin_menu_order: 60,
     },
+    AdminModuleDefinition {
+        name: "amp_proxy",
+        display_name: "AMP 代理",
+        description: "为 Amp CLI/IDE 提供 Provider API 别名与上游控制面代理",
+        category: "integration",
+        env_key: "AMP_PROXY_AVAILABLE",
+        default_available: true,
+        admin_route: Some("/admin/amp-proxy"),
+        admin_menu_icon: Some("Server"),
+        admin_menu_group: Some("system"),
+        admin_menu_order: 61,
+    },
 ];
 
 #[derive(Debug, Clone, serde::Deserialize)]

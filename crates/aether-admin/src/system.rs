@@ -1024,7 +1024,7 @@ pub fn build_admin_module_validation_result(
                 )
             }
         }
-        "management_tokens" | "model_directives" | "proxy_nodes" => (true, None),
+        "management_tokens" | "model_directives" | "amp_proxy" | "proxy_nodes" => (true, None),
         _ => (true, None),
     }
 }
@@ -1034,7 +1034,7 @@ pub fn build_admin_module_health(
     gemini_files_has_capable_key: bool,
 ) -> &'static str {
     match module_name {
-        "management_tokens" | "model_directives" | "proxy_nodes" => "healthy",
+        "management_tokens" | "model_directives" | "amp_proxy" | "proxy_nodes" => "healthy",
         "gemini_files" => {
             if gemini_files_has_capable_key {
                 "healthy"
@@ -1326,6 +1326,13 @@ pub fn admin_system_config_default_value(key: &str) -> Option<serde_json::Value>
                     }
                 }
             }
+        })),
+        "amp_proxy" => Some(json!({
+            "upstream_url": "https://ampcode.com",
+            "upstream_api_key": "",
+            "upstream_api_keys": [],
+            "fallback_to_upstream_on_model_miss": false,
+            "force_legacy_worker_runtime": false
         })),
         "keep_priority_on_conversion" => Some(json!(false)),
         "audit_log_retention_days" => Some(json!(30)),

@@ -452,7 +452,7 @@ pub(crate) fn public_support_local_requires_buffered_body(
                     Some("payment_callback"),
                     http::Method::POST,
                     Some("callback"),
-                )
+                ) | (Some("amp_proxy"), _, Some("management"),)
             )
         })
 }

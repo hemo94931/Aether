@@ -22,7 +22,9 @@ pub(crate) use management_token_permissions::{
 pub(crate) use public::{resolve_public_request_context, GatewayPublicRequestContext};
 #[cfg(test)]
 pub(crate) use route::classify_control_route;
-pub(crate) use route::{resolve_control_route, GatewayControlDecision};
+pub(crate) use route::{
+    canonical_amp_provider_alias_path, resolve_control_route, GatewayControlDecision,
+};
 
 #[cfg(test)]
 mod tests;

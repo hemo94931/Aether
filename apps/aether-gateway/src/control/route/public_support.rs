@@ -19,6 +19,42 @@ fn has_single_nested_suffix_after_prefix(path: &str, prefix: &str, suffix: &str)
     !segment.is_empty() && !segment.contains('/') && actual_suffix == suffix
 }
 
+fn is_amp_management_route(path: &str) -> bool {
+    let normalized = path.trim_end_matches('/');
+    matches!(
+        normalized,
+        "/api/auth"
+            | "/api/internal"
+            | "/auth"
+            | "/api/user"
+            | "/api/meta"
+            | "/api/ads"
+            | "/api/threads"
+            | "/threads"
+            | "/api/thread-actors"
+            | "/api/telemetry"
+            | "/api/otel"
+            | "/api/tab"
+            | "/docs"
+            | "/settings"
+            | "/threads.rss"
+            | "/news.rss"
+    ) || normalized.starts_with("/api/auth/")
+        || normalized.starts_with("/api/internal/")
+        || normalized.starts_with("/auth/")
+        || (normalized.starts_with("/api/user/") && !normalized.starts_with("/api/user/oauth/"))
+        || normalized.starts_with("/api/meta/")
+        || normalized.starts_with("/api/ads/")
+        || normalized.starts_with("/api/threads/")
+        || normalized.starts_with("/threads/")
+        || normalized.starts_with("/api/thread-actors/")
+        || normalized.starts_with("/api/telemetry/")
+        || normalized.starts_with("/api/otel/")
+        || normalized.starts_with("/api/tab/")
+        || normalized.starts_with("/docs/")
+        || normalized.starts_with("/settings/")
+}
+
 pub(super) fn classify_public_support_route(
     method: &http::Method,
     normalized_path: &str,
@@ -665,6 +701,14 @@ pub(super) fn classify_public_support_route(
             "system_catalog",
             "test_connection",
             "public:system_catalog",
+            false,
+        ))
+    } else if is_amp_management_route(normalized_path) {
+        Some(classified(
+            "public_support",
+            "amp_proxy",
+            "management",
+            "openai:chat",
             false,
         ))
     } else {

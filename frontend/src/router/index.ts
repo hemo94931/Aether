@@ -227,6 +227,12 @@ const routes: RouteRecordRaw[] = [
         meta: { module: 'model_directives' }
       },
       {
+        path: 'amp-proxy',
+        name: 'AmpProxySettings',
+        component: () => importWithRetry(() => import('@/views/admin/AmpProxySettings.vue')),
+        meta: { module: 'amp_proxy' }
+      },
+      {
         path: 'email',
         name: 'EmailSettings',
         component: () => importWithRetry(() => import('@/views/admin/EmailSettings.vue'))

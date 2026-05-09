@@ -1,5 +1,7 @@
 use http::Uri;
 
+use crate::control::canonical_amp_provider_alias_path;
+
 use super::{classify_control_route, headers};
 
 #[test]
@@ -213,4 +215,66 @@ fn classifies_gemini_predict_long_running_as_video_route() {
         Some("gemini:video")
     );
     assert!(decision.is_execution_runtime_candidate());
+}
+
+#[test]
+fn classifies_amp_provider_aliases_as_existing_ai_routes() {
+    let headers = headers(&[("x-api-key", "sk-client")]);
+    for (path, family, kind, signature) in [
+        (
+            "/api/provider/openai/v1/chat/completions",
+            "openai",
+            "chat",
+            "openai:chat",
+        ),
+        (
+            "/api/provider/openai/v1/responses",
+            "openai",
+            "responses",
+            "openai:responses",
+        ),
+        (
+            "/api/provider/anthropic/v1/messages",
+            "claude",
+            "messages",
+            "claude:messages",
+        ),
+        (
+            "/api/provider/google/v1beta1/publishers/google/models/gemini-2.5-pro:generateContent",
+            "gemini",
+            "generate_content",
+            "gemini:generate_content",
+        ),
+    ] {
+        let uri: Uri = path.parse().expect("uri should parse");
+        let decision = classify_control_route(&http::Method::POST, &uri, &headers)
+            .expect("amp alias route should classify");
+
+        assert_eq!(decision.route_family.as_deref(), Some(family), "{path}");
+        assert_eq!(decision.route_kind.as_deref(), Some(kind), "{path}");
+        assert_eq!(
+            decision.auth_endpoint_signature.as_deref(),
+            Some(signature),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn canonicalizes_amp_provider_alias_paths_for_local_execution() {
+    assert_eq!(
+        canonical_amp_provider_alias_path("/api/provider/openai/v1/chat/completions").as_deref(),
+        Some("/v1/chat/completions")
+    );
+    assert_eq!(
+        canonical_amp_provider_alias_path(
+            "/api/provider/google/v1beta1/publishers/google/models/gemini-2.5-pro:streamGenerateContent"
+        )
+        .as_deref(),
+        Some("/v1beta/models/gemini-2.5-pro:streamGenerateContent")
+    );
+    assert_eq!(
+        canonical_amp_provider_alias_path("/api/provider/custom/chat/completions").as_deref(),
+        Some("/v1/chat/completions")
+    );
 }

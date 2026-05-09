@@ -52,6 +52,7 @@ sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 tokio-util.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "compression-gzip", "set-header"] }

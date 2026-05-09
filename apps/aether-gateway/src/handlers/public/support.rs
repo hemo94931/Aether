@@ -6,6 +6,7 @@ use super::{
     PUBLIC_CAPABILITY_DEFINITIONS,
 };
 use crate::control::GatewayPublicRequestContext;
+use crate::handlers::amp_proxy::maybe_build_local_amp_management_proxy_response;
 use crate::handlers::shared::{
     decrypt_catalog_secret_with_fallbacks, encrypt_catalog_secret_with_fallbacks,
     escape_admin_email_template_html, module_available_from_env, query_param_bool,
@@ -102,6 +103,16 @@ pub(crate) async fn maybe_build_local_public_support_response(
     let decision = request_context.control_decision.as_ref()?;
     if decision.route_class.as_deref() != Some("public_support") {
         return None;
+    }
+
+    if decision.route_family.as_deref() == Some("amp_proxy") {
+        return maybe_build_local_amp_management_proxy_response(
+            state,
+            request_context,
+            headers,
+            request_body,
+        )
+        .await;
     }
 
     if decision.route_family.as_deref() == Some("auth") {
