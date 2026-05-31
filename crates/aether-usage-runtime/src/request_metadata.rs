@@ -137,6 +137,7 @@ fn copy_allowed_metadata_fields(source: &Map<String, Value>, target: &mut Map<St
     copy_non_null_value(source, target, "billing_rule_snapshot");
     copy_non_null_value(source, target, "scheduling_audit");
     copy_non_null_value(source, target, "tls_fingerprint");
+    copy_gateway_ingress_metadata(source, target);
     copy_number(source, target, "rate_multiplier");
     copy_bool(source, target, "is_free_tier");
     copy_number(source, target, "input_price_per_1m");
@@ -179,6 +180,7 @@ fn move_allowed_metadata_fields(mut source: Map<String, Value>, target: &mut Map
     remove_non_null_value(&mut source, target, "billing_rule_snapshot");
     remove_non_null_value(&mut source, target, "scheduling_audit");
     remove_non_null_value(&mut source, target, "tls_fingerprint");
+    remove_gateway_ingress_metadata(&mut source, target);
     remove_number(&mut source, target, "rate_multiplier");
     remove_bool(&mut source, target, "is_free_tier");
     remove_number(&mut source, target, "input_price_per_1m");
@@ -188,6 +190,69 @@ fn move_allowed_metadata_fields(mut source: Map<String, Value>, target: &mut Map
     remove_number(&mut source, target, "price_per_request");
     remove_non_null_value(&mut source, target, "proxy");
     sanitize_request_path_metadata_fields(target);
+}
+
+fn copy_gateway_ingress_metadata(source: &Map<String, Value>, target: &mut Map<String, Value>) {
+    let Some(source) = source.get("gateway_ingress").and_then(Value::as_object) else {
+        return;
+    };
+
+    let mut gateway_ingress = Map::new();
+    copy_bool(source, &mut gateway_ingress, "ingress_error");
+    copy_non_empty_string(source, &mut gateway_ingress, "stage");
+    copy_non_empty_string(source, &mut gateway_ingress, "reason");
+    copy_non_empty_string(source, &mut gateway_ingress, "phase");
+    copy_non_empty_string(source, &mut gateway_ingress, "request_method");
+    copy_non_empty_string(source, &mut gateway_ingress, "request_content_type");
+    copy_number(source, &mut gateway_ingress, "bytes_read");
+    copy_number(source, &mut gateway_ingress, "content_length");
+    copy_number(source, &mut gateway_ingress, "bytes_remaining");
+    copy_number(source, &mut gateway_ingress, "read_elapsed_ms");
+    copy_number(source, &mut gateway_ingress, "read_timeout_ms");
+    copy_number(source, &mut gateway_ingress, "upload_bytes_per_sec");
+    copy_non_empty_string(source, &mut gateway_ingress, "request_body_capture_state");
+
+    if !gateway_ingress.is_empty() {
+        target.insert(
+            "gateway_ingress".to_string(),
+            Value::Object(gateway_ingress),
+        );
+    }
+}
+
+fn remove_gateway_ingress_metadata(
+    source: &mut Map<String, Value>,
+    target: &mut Map<String, Value>,
+) {
+    let Some(Value::Object(mut source)) = source.remove("gateway_ingress") else {
+        return;
+    };
+
+    let mut gateway_ingress = Map::new();
+    remove_bool(&mut source, &mut gateway_ingress, "ingress_error");
+    remove_non_empty_string(&mut source, &mut gateway_ingress, "stage");
+    remove_non_empty_string(&mut source, &mut gateway_ingress, "reason");
+    remove_non_empty_string(&mut source, &mut gateway_ingress, "phase");
+    remove_non_empty_string(&mut source, &mut gateway_ingress, "request_method");
+    remove_non_empty_string(&mut source, &mut gateway_ingress, "request_content_type");
+    remove_number(&mut source, &mut gateway_ingress, "bytes_read");
+    remove_number(&mut source, &mut gateway_ingress, "content_length");
+    remove_number(&mut source, &mut gateway_ingress, "bytes_remaining");
+    remove_number(&mut source, &mut gateway_ingress, "read_elapsed_ms");
+    remove_number(&mut source, &mut gateway_ingress, "read_timeout_ms");
+    remove_number(&mut source, &mut gateway_ingress, "upload_bytes_per_sec");
+    remove_non_empty_string(
+        &mut source,
+        &mut gateway_ingress,
+        "request_body_capture_state",
+    );
+
+    if !gateway_ingress.is_empty() {
+        target.insert(
+            "gateway_ingress".to_string(),
+            Value::Object(gateway_ingress),
+        );
+    }
 }
 
 fn sanitize_request_path_metadata_fields(target: &mut Map<String, Value>) {
@@ -538,6 +603,56 @@ mod tests {
                 "cache_creation_price_per_1m": 3.75,
                 "cache_read_price_per_1m": 0.3,
                 "price_per_request": 0.02
+            })
+        );
+    }
+
+    #[test]
+    fn sanitizes_request_metadata_preserves_gateway_ingress_diagnostics() {
+        let metadata = sanitize_usage_request_metadata(Some(json!({
+            "trace_id": "trace-timeout",
+            "request_path": "/v1/responses",
+            "gateway_ingress": {
+                "ingress_error": true,
+                "stage": "request_body_buffer",
+                "reason": "request_body_read_timeout",
+                "phase": "auth_execution",
+                "request_method": "POST",
+                "bytes_read": 12345,
+                "content_length": 579064,
+                "bytes_remaining": 566719,
+                "read_elapsed_ms": 120000,
+                "read_timeout_ms": 120000,
+                "upload_bytes_per_sec": 102,
+                "request_body_capture_state": "incomplete",
+                "authorization": "Bearer secret"
+            },
+            "ingress_error": true,
+            "bytes_read": 999999,
+            "authorization": "Bearer secret"
+        })))
+        .expect("metadata should remain");
+
+        assert_eq!(
+            metadata,
+            json!({
+                "trace_id": "trace-timeout",
+                "request_path": "/v1/responses",
+                "request_path_and_query": "/v1/responses",
+                "gateway_ingress": {
+                    "ingress_error": true,
+                    "stage": "request_body_buffer",
+                    "reason": "request_body_read_timeout",
+                    "phase": "auth_execution",
+                    "request_method": "POST",
+                    "bytes_read": 12345,
+                    "content_length": 579064,
+                    "bytes_remaining": 566719,
+                    "read_elapsed_ms": 120000,
+                    "read_timeout_ms": 120000,
+                    "upload_bytes_per_sec": 102,
+                    "request_body_capture_state": "incomplete"
+                }
             })
         );
     }

@@ -51,7 +51,7 @@ use crate::handlers::shared::{
     should_strip_forwarded_provider_credential_header, should_strip_forwarded_trusted_admin_header,
 };
 use crate::headers::{
-    extract_or_generate_trace_id, request_origin_from_headers_and_remote_addr,
+    extract_or_generate_trace_id, header_value_u64, request_origin_from_headers_and_remote_addr,
     should_skip_request_header, RequestBodyNormalizationError,
 };
 use crate::router::RequestAdmissionError;
@@ -68,10 +68,11 @@ use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{self, header::HeaderName, header::HeaderValue, Response};
 use futures_util::StreamExt;
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    error::Error as StdError,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 use tracing::{debug, info, warn};
@@ -98,7 +99,7 @@ const LOCAL_EXECUTION_LOOP_DETECTED_DETAIL: &str =
 const AUTH_API_KEY_CONCURRENCY_LIMIT_REACHED_DETAIL: &str =
     "当前调用方 API Key 并发请求数已达上限，请稍后重试";
 const REQUEST_BODY_READ_TIMEOUT_DETAIL: &str =
-    "Request body read timed out before the gateway could route the request";
+    "Request body upload was too slow or incomplete; the gateway timed out while reading the request body before routing it. This is an upload/connection timeout, not a model inference timeout. Please retry on a stable network or reduce the request size.";
 const REQUEST_BODY_READ_FAILED_DETAIL: &str = "Failed to read request body";
 const LOCAL_EXECUTION_PLANNING_TIMEOUT_DETAIL: &str =
     "当前 AI 请求在本地执行规划阶段超时，请稍后重试";
@@ -129,18 +130,78 @@ impl RequestBodyBufferPolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RequestBodyBufferReadMetrics {
+    bytes_read: u64,
+    content_length: Option<u64>,
+    elapsed_ms: u64,
+    phase: &'static str,
+}
+
+impl RequestBodyBufferReadMetrics {
+    fn new(
+        phase: &'static str,
+        content_length: Option<u64>,
+        bytes_read: u64,
+        elapsed_ms: u64,
+    ) -> Self {
+        Self {
+            bytes_read,
+            content_length,
+            elapsed_ms,
+            phase,
+        }
+    }
+
+    fn initial(phase: &'static str, content_length: Option<u64>) -> Self {
+        Self::new(phase, content_length, 0, 0)
+    }
+
+    fn upload_bytes_per_sec(&self) -> u64 {
+        if self.elapsed_ms == 0 {
+            return self.bytes_read;
+        }
+        self.bytes_read.saturating_mul(1000) / self.elapsed_ms.max(1)
+    }
+
+    fn content_length_for_log(&self) -> i64 {
+        self.content_length
+            .and_then(|value| i64::try_from(value).ok())
+            .unwrap_or(-1)
+    }
+
+    fn bytes_remaining_for_log(&self) -> i64 {
+        self.content_length
+            .map(|value| value.saturating_sub(self.bytes_read))
+            .and_then(|value| i64::try_from(value).ok())
+            .unwrap_or(-1)
+    }
+}
+
 #[derive(Debug)]
 enum RequestBodyBufferError {
-    Normalization(RequestBodyNormalizationError),
-    TooLarge { limit_bytes: u64 },
-    Timeout { timeout_ms: u64 },
-    ReadFailed { message: String },
+    Normalization {
+        error: RequestBodyNormalizationError,
+        metrics: RequestBodyBufferReadMetrics,
+    },
+    TooLarge {
+        limit_bytes: u64,
+        metrics: RequestBodyBufferReadMetrics,
+    },
+    Timeout {
+        timeout_ms: u64,
+        metrics: RequestBodyBufferReadMetrics,
+    },
+    ReadFailed {
+        message: String,
+        metrics: RequestBodyBufferReadMetrics,
+    },
 }
 
 impl RequestBodyBufferError {
     fn http_status(&self) -> http::StatusCode {
         match self {
-            Self::Normalization(error) => error.http_status(),
+            Self::Normalization { error, .. } => error.http_status(),
             Self::TooLarge { .. } => http::StatusCode::PAYLOAD_TOO_LARGE,
             Self::Timeout { .. } => http::StatusCode::REQUEST_TIMEOUT,
             Self::ReadFailed { .. } => http::StatusCode::BAD_REQUEST,
@@ -149,8 +210,10 @@ impl RequestBodyBufferError {
 
     fn client_message(&self) -> String {
         match self {
-            Self::Normalization(error) => error.client_message(),
-            Self::TooLarge { limit_bytes } => format!("Request body exceeds {limit_bytes} bytes"),
+            Self::Normalization { error, .. } => error.client_message(),
+            Self::TooLarge { limit_bytes, .. } => {
+                format!("Request body exceeds {limit_bytes} bytes")
+            }
             Self::Timeout { .. } => REQUEST_BODY_READ_TIMEOUT_DETAIL.to_string(),
             Self::ReadFailed { .. } => REQUEST_BODY_READ_FAILED_DETAIL.to_string(),
         }
@@ -158,7 +221,7 @@ impl RequestBodyBufferError {
 
     fn reason(&self) -> &'static str {
         match self {
-            Self::Normalization(error) => match error {
+            Self::Normalization { error, .. } => match error {
                 RequestBodyNormalizationError::UnsupportedContentEncoding(_) => {
                     "unsupported_content_encoding"
                 }
@@ -175,6 +238,22 @@ impl RequestBodyBufferError {
             Self::ReadFailed { .. } => "request_body_read_failed",
         }
     }
+
+    fn metrics(&self) -> RequestBodyBufferReadMetrics {
+        match self {
+            Self::Normalization { metrics, .. }
+            | Self::TooLarge { metrics, .. }
+            | Self::Timeout { metrics, .. }
+            | Self::ReadFailed { metrics, .. } => *metrics,
+        }
+    }
+
+    fn timeout_ms(&self) -> Option<u64> {
+        match self {
+            Self::Timeout { timeout_ms, .. } => Some(*timeout_ms),
+            _ => None,
+        }
+    }
 }
 
 async fn buffer_and_normalize_request_body(
@@ -187,10 +266,14 @@ async fn buffer_and_normalize_request_body(
     phase: &'static str,
     policy: RequestBodyBufferPolicy,
 ) -> Result<Bytes, RequestBodyBufferError> {
-    if let Err(err) =
+    let content_length = header_value_u64(headers, http::header::CONTENT_LENGTH.as_str());
+    if let Err(error) =
         crate::headers::check_request_content_length_with_limit(headers, policy.max_bytes)
     {
-        return Err(RequestBodyBufferError::Normalization(err));
+        return Err(RequestBodyBufferError::Normalization {
+            error,
+            metrics: RequestBodyBufferReadMetrics::initial(phase, content_length),
+        });
     }
 
     let read_started_at = Instant::now();
@@ -204,41 +287,75 @@ async fn buffer_and_normalize_request_body(
         phase,
         max_body_bytes = policy.max_bytes,
         timeout_ms,
+        content_length = content_length
+            .and_then(|value| i64::try_from(value).ok())
+            .unwrap_or(-1),
         "gateway started buffering request body"
     );
 
     let body_limit = usize::try_from(policy.max_bytes).unwrap_or(usize::MAX);
+    let bytes_read = AtomicU64::new(0);
     let body = match tokio::time::timeout(
         policy.read_timeout,
-        to_bytes(
+        collect_request_body_bytes_with_limit(
             request_body.take().expect(body_owner_expectation),
             body_limit,
+            &bytes_read,
         ),
     )
     .await
     {
         Ok(Ok(body)) => body,
-        Ok(Err(err)) if request_body_collection_exceeded_limit(&err) => {
+        Ok(Err(RequestBodyCollectionError::TooLarge)) => {
             return Err(RequestBodyBufferError::TooLarge {
                 limit_bytes: policy.max_bytes,
+                metrics: request_body_buffer_metrics(
+                    phase,
+                    content_length,
+                    &bytes_read,
+                    read_started_at,
+                ),
             });
         }
-        Ok(Err(err)) => {
+        Ok(Err(RequestBodyCollectionError::ReadFailed { message })) => {
             return Err(RequestBodyBufferError::ReadFailed {
-                message: err.to_string(),
+                message,
+                metrics: request_body_buffer_metrics(
+                    phase,
+                    content_length,
+                    &bytes_read,
+                    read_started_at,
+                ),
             });
         }
         Err(_) => {
-            return Err(RequestBodyBufferError::Timeout { timeout_ms });
+            return Err(RequestBodyBufferError::Timeout {
+                timeout_ms,
+                metrics: request_body_buffer_metrics(
+                    phase,
+                    content_length,
+                    &bytes_read,
+                    read_started_at,
+                ),
+            });
         }
     };
 
+    let raw_body_bytes = body.len();
+    bytes_read.store(
+        u64::try_from(raw_body_bytes).unwrap_or(u64::MAX),
+        Ordering::Relaxed,
+    );
     let normalized = crate::headers::normalize_request_body_headers_and_bytes_with_limit(
         headers,
         body,
         policy.max_bytes,
     )
-    .map_err(RequestBodyBufferError::Normalization)?;
+    .map_err(|error| RequestBodyBufferError::Normalization {
+        error,
+        metrics: request_body_buffer_metrics(phase, content_length, &bytes_read, read_started_at),
+    })?;
+    let metrics = request_body_buffer_metrics(phase, content_length, &bytes_read, read_started_at);
     info!(
         event_name = "frontdoor_request_body_buffer_completed",
         log_type = "event",
@@ -247,21 +364,67 @@ async fn buffer_and_normalize_request_body(
         path = %path_and_query,
         phase,
         body_bytes = normalized.len(),
-        elapsed_ms = read_started_at.elapsed().as_millis() as u64,
+        raw_body_bytes,
+        bytes_read = metrics.bytes_read,
+        content_length = metrics.content_length_for_log(),
+        upload_bytes_per_sec = metrics.upload_bytes_per_sec(),
+        elapsed_ms = metrics.elapsed_ms,
         "gateway completed request body buffering"
     );
     Ok(normalized)
 }
 
-fn request_body_collection_exceeded_limit(error: &(dyn StdError + 'static)) -> bool {
-    let mut current = Some(error);
-    while let Some(error) = current {
-        if error.to_string().contains("length limit exceeded") {
-            return true;
+#[derive(Debug)]
+enum RequestBodyCollectionError {
+    TooLarge,
+    ReadFailed { message: String },
+}
+
+async fn collect_request_body_bytes_with_limit(
+    body: Body,
+    body_limit: usize,
+    bytes_read: &AtomicU64,
+) -> Result<Bytes, RequestBodyCollectionError> {
+    let mut stream = body.into_data_stream();
+    let mut collected = Vec::<u8>::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|err| RequestBodyCollectionError::ReadFailed {
+            message: err.to_string(),
+        })?;
+        let new_len = collected
+            .len()
+            .checked_add(chunk.len())
+            .ok_or(RequestBodyCollectionError::TooLarge)?;
+        if new_len > body_limit {
+            bytes_read.store(
+                u64::try_from(new_len).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
+            return Err(RequestBodyCollectionError::TooLarge);
         }
-        current = error.source();
+        collected.extend_from_slice(chunk.as_ref());
+        bytes_read.store(
+            u64::try_from(new_len).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
     }
-    false
+
+    Ok(Bytes::from(collected))
+}
+
+fn request_body_buffer_metrics(
+    phase: &'static str,
+    content_length: Option<u64>,
+    bytes_read: &AtomicU64,
+    read_started_at: Instant,
+) -> RequestBodyBufferReadMetrics {
+    RequestBodyBufferReadMetrics::new(
+        phase,
+        content_length,
+        bytes_read.load(Ordering::Relaxed),
+        read_started_at.elapsed().as_millis() as u64,
+    )
 }
 
 fn build_request_body_buffer_error_response(
@@ -269,17 +432,25 @@ fn build_request_body_buffer_error_response(
     request_context: &GatewayPublicRequestContext,
     error: &RequestBodyBufferError,
 ) -> Result<Response<Body>, GatewayError> {
+    let metrics = error.metrics();
     warn!(
         event_name = "frontdoor_request_body_buffer_failed",
         log_type = "ops",
         trace_id,
         method = %request_context.request_method,
         path = %request_context.request_path_and_query(),
+        phase = metrics.phase,
         status_code = error.http_status().as_u16(),
         reason = error.reason(),
         detail = %error.client_message(),
+        bytes_read = metrics.bytes_read,
+        content_length = metrics.content_length_for_log(),
+        bytes_remaining = metrics.bytes_remaining_for_log(),
+        read_elapsed_ms = metrics.elapsed_ms,
+        read_timeout_ms = error.timeout_ms().unwrap_or_default(),
+        upload_bytes_per_sec = metrics.upload_bytes_per_sec(),
         read_error = match error {
-            RequestBodyBufferError::ReadFailed { message } => message.as_str(),
+            RequestBodyBufferError::ReadFailed { message, .. } => message.as_str(),
             _ => "",
         },
         "gateway rejected request body before local execution planning"
@@ -292,15 +463,26 @@ fn build_request_body_buffer_error_response(
     )
 }
 
-fn finalize_request_body_buffer_rejection(
+async fn finalize_request_body_buffer_rejection(
     state: &AppState,
     request_context: &GatewayPublicRequestContext,
+    request_headers: &http::HeaderMap,
     remote_addr: &std::net::SocketAddr,
     started_at: &std::time::Instant,
     trace_id: &str,
     request_permit: Option<aether_runtime::AdmissionPermit>,
     error: &RequestBodyBufferError,
 ) -> Result<Response<Body>, GatewayError> {
+    record_request_body_buffer_rejection_usage(
+        state,
+        request_context,
+        request_headers,
+        started_at,
+        trace_id,
+        EXECUTION_PATH_LOCAL_INVALID_REQUEST,
+        error,
+    )
+    .await;
     let response = build_request_body_buffer_error_response(trace_id, request_context, error)?;
     Ok(finalize_gateway_response_with_context(
         state,
@@ -311,6 +493,232 @@ fn finalize_request_body_buffer_rejection(
         started_at,
         request_permit,
     ))
+}
+
+async fn record_request_body_buffer_rejection_usage(
+    state: &AppState,
+    request_context: &GatewayPublicRequestContext,
+    request_headers: &http::HeaderMap,
+    started_at: &std::time::Instant,
+    trace_id: &str,
+    execution_path: &str,
+    error: &RequestBodyBufferError,
+) {
+    if !state.usage_runtime.is_enabled() || error.http_status() != http::StatusCode::REQUEST_TIMEOUT
+    {
+        return;
+    }
+
+    let data = build_request_body_buffer_rejection_usage_data(
+        request_context,
+        request_headers,
+        started_at,
+        execution_path,
+        error,
+    );
+    state
+        .usage_runtime
+        .record_terminal_event_direct(
+            state.data.as_ref(),
+            crate::usage::UsageEvent::new(crate::usage::UsageEventType::Failed, trace_id, data),
+        )
+        .await;
+}
+
+fn build_request_body_buffer_rejection_usage_data(
+    request_context: &GatewayPublicRequestContext,
+    request_headers: &http::HeaderMap,
+    started_at: &std::time::Instant,
+    execution_path: &str,
+    error: &RequestBodyBufferError,
+) -> crate::usage::UsageEventData {
+    let status_code = error.http_status().as_u16();
+    let client_message = error.client_message();
+    let client_body = json!({
+        "error": {
+            "type": "http_error",
+            "message": client_message,
+        }
+    });
+    let decision = request_context.control_decision.as_ref();
+    let auth_context = decision.and_then(|value| value.auth_context.as_ref());
+    let api_format =
+        trimmed_non_empty(decision.and_then(|value| value.auth_endpoint_signature.as_deref()));
+    let route_family = trimmed_non_empty(decision.and_then(|value| value.route_family.as_deref()));
+    let route_kind = trimmed_non_empty(decision.and_then(|value| value.route_kind.as_deref()));
+
+    crate::usage::UsageEventData {
+        user_id: auth_context.map(|value| value.user_id.clone()),
+        api_key_id: auth_context.map(|value| value.api_key_id.clone()),
+        username: auth_context.and_then(|value| value.username.clone()),
+        api_key_name: auth_context.and_then(|value| value.api_key_name.clone()),
+        provider_name: "gateway".to_string(),
+        model: "unknown".to_string(),
+        request_type: Some(infer_request_type(api_format.as_deref())),
+        api_format: api_format.clone(),
+        api_family: api_format
+            .as_deref()
+            .and_then(infer_api_family)
+            .map(ToOwned::to_owned),
+        endpoint_kind: api_format
+            .as_deref()
+            .and_then(infer_endpoint_kind)
+            .map(ToOwned::to_owned),
+        endpoint_api_format: api_format.clone(),
+        provider_api_family: api_format
+            .as_deref()
+            .and_then(infer_api_family)
+            .map(ToOwned::to_owned),
+        provider_endpoint_kind: api_format
+            .as_deref()
+            .and_then(infer_endpoint_kind)
+            .map(ToOwned::to_owned),
+        status_code: Some(status_code),
+        error_message: Some(client_message),
+        error_category: Some("client_error".to_string()),
+        response_time_ms: Some(started_at.elapsed().as_millis() as u64),
+        request_headers: Some(request_body_buffer_original_headers_json(request_headers)),
+        request_body_state: Some(
+            aether_data_contracts::repository::usage::UsageBodyCaptureState::Unavailable,
+        ),
+        response_headers: Some(local_json_headers_value()),
+        response_body: Some(client_body.clone()),
+        client_response_headers: Some(local_json_headers_value()),
+        client_response_body: Some(client_body),
+        route_family,
+        route_kind,
+        execution_path: Some(execution_path.to_string()),
+        request_metadata: Some(Value::Object(request_body_buffer_rejection_metadata(
+            request_context,
+            error,
+        ))),
+        ..crate::usage::UsageEventData::default()
+    }
+}
+
+fn request_body_buffer_rejection_metadata(
+    request_context: &GatewayPublicRequestContext,
+    error: &RequestBodyBufferError,
+) -> Map<String, Value> {
+    let metrics = error.metrics();
+    let mut metadata = Map::from_iter([
+        (
+            "trace_id".to_string(),
+            Value::String(request_context.trace_id.clone()),
+        ),
+        (
+            "request_path".to_string(),
+            Value::String(request_context.request_path.clone()),
+        ),
+        (
+            "request_path_and_query".to_string(),
+            Value::String(request_context.request_path_and_query()),
+        ),
+        (
+            "gateway_ingress".to_string(),
+            json!({
+                "ingress_error": true,
+                "stage": "request_body_buffer",
+                "reason": error.reason(),
+                "phase": metrics.phase,
+                "request_method": request_context.request_method.as_str(),
+                "request_content_type": request_context.request_content_type.as_deref(),
+                "bytes_read": metrics.bytes_read,
+                "content_length": metrics.content_length,
+                "bytes_remaining": metrics.content_length.map(|value| value.saturating_sub(metrics.bytes_read)),
+                "read_elapsed_ms": metrics.elapsed_ms,
+                "read_timeout_ms": error.timeout_ms(),
+                "upload_bytes_per_sec": metrics.upload_bytes_per_sec(),
+                "request_body_capture_state": "incomplete",
+            }),
+        ),
+    ]);
+    if let Some(query) = request_context
+        .request_query_string
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        metadata.insert(
+            "request_query_string".to_string(),
+            Value::String(query.to_string()),
+        );
+    }
+    metadata
+}
+
+fn request_body_buffer_original_headers_json(headers: &http::HeaderMap) -> Value {
+    let mut headers = crate::headers::collect_control_headers(headers);
+    for (name, value) in headers.iter_mut() {
+        if request_body_buffer_sensitive_header(name) {
+            *value = request_body_buffer_mask_header_value(value);
+        }
+    }
+    serde_json::to_value(headers).unwrap_or_else(|_| json!({}))
+}
+
+fn request_body_buffer_sensitive_header(name: &str) -> bool {
+    const SENSITIVE_HEADERS: &[&str] = &[
+        "authorization",
+        "x-api-key",
+        "api-key",
+        "x-goog-api-key",
+        "cookie",
+        "set-cookie",
+        "proxy-authorization",
+    ];
+
+    SENSITIVE_HEADERS
+        .iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
+}
+
+fn request_body_buffer_mask_header_value(value: &str) -> String {
+    let value = value.trim();
+    let char_count = value.chars().count();
+    if char_count <= 8 {
+        return "****".to_string();
+    }
+
+    let prefix: String = value.chars().take(4).collect();
+    let suffix: String = value
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{prefix}****{suffix}")
+}
+
+fn local_json_headers_value() -> Value {
+    Value::Object(Map::from_iter([(
+        "content-type".to_string(),
+        Value::String("application/json".to_string()),
+    )]))
+}
+
+fn infer_request_type(api_format: Option<&str>) -> String {
+    match infer_endpoint_kind(api_format.unwrap_or_default()) {
+        Some("video") => "video".to_string(),
+        Some("image") => "image".to_string(),
+        _ => "chat".to_string(),
+    }
+}
+
+fn infer_api_family(api_format: &str) -> Option<&str> {
+    api_format.split_once(':').map(|(family, _)| family)
+}
+
+fn infer_endpoint_kind(api_format: &str) -> Option<&str> {
+    api_format.split_once(':').map(|(_, kind)| kind)
+}
+
+fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn local_execution_planning_timeout_parts(error: &GatewayError) -> Option<(&'static str, u64)> {
@@ -1219,12 +1627,14 @@ pub(crate) async fn proxy_request(
                 return finalize_request_body_buffer_rejection(
                     &state,
                     &request_context,
+                    &parts.headers,
                     &remote_addr,
                     &started_at,
                     &trace_id,
                     request_permit.take(),
                     &err,
-                );
+                )
+                .await;
             }
         }
     } else {
@@ -1405,12 +1815,14 @@ pub(crate) async fn proxy_request(
                 return finalize_request_body_buffer_rejection(
                     &state,
                     &request_context,
+                    &parts.headers,
                     &remote_addr,
                     &started_at,
                     &trace_id,
                     request_permit.take(),
                     &err,
-                );
+                )
+                .await;
             }
         }
     } else {
@@ -2267,17 +2679,21 @@ fn local_execution_runtime_miss_route_detail(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::{
         api_key_remote_ip_allowed, buffer_and_normalize_request_body,
+        build_request_body_buffer_rejection_usage_data,
         diagnostic_is_auth_api_key_concurrency_limited, local_execution_runtime_miss_detail,
         restore_redacted_stream_execution_response, restore_redacted_sync_execution_response,
         GatewayControlDecision, LocalExecutionRuntimeMissDiagnostic, RequestBodyBufferError,
-        RequestBodyBufferPolicy,
+        RequestBodyBufferPolicy, RequestBodyBufferReadMetrics,
     };
+    use crate::control::GatewayPublicRequestContext;
+    use crate::usage::write::build_upsert_usage_record_from_event;
+    use crate::usage::{UsageEvent, UsageEventType};
     use axum::body::{to_bytes, Body, Bytes};
-    use axum::http::{header, HeaderMap, Method, Response};
+    use axum::http::{header, HeaderMap, HeaderValue, Method, Response};
     use serde_json::json;
 
     #[test]
@@ -2425,7 +2841,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            RequestBodyBufferError::TooLarge { limit_bytes: 5 }
+            RequestBodyBufferError::TooLarge { limit_bytes: 5, .. }
         ));
     }
 
@@ -2451,10 +2867,166 @@ mod tests {
         .await
         .expect_err("body buffering should time out");
 
-        assert!(matches!(
-            err,
-            RequestBodyBufferError::Timeout { timeout_ms: 5 }
-        ));
+        match err {
+            RequestBodyBufferError::Timeout {
+                timeout_ms,
+                metrics,
+            } => {
+                assert_eq!(timeout_ms, 5);
+                assert_eq!(metrics.bytes_read, 1);
+                assert_eq!(metrics.content_length, None);
+                assert_eq!(metrics.phase, "test");
+            }
+            other => panic!("expected timeout error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_body_buffer_timeout_usage_data_includes_ingress_metrics() {
+        let decision = GatewayControlDecision::synthetic(
+            "/v1/responses",
+            Some("ai_public".to_string()),
+            Some("openai".to_string()),
+            Some("responses".to_string()),
+            Some("openai:responses".to_string()),
+        );
+        let context = GatewayPublicRequestContext {
+            trace_id: "trace-timeout".to_string(),
+            request_method: Method::POST,
+            request_path: "/v1/responses".to_string(),
+            request_query_string: None,
+            request_content_type: Some("application/json".to_string()),
+            host_header: Some("ae.example.test".to_string()),
+            control_decision: Some(decision),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("579064"));
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer super-secret-token"),
+        );
+        headers.insert(
+            header::SET_COOKIE,
+            HeaderValue::from_static("session=super-secret-cookie"),
+        );
+        let error = RequestBodyBufferError::Timeout {
+            timeout_ms: 120_000,
+            metrics: RequestBodyBufferReadMetrics::new(
+                "auth_execution",
+                Some(579_064),
+                12_345,
+                120_000,
+            ),
+        };
+
+        let data = build_request_body_buffer_rejection_usage_data(
+            &context,
+            &headers,
+            &Instant::now(),
+            "local_invalid_request",
+            &error,
+        );
+
+        assert_eq!(data.provider_name, "gateway");
+        assert_eq!(data.model, "unknown");
+        assert_eq!(data.status_code, Some(408));
+        assert_eq!(
+            data.request_body_state,
+            Some(aether_data_contracts::repository::usage::UsageBodyCaptureState::Unavailable)
+        );
+        assert_eq!(data.api_format.as_deref(), Some("openai:responses"));
+        assert_eq!(data.route_family.as_deref(), Some("openai"));
+        assert_eq!(data.route_kind.as_deref(), Some("responses"));
+        assert_eq!(
+            data.execution_path.as_deref(),
+            Some("local_invalid_request")
+        );
+        assert_eq!(
+            data.client_response_body
+                .as_ref()
+                .and_then(|value| value.pointer("/error/type")),
+            Some(&json!("http_error"))
+        );
+        assert!(data
+            .client_response_body
+            .as_ref()
+            .and_then(|value| value.pointer("/error/message"))
+            .and_then(|value| value.as_str())
+            .is_some_and(|message| message.contains("upload")));
+        assert_eq!(
+            data.client_response_body
+                .as_ref()
+                .and_then(|value| value.pointer("/error/code")),
+            None
+        );
+        let metadata = data
+            .request_metadata
+            .as_ref()
+            .and_then(|value| value.as_object())
+            .expect("usage metadata should be an object");
+        assert_eq!(metadata.get("trace_id"), Some(&json!("trace-timeout")));
+        assert_eq!(metadata.get("request_path"), Some(&json!("/v1/responses")));
+        let gateway_ingress = metadata
+            .get("gateway_ingress")
+            .and_then(|value| value.as_object())
+            .expect("gateway ingress metadata should be captured");
+        assert_eq!(gateway_ingress.get("ingress_error"), Some(&json!(true)));
+        assert_eq!(gateway_ingress.get("bytes_read"), Some(&json!(12_345)));
+        assert_eq!(gateway_ingress.get("content_length"), Some(&json!(579_064)));
+        assert_eq!(
+            gateway_ingress.get("read_timeout_ms"),
+            Some(&json!(120_000))
+        );
+        assert_eq!(
+            gateway_ingress.get("request_body_capture_state"),
+            Some(&json!("incomplete"))
+        );
+        let request_headers = data
+            .request_headers
+            .as_ref()
+            .and_then(|value| value.as_object())
+            .expect("request headers should be captured");
+        assert_ne!(
+            request_headers.get("authorization"),
+            Some(&json!("Bearer super-secret-token"))
+        );
+        assert_ne!(
+            request_headers.get("set-cookie"),
+            Some(&json!("session=super-secret-cookie"))
+        );
+
+        let record = build_upsert_usage_record_from_event(&UsageEvent::new(
+            UsageEventType::Failed,
+            "trace-timeout",
+            data.clone(),
+        ))
+        .expect("usage event should convert to persisted record");
+        let persisted_metadata = record
+            .request_metadata
+            .as_ref()
+            .and_then(|value| value.as_object())
+            .expect("persisted metadata should be retained after sanitization");
+        let persisted_ingress = persisted_metadata
+            .get("gateway_ingress")
+            .and_then(|value| value.as_object())
+            .expect("persisted ingress metadata should survive sanitization");
+        assert_eq!(persisted_ingress.get("bytes_read"), Some(&json!(12_345)));
+        assert_eq!(
+            persisted_ingress.get("content_length"),
+            Some(&json!(579_064))
+        );
+        assert_eq!(
+            persisted_ingress.get("read_timeout_ms"),
+            Some(&json!(120_000))
+        );
+        assert_eq!(
+            persisted_ingress.get("upload_bytes_per_sec"),
+            Some(&json!(102))
+        );
+        assert_eq!(
+            record.client_response_body.as_ref(),
+            data.client_response_body.as_ref()
+        );
     }
 
     #[test]
